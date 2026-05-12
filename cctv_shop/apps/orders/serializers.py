@@ -87,12 +87,16 @@ class OrderSerializer(serializers.ModelSerializer):
             "total_amount", "confirmed_amount", "effective_amount",
             "payment_link", "payment_deadline", "is_payment_expired",
             "payment_ref_id", "paid_at",
-            "shipping_address", "customer_notes",
+            "shipping_address", "shipping_method", "freight_company",
+            "tracking_code", "paid_amount", "payment_method",
+            "customer_notes",
             "items", "created_at", "updated_at",
         ]
         read_only_fields = [
             "order_number", "status", "total_amount", "confirmed_amount",
             "payment_link", "payment_deadline", "payment_ref_id", "paid_at",
+            "shipping_method", "freight_company", "tracking_code",
+            "paid_amount", "payment_method",
         ]
 
 

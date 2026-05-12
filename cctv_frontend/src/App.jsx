@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Layout from './components/layout/Layout'
 import useAuthStore from './store/useAuthStore'
+import DashboardPage from './pages/admin/DashboardPage'
 
 // Pages
 import HomePage from './pages/HomePage'
@@ -59,6 +60,7 @@ export default function App() {
         {/* فقط لاگین‌شده */}
         <Route path="cart" element={<RequireAuth><CartPage /></RequireAuth>} />
         <Route path="account/orders" element={<RequireAuth><OrdersPage /></RequireAuth>} />
+        <Route path="admin/dashboard" element={<RequireAuth><DashboardPage /></RequireAuth>} />
         <Route path="account" element={<RequireAuth><AccountPage /></RequireAuth>} />
         <Route path="account/orders" element={<RequireAuth><AccountPage /></RequireAuth>} />
 
