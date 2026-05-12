@@ -189,21 +189,7 @@ class RegisterPartnerView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         serializer.save(user=user)
 
-        # اطلاع ایمیلی به ادمین
-        try:
-            from apps.notifications.services import send_admin_email
-            send_admin_email(
-                subject=f"درخواست همکاری جدید: {user.email}",
-                message=(
-                    f"کاربر {user.email} درخواست عضویت همکار داده است.\n"
-                    f"شرکت: {request.data.get('company_name')}\n"
-                    f"برای تأیید وارد پنل ادمین شوید."
-                ),
-            )
-        except Exception:
-            pass
-
-        logger.info(f"[AUTH] Partner request: {user.email}")
+        logger.info(f"[AUTH] Partner request: {user.phone}")
         return Response(
             {"detail": "درخواست همکاری ثبت شد. بعد از بررسی ادمین اطلاع داده می‌شود."},
             status=status.HTTP_201_CREATED,

@@ -68,6 +68,9 @@ export default function CartPage() {
   const qc = useQueryClient()
   const { setCount } = useCartStore()
   const [checkingOut, setCheckingOut] = useState(false)
+  const [address, setAddress] = useState("")
+  const [shippingMethod, setShippingMethod] = useState("post")
+  const [freightCompany, setFreightCompany] = useState("")
 
   const { data: cart, isLoading } = useQuery({
     queryKey: ['cart'],
@@ -88,16 +91,21 @@ export default function CartPage() {
   const handleCheckout = async () => {
     setCheckingOut(true)
     try {
-      const order = await orderService.checkout()
+      const order = await orderService.checkout(address, shippingMethod, freightCompany)
       // درخواست لینک پرداخت
-      const pay = await paymentService.requestPayment(order.order_number)
-      if (pay.redirect_url) {
-        window.location.href = pay.redirect_url
-      } else {
-        navigate(`/account/orders`)
+      try {
+        const pay = await paymentService.requestPayment(order.order_number)
+        if (pay.redirect_url) {
+          window.location.href = pay.redirect_url
+          return
+        }
+      } catch (payErr) {
+        // درگاه هنوز فعال نشده - سفارش ثبت شد
       }
+      navigate(`/account/orders?new=${order.order_number}`)
     } catch (e) {
       console.error(e)
+      alert('خطا در ثبت سفارش. لطفاً دوباره تلاش کنید.')
     } finally {
       setCheckingOut(false)
     }
@@ -140,16 +148,55 @@ export default function CartPage() {
               </div>
             </div>
 
+            <div>
+              <label className="label text-xs">روش ارسال</label>
+              <div className="grid grid-cols-3 gap-2 mt-1">
+                {[
+                  {value: 'post', label: '📮 پست'},
+                  {value: 'courier', label: '🛵 پیک'},
+                  {value: 'freight', label: '🚛 باربری'},
+                ].map(m => (
+                  <button key={m.value} type="button"
+                    onClick={() => setShippingMethod(m.value)}
+                    className={`py-2 rounded-lg border text-xs transition-all
+                      ${shippingMethod === m.value
+                        ? 'border-brand bg-brand/10 text-brand dark:text-cyan'
+                        : 'border-gray-200 dark:border-white/10 hover:border-brand/30'}`}>
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              {shippingMethod === 'freight' && (
+                <input
+                  value={freightCompany}
+                  onChange={e => setFreightCompany(e.target.value)}
+                  placeholder="نام باربری (اختیاری)"
+                  className="input text-sm mt-2"
+                />
+              )}
+            </div>
+
+            <div>
+              <label className="label text-xs">آدرس تحویل (اختیاری)</label>
+              <textarea
+                value={address}
+                onChange={e => setAddress(e.target.value)}
+                rows={2}
+                className="input text-sm resize-none"
+                placeholder="آدرس کامل..."
+              />
+            </div>
+
             <button
               onClick={handleCheckout}
               disabled={checkingOut}
               className="btn-primary w-full py-3 text-base"
             >
-              {checkingOut ? '...' : '💳 پرداخت آنلاین'}
+              {checkingOut ? 'در حال ثبت سفارش...' : '✅ ثبت و پرداخت سفارش'}
             </button>
 
             <p className="text-[11px] text-gray-steel text-center">
-              پرداخت از طریق درگاه به‌پرداخت ملت — رمزنگاری SSL
+              سفارش ثبت شده و برای پرداخت آماده می‌شود
             </p>
           </div>
         </div>

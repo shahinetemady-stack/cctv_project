@@ -7,7 +7,7 @@ from .models import User, UserProfile
 class UserProfileInline(admin.StackedInline):
     model = UserProfile
     can_delete = False
-    fields = ["user_type", "company_name", "national_id", "is_approved", "credit_limit", "address", "notes"]
+    fields = ["user_type", "company_name", "national_id", "is_approved", "discount_percent", "credit_limit", "address", "notes"]
 
 
 @admin.register(User)

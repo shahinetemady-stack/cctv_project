@@ -7,6 +7,7 @@ import HomePage from './pages/HomePage'
 import ProductsPage from './pages/ProductsPage'
 import ProductDetailPage from './pages/ProductDetailPage'
 import CartPage from './pages/CartPage'
+import OrdersPage from './pages/account/OrdersPage'
 import InquiryCartPage from './pages/InquiryCartPage'
 import AccountPage from './pages/AccountPage'
 import PaymentResultPage from './pages/PaymentResultPage'
@@ -57,6 +58,7 @@ export default function App() {
 
         {/* فقط لاگین‌شده */}
         <Route path="cart" element={<RequireAuth><CartPage /></RequireAuth>} />
+        <Route path="account/orders" element={<RequireAuth><OrdersPage /></RequireAuth>} />
         <Route path="account" element={<RequireAuth><AccountPage /></RequireAuth>} />
         <Route path="account/orders" element={<RequireAuth><AccountPage /></RequireAuth>} />
 

@@ -32,13 +32,11 @@ function Pagination({ page, totalPages, onPage }) {
 export default function ProductsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [filters, setFilters] = useState({
-    part_type: searchParams.get('part_type') || '',
-    chipset:   searchParams.get('chipset') || '',
-    voltage:   searchParams.get('voltage') || '',
-    lens_mount:searchParams.get('lens_mount') || '',
-    in_stock:  searchParams.get('in_stock') || '',
-    search:    searchParams.get('search') || '',
-    category:  searchParams.get('category') || '',
+    category:      searchParams.get('category') || '',
+    category_type: searchParams.get('category_type') || '',
+    brand:         searchParams.get('brand') || '',
+    search:        searchParams.get('search') || '',
+    in_stock:      searchParams.get('in_stock') || '',
   })
   const [page, setPage] = useState(1)
   const [showFilter, setShowFilter] = useState(false)

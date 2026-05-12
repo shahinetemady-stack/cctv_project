@@ -205,11 +205,18 @@ def generate_all_seo_fields(product, force: bool = False) -> dict:
 
     # ── Meta Description ──────────────────────────────────────────────
     if force or not product.meta_description:
+        # ویژگی‌های مرتبط بر اساس نوع دسته
+        chipset_or_sensor = (
+            product.sensor_name or product.board_name or
+            product.lens_name or product.modem_model or ''
+        )
+        voltage = getattr(product, 'voltage', '')
+        cat_type = product.category.category_type if product.category_id else ''
         new_desc = generate_meta_description(
             name=product.name,
-            chipset=product.chipset,
-            voltage=product.voltage,
-            part_type=product.part_type,
+            chipset=chipset_or_sensor,
+            voltage=voltage,
+            part_type=cat_type,
             brand=product.brand,
         )
         if new_desc != product.meta_description:
@@ -217,11 +224,17 @@ def generate_all_seo_fields(product, force: bool = False) -> dict:
 
     # ── Keywords ──────────────────────────────────────────────────────
     if force or not getattr(product, 'keywords', ''):
+        chipset_or_sensor2 = (
+            product.sensor_name or product.board_name or
+            product.lens_name or product.modem_model or ''
+        )
+        voltage2 = getattr(product, 'voltage', '')
+        cat_type2 = product.category.category_type if product.category_id else ''
         new_kw = generate_keywords(
             name=product.name,
-            chipset=product.chipset,
-            voltage=product.voltage,
-            part_type=product.part_type,
+            chipset=chipset_or_sensor2,
+            voltage=voltage2,
+            part_type=cat_type2,
             brand=product.brand,
         )
         if new_kw != getattr(product, 'keywords', ''):

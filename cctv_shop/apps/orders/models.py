@@ -224,6 +224,19 @@ class Order(TimeStampedModel):
 
     # ── Shipping ──────────────────────────────────────────────────────
     shipping_address = models.TextField(blank=True, verbose_name="آدرس ارسال")
+    shipping_method = models.CharField(
+        max_length=20, blank=True, default="",
+        verbose_name="روش ارسال",
+        choices=[("post","پست"),("courier","پیک"),("freight","باربری")],
+    )
+    freight_company = models.CharField(max_length=200, blank=True, default="", verbose_name="نام باربری")
+    tracking_code = models.CharField(max_length=100, blank=True, default="", verbose_name="کد رهگیری")
+    paid_amount = models.PositiveBigIntegerField(null=True, blank=True, verbose_name="مبلغ پرداخت شده")
+    payment_method = models.CharField(
+        max_length=50, blank=True, default="",
+        verbose_name="روش پرداخت",
+        choices=[("cash","نقد"),("transfer","کارت به کارت"),("online","آنلاین"),("check","چک")],
+    )
     customer_notes = models.TextField(blank=True, verbose_name="یادداشت مشتری")
     admin_notes = models.TextField(blank=True, verbose_name="یادداشت ادمین")
 

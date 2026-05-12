@@ -5,7 +5,7 @@ export const authService = {
     api.post('/users/auth/register/', data).then(r => r.data),
 
   login: (data) =>
-    api.post('/users/auth/login/', data).then(r => r.data),
+    api.post('/users/auth/login/', { username: data.username || data.email, password: data.password }).then(r => r.data),
 
   logout: (refresh) =>
     api.post('/users/auth/logout/', { refresh }),

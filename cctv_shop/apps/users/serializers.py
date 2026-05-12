@@ -1,52 +1,49 @@
 """
 apps/users/serializers.py
-──────────────────────────
-Serializers for email+password auth and user management.
-
-RegisterSerializer         → ثبت‌نام عمومی
-LoginSerializer            → ورود (email + password)
-UserSerializer             → پروفایل کاربر
-UserUpdateSerializer       → ویرایش پروفایل
-PartnerRegisterSerializer  → درخواست عضویت همکار
-AdminPartnerListSerializer → لیست همکاران (ادمین)
-AdminApproveSerializer     → تأیید / رد همکار (ادمین)
 """
-
 from django.contrib.auth import authenticate
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
-
 from .models import User, UserProfile
 
 
-# ─── JWT helper ───────────────────────────────────────────────────────────────
-
 def get_tokens_for_user(user: User) -> dict:
-    """JWT با کلیم‌های سفارشی: email, user_type, is_partner"""
     refresh = RefreshToken.for_user(user)
-    refresh["email"] = user.email
-    refresh["is_staff"] = user.is_staff
+    refresh["phone"] = str(user.phone or "")
+    refresh["email"] = str(user.email or "")
+    refresh["is_staff"] = bool(user.is_staff)
     try:
-        refresh["user_type"] = user.profile.user_type
-        refresh["is_partner"] = user.is_partner
-        refresh["is_approved"] = user.profile.is_approved
-    except UserProfile.DoesNotExist:
+        refresh["user_type"] = str(user.profile.user_type)
+        refresh["is_partner"] = bool(user.is_partner)
+        refresh["is_approved"] = bool(user.profile.is_approved)
+    except Exception:
         refresh["user_type"] = "public"
         refresh["is_partner"] = False
         refresh["is_approved"] = False
     return {"refresh": str(refresh), "access": str(refresh.access_token)}
 
 
-# ─── Auth ─────────────────────────────────────────────────────────────────────
-
 class RegisterSerializer(serializers.ModelSerializer):
-    """ثبت‌نام مشتری عمومی با ایمیل + رمز عبور."""
-    password = serializers.CharField(write_only=True, min_length=8)
+    password  = serializers.CharField(write_only=True, min_length=8)
     password2 = serializers.CharField(write_only=True, label="تکرار رمز عبور")
+    email     = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = User
-        fields = ["email", "password", "password2", "first_name", "last_name", "phone"]
+        fields = ["phone", "email", "password", "password2", "first_name", "last_name"]
+
+    def validate_phone(self, value):
+        value = value.strip()
+        if not value.startswith('09') or len(value) != 11:
+            raise serializers.ValidationError("شماره موبایل معتبر نیست (مثال: 09123456789)")
+        if User.objects.filter(phone=value).exists():
+            raise serializers.ValidationError("این شماره موبایل قبلاً ثبت شده است.")
+        return value
+
+    def validate_email(self, value):
+        if value and User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("این ایمیل قبلاً ثبت شده است.")
+        return value or None
 
     def validate(self, data):
         if data["password"] != data["password2"]:
@@ -59,33 +56,38 @@ class RegisterSerializer(serializers.ModelSerializer):
         user = User(**validated_data)
         user.set_password(password)
         user.save()
-        # ساخت پروفایل پیش‌فرض
         UserProfile.objects.create(user=user, user_type=UserProfile.UserType.PUBLIC)
         return user
 
 
 class LoginSerializer(serializers.Serializer):
-    """ورود با ایمیل + رمز عبور."""
-    email = serializers.EmailField()
+    username = serializers.CharField(label="موبایل یا ایمیل")
     password = serializers.CharField(write_only=True)
 
     def validate(self, data):
-        user = authenticate(username=data["email"], password=data["password"])
+        username = data["username"].strip()
+        password = data["password"]
+        try:
+            if username.startswith('09') and len(username) == 11:
+                user_obj = User.objects.get(phone=username)
+            else:
+                user_obj = User.objects.get(email=username)
+            user = authenticate(username=user_obj.phone, password=password)
+        except User.DoesNotExist:
+            user = None
         if not user:
-            raise serializers.ValidationError("ایمیل یا رمز عبور اشتباه است.")
+            raise serializers.ValidationError("اطلاعات ورود اشتباه است.")
         if not user.is_active:
             raise serializers.ValidationError("حساب کاربری غیرفعال است.")
         data["user"] = user
         return data
 
 
-# ─── Profile ──────────────────────────────────────────────────────────────────
-
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         fields = ["user_type", "company_name", "national_id",
-                  "is_approved", "credit_limit", "address"]
+                  "is_approved", "discount_percent", "credit_limit", "address"]
         read_only_fields = ["user_type", "is_approved", "credit_limit"]
 
 
@@ -95,20 +97,19 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "email", "first_name", "last_name", "phone",
+        fields = ["id", "phone", "email", "first_name", "last_name",
                   "is_partner", "date_joined", "profile"]
-        read_only_fields = ["email", "date_joined"]
+        read_only_fields = ["phone", "date_joined"]
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):
-    """ویرایش اطلاعات پایه (ایمیل قابل تغییر نیست)."""
     company_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
     national_id  = serializers.CharField(write_only=True, required=False, allow_blank=True)
     address      = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = User
-        fields = ["first_name", "last_name", "phone", "company_name", "national_id", "address"]
+        fields = ["first_name", "last_name", "email", "company_name", "national_id", "address"]
 
     def update(self, instance, validated_data):
         company_name = validated_data.pop("company_name", None)
@@ -118,20 +119,16 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             setattr(instance, attr, val)
         instance.save()
         profile, _ = UserProfile.objects.get_or_create(user=instance)
-        if company_name is not None:
-            profile.company_name = company_name
-        if national_id is not None:
-            profile.national_id = national_id
-        if address is not None:
-            profile.address = address
+        if company_name is not None: profile.company_name = company_name
+        if national_id is not None:  profile.national_id = national_id
+        if address is not None:       profile.address = address
         profile.save()
         return instance
 
 
 class ChangePasswordSerializer(serializers.Serializer):
-    """تغییر رمز عبور توسط کاربر لاگین‌شده."""
-    old_password = serializers.CharField(write_only=True)
-    new_password = serializers.CharField(write_only=True, min_length=8)
+    old_password  = serializers.CharField(write_only=True)
+    new_password  = serializers.CharField(write_only=True, min_length=8)
     new_password2 = serializers.CharField(write_only=True, label="تکرار رمز جدید")
 
     def validate(self, data):
@@ -140,40 +137,35 @@ class ChangePasswordSerializer(serializers.Serializer):
         return data
 
 
-# ─── Partner ──────────────────────────────────────────────────────────────────
-
 class PartnerRegisterSerializer(serializers.Serializer):
-    """درخواست ارتقاء حساب به همکار. is_approved=False تا تأیید ادمین."""
     company_name = serializers.CharField(max_length=255)
-    national_id  = serializers.CharField(max_length=20)
-    address      = serializers.CharField()
+    national_id  = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    address      = serializers.CharField(required=False, allow_blank=True)
 
     def save(self, user: User):
         data = self.validated_data
         profile, _ = UserProfile.objects.get_or_create(user=user)
         profile.user_type    = UserProfile.UserType.PARTNER
         profile.company_name = data["company_name"]
-        profile.national_id  = data["national_id"]
-        profile.address      = data["address"]
+        profile.national_id  = data.get("national_id", "")
+        profile.address      = data.get("address", "")
         profile.is_approved  = False
         profile.save()
         return user
 
 
-# ─── Admin ────────────────────────────────────────────────────────────────────
-
 class AdminPartnerListSerializer(serializers.ModelSerializer):
-    user_id    = serializers.IntegerField(source="user.id")
-    email      = serializers.EmailField(source="user.email")
-    full_name  = serializers.CharField(source="user.get_full_name")
-    phone      = serializers.CharField(source="user.phone")
+    user_id   = serializers.IntegerField(source="user.id")
+    phone     = serializers.CharField(source="user.phone")
+    email     = serializers.EmailField(source="user.email")
+    full_name = serializers.CharField(source="user.get_full_name")
 
     class Meta:
         model = UserProfile
-        fields = ["user_id", "email", "full_name", "phone",
+        fields = ["user_id", "phone", "email", "full_name",
                   "company_name", "national_id", "is_approved",
-                  "credit_limit", "address", "notes", "created_at"]
-        read_only_fields = ["user_id", "email", "full_name", "phone", "created_at"]
+                  "discount_percent", "credit_limit", "address", "notes", "created_at"]
+        read_only_fields = ["user_id", "phone", "email", "full_name", "created_at"]
 
 
 class AdminApprovePartnerSerializer(serializers.Serializer):

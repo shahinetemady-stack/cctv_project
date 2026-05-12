@@ -67,8 +67,24 @@ class ProductListView(generics.ListAPIView):
     ordering_fields = ["name", "created_at", "is_featured"]
     ordering = ["-is_featured", "-created_at"]
 
+    def list(self, request, *args, **kwargs):
+        import math
+        response = super().list(request, *args, **kwargs)
+        if request.user.is_authenticated:
+            try:
+                discount = float(request.user.profile.discount_percent or 0)
+                if discount > 0:
+                    for product in response.data.get("results", response.data if isinstance(response.data, list) else []):
+                        mp = product.get("min_price")
+                        if mp:
+                            product["partner_min_price"] = math.ceil(float(mp) * (1 - discount/100))
+                            product["partner_discount_percent"] = discount
+            except Exception:
+                pass
+        return response
+
     def get_queryset(self):
-        return (
+        qs = (
             Product.objects.filter(is_active=True)
             .select_related("category")
             .prefetch_related(
@@ -76,6 +92,30 @@ class ProductListView(generics.ListAPIView):
                 Prefetch("variants", queryset=ProductVariant.objects.filter(is_active=True)),
             )
         )
+        p = self.request.query_params
+
+        # فیلترهای اختصاصی برد
+        if p.get("sensor_name"):   qs = qs.filter(sensor_name__icontains=p["sensor_name"])
+        if p.get("board_system"):  qs = qs.filter(board_system__icontains=p["board_system"])
+        if p.get("board_resolution"): qs = qs.filter(board_resolution__icontains=p["board_resolution"])
+        if p.get("sensor_size"):   qs = qs.filter(sensor_size__icontains=p["sensor_size"])
+
+        # فیلترهای اختصاصی لنز
+        if p.get("lens_degree"):   qs = qs.filter(lens_degree__icontains=p["lens_degree"])
+        if p.get("lens_type"):     qs = qs.filter(lens_type__icontains=p["lens_type"])
+        if p.get("focal_ratio"):   qs = qs.filter(focal_ratio__icontains=p["focal_ratio"])
+
+        # فیلترهای اختصاصی متعلقات
+        if p.get("modem_type"):    qs = qs.filter(modem_type__icontains=p["modem_type"])
+        if p.get("voltage"):       qs = qs.filter(voltage__icontains=p["voltage"])
+        if p.get("sim_card") == "true": qs = qs.filter(sim_card=True)
+
+        # فیلترهای اختصاصی بدنه
+        if p.get("housing_material"): qs = qs.filter(housing_material__icontains=p["housing_material"])
+        if p.get("housing_type"):  qs = qs.filter(housing_type__icontains=p["housing_type"])
+        if p.get("has_microphone") == "true": qs = qs.filter(has_microphone=True)
+
+        return qs
 
 
 class ProductDetailView(generics.RetrieveAPIView):
@@ -96,6 +136,21 @@ class ProductDetailView(generics.RetrieveAPIView):
                 "compatible_with",
             )
         )
+
+    def retrieve(self, request, *args, **kwargs):
+        import math
+        response = super().retrieve(request, *args, **kwargs)
+        if request.user.is_authenticated:
+            try:
+                discount = float(request.user.profile.discount_percent or 0)
+                if discount > 0:
+                    for v in response.data.get("variants", []):
+                        base = v.get("final_price", 0)
+                        v["partner_price"] = math.ceil(base * (1 - discount/100))
+                        v["partner_discount_percent"] = discount
+            except Exception:
+                pass
+        return response
 
 
 # ─── Smart Search ──────────────────────────────────────────────────────────────
@@ -187,7 +242,7 @@ class ExchangeRateView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        logger.info(f"Exchange rate updated to {instance.rate_usd_to_irt} by {request.user}")
+        logger.info(f"Exchange rate updated to {instance.rate_cny_to_irt} by {request.user}")
         return Response(ExchangeRateSerializer(instance).data)
 
 

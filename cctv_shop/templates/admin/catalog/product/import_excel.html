@@ -1,0 +1,13 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div style="direction:rtl;max-width:600px;margin:20px auto">
+  <h2>📊 آپلود محصولات از Excel</h2>
+  <form method="post" enctype="multipart/form-data" style="background:#fff;padding:20px;border-radius:8px;border:1px solid #ddd">
+    {% csrf_token %}
+    <table>{{ form.as_table }}</table><br>
+    <label><input type="checkbox" name="dry_run"> پیش‌نمایش (بدون ذخیره)</label><br><br>
+    <button type="submit" class="default">آپلود</button>
+    <a href=".." style="margin-right:10px">انصراف</a>
+  </form>
+</div>
+{% endblock %}

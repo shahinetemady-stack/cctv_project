@@ -6,39 +6,49 @@ import { orderService } from '../services/orders'
 import useAuthStore from '../store/useAuthStore'
 import useCartStore from '../store/useCartStore'
 import { PageLoader, ErrorMessage } from '../components/ui'
-import { formatPrice, partTypeLabel, lensMountLabel } from '../utils/format'
 
-function SpecRow({ label, value }) {
-  if (!value) return null
+function SpecsTable({ specs }) {
+  if (!specs || specs.length === 0) return null
   return (
-    <div className="flex items-center justify-between py-2.5 border-b border-gray-100 dark:border-white/5 last:border-0">
-      <span className="text-sm text-gray-steel">{label}</span>
-      <span className="text-sm font-medium text-gray-900 dark:text-white">{value}</span>
+    <div className="card p-5">
+      <h3 className="font-bold text-sm mb-4 text-white flex items-center gap-2">
+        <span className="w-1 h-4 bg-brand rounded-full inline-block"></span>
+        مشخصات فنی
+      </h3>
+      <div className="divide-y divide-gray-100 dark:divide-white/5">
+        {specs.map((spec, i) => (
+          <div key={i} className="flex items-center justify-between py-2.5">
+            <span className="text-sm text-gray-steel">{spec.label}</span>
+            <span className="text-sm font-medium text-gray-900 dark:text-white">{spec.value}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
 
-function VariantCard({ variant, selected, onSelect }) {
+function VariantSelector({ variants, selected, onSelect }) {
+  if (!variants || variants.length <= 1) return null
   return (
-    <button
-      onClick={() => onSelect(variant)}
-      className={`p-3 rounded-xl border text-sm transition-all
-        ${selected?.id === variant.id
-          ? 'border-brand bg-brand/10 text-brand dark:text-cyan'
-          : 'border-gray-200 dark:border-white/10 hover:border-brand/50'}`}
-    >
-      <div className="font-mono text-xs text-gray-steel">{variant.sku}</div>
-      {variant.name_suffix && <div className="mt-1">{variant.name_suffix}</div>}
-      <div className={`mt-2 font-bold font-mono
-        ${variant.is_in_stock ? 'text-brand dark:text-cyan' : 'text-gray-400 line-through'}`}>
-        {formatPrice(variant.final_price)}
+    <div>
+      <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">انتخاب نوع:</div>
+      <div className="grid grid-cols-2 gap-2">
+        {variants.map(v => (
+          <button key={v.id} onClick={() => onSelect(v)}
+            className={`p-3 rounded-xl border text-sm transition-all text-right
+              ${selected?.id === v.id
+                ? 'border-brand bg-brand/10 text-brand dark:text-cyan'
+                : 'border-gray-200 dark:border-white/10 hover:border-brand/50'}`}>
+            <div className="font-mono text-xs text-gray-steel">{v.sku}</div>
+            {v.name_suffix && <div className="mt-1 font-medium">{v.name_suffix}</div>}
+            <div className={`mt-1.5 font-bold font-mono text-sm
+              ${v.is_in_stock ? 'text-brand dark:text-cyan' : 'text-gray-400 line-through'}`}>
+              {v.is_in_stock ? Number(v.final_price).toLocaleString('fa-IR') + ' تومان' : 'ناموجود'}
+            </div>
+          </button>
+        ))}
       </div>
-      <div className={`text-[10px] mt-1 ${variant.is_in_stock ? 'text-alert-green' : 'text-alert-red'}`}>
-        {variant.is_in_stock
-          ? variant.is_low_stock ? `⚠ کم (${variant.available_stock})` : `موجود (${variant.available_stock})`
-          : 'ناموجود'}
-      </div>
-    </button>
+    </div>
   )
 }
 
@@ -67,6 +77,11 @@ export default function ProductDetailPage() {
 
   const variant = selectedVariant || product.variants?.[0]
   const inStock = variant?.is_in_stock && variant?.available_stock > 0
+  const isUserPartner = isAuthenticated() && isPartner()
+
+  const displayPrice = isUserPartner && variant?.partner_price
+    ? variant.partner_price
+    : variant?.final_price
 
   const handleAdd = async () => {
     if (!variant || !inStock) return
@@ -88,6 +103,7 @@ export default function ProductDetailPage() {
   }
 
   const images = product.images || []
+  const specs  = product.specs || []
 
   return (
     <div className="container-main py-8">
@@ -96,12 +112,19 @@ export default function ProductDetailPage() {
         <Link to="/" className="hover:text-brand transition-colors">خانه</Link>
         <span>/</span>
         <Link to="/products" className="hover:text-brand transition-colors">محصولات</Link>
+        {product.category && (
+          <>
+            <span>/</span>
+            <Link to={`/products?category=${product.category.id}`}
+              className="hover:text-brand transition-colors">{product.category.name}</Link>
+          </>
+        )}
         <span>/</span>
-        <span className="text-gray-900 dark:text-white truncate">{product.name}</span>
+        <span className="text-gray-900 dark:text-white truncate max-w-[200px]">{product.name}</span>
       </nav>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-        {/* ─── تصاویر ───────────────────────────────────────────── */}
+        {/* تصاویر */}
         <div className="space-y-3">
           <div className="card overflow-hidden aspect-square bg-gradient-to-br from-navy to-steel">
             {images[activeImage] ? (
@@ -124,12 +147,11 @@ export default function ProductDetailPage() {
           )}
         </div>
 
-        {/* ─── اطلاعات محصول ────────────────────────────────────── */}
-        <div className="space-y-6">
-          {/* سربرگ */}
+        {/* اطلاعات محصول */}
+        <div className="space-y-5">
           <div>
             {product.brand && (
-              <div className="text-xs font-mono text-brand dark:text-cyan mb-1 uppercase">
+              <div className="text-xs font-mono text-brand dark:text-cyan mb-1 uppercase tracking-wider">
                 {product.brand}
               </div>
             )}
@@ -139,123 +161,112 @@ export default function ProductDetailPage() {
             {product.model_number && (
               <div className="font-mono text-sm text-gray-steel mt-1">#{product.model_number}</div>
             )}
+            {product.short_description && (
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-2 leading-relaxed">
+                {product.short_description}
+              </p>
+            )}
           </div>
 
           {/* قیمت */}
           {variant && (
-            <div className="card p-4">
-              {isPartner() ? (
-                <div className="text-center py-2">
-                  <div className="text-sm text-gray-steel mb-1">قیمت همکار</div>
-                  <div className="text-lg font-bold text-cyan">استعلامی</div>
+            <div className="card p-4 bg-gradient-to-l from-brand/5 to-transparent">
+              {variant.is_in_stock ? (
+                <div>
+                  {isUserPartner && variant.partner_price && variant.partner_discount_percent > 0 ? (
+                    <>
+                      <div className="text-xs text-gray-steel mb-1">قیمت همکار</div>
+                      <div className="text-2xl font-display font-bold text-cyan">
+                        {Number(variant.partner_price).toLocaleString('fa-IR')}
+                        <span className="text-sm font-normal text-gray-steel mr-1">تومان</span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs text-gray-steel line-through">
+                          {Number(variant.final_price).toLocaleString('fa-IR')} تومان
+                        </span>
+                        <span className="text-xs bg-alert-green/10 text-alert-green px-2 py-0.5 rounded-full">
+                          {variant.partner_discount_percent}٪ تخفیف
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-xs text-gray-steel mb-1">
+                        {isUserPartner ? 'قیمت همکار' : 'قیمت فروش'}
+                      </div>
+                      <div className="text-2xl font-display font-bold text-brand dark:text-cyan">
+                        {Number(displayPrice).toLocaleString('fa-IR')}
+                        <span className="text-sm font-normal text-gray-steel mr-1">تومان</span>
+                      </div>
+                    </>
+                  )}
                 </div>
               ) : (
-                <div>
-                  <div className="text-xs text-gray-steel mb-1">قیمت فروش</div>
-                  <div className="text-2xl font-display font-bold text-brand dark:text-cyan">
-                    {formatPrice(variant.final_price)}
-                  </div>
-                </div>
+                <div className="text-alert-red font-medium">ناموجود</div>
               )}
             </div>
           )}
 
-          {/* variant‌ها */}
-          {product.variants?.length > 1 && (
-            <div>
-              <div className="label">انتخاب نوع / رنگ</div>
-              <div className="grid grid-cols-2 gap-2">
-                {product.variants.map(v => (
-                  <VariantCard key={v.id} variant={v}
-                    selected={selectedVariant} onSelect={setSelectedVariant} />
-                ))}
-              </div>
-            </div>
-          )}
+          <VariantSelector variants={product.variants} selected={selectedVariant} onSelect={setSelectedVariant} />
 
-          {/* تعداد + دکمه افزودن */}
+          {/* تعداد + افزودن */}
           {isAuthenticated() && (
             <div className="flex items-center gap-3">
               <div className="flex items-center border border-gray-200 dark:border-white/10 rounded-xl overflow-hidden">
                 <button onClick={() => setQty(q => Math.max(1, q - 1))}
-                  className="px-3 py-2 hover:bg-brand/10 transition-colors text-lg">−</button>
-                <span className="px-4 py-2 text-sm font-mono min-w-[3rem] text-center">{qty}</span>
-                <button onClick={() => setQty(q => Math.min(variant?.available_stock || 99, q + 1))}
-                  className="px-3 py-2 hover:bg-brand/10 transition-colors text-lg">+</button>
+                  className="px-3 py-2 hover:bg-brand/10 transition-colors text-lg leading-none">−</button>
+                <input
+                  type="number" min="1" max={variant?.available_stock || 9999}
+                  value={qty}
+                  onChange={e => {
+                    const v = parseInt(e.target.value) || 1
+                    setQty(Math.min(Math.max(1, v), variant?.available_stock || 9999))
+                  }}
+                  className="w-20 py-2 text-sm font-mono text-center bg-transparent border-x border-gray-200 dark:border-white/10 focus:outline-none"
+                  dir="ltr"
+                />
+                <button onClick={() => setQty(q => Math.min(variant?.available_stock || 9999, q + 1))}
+                  className="px-3 py-2 hover:bg-brand/10 transition-colors text-lg leading-none">+</button>
               </div>
 
-              <button
-                onClick={handleAdd}
-                disabled={adding || !inStock}
-                className={`flex-1 btn text-sm py-3 transition-all
+              <button onClick={handleAdd} disabled={adding || !inStock}
+                className={`flex-1 py-3 rounded-xl font-medium text-sm transition-all
                   ${added ? 'bg-alert-green text-white'
-                    : inStock ? 'btn-primary' : 'bg-gray-200 dark:bg-white/5 text-gray-400 cursor-not-allowed'}`}
-              >
+                    : inStock ? 'bg-brand text-white hover:bg-brand-light shadow-sm'
+                    : 'bg-gray-200 dark:bg-white/5 text-gray-400 cursor-not-allowed'}`}>
                 {adding ? '...' : added ? '✓ اضافه شد!'
                   : !inStock ? 'ناموجود'
-                  : isPartner() ? '+ افزودن به سبد استعلام' : '+ افزودن به سبد خرید'}
+                  : isPartner() ? '+ افزودن به سبد استعلام'
+                  : '+ افزودن به سبد خرید'}
               </button>
             </div>
           )}
 
           {!isAuthenticated() && (
-            <Link to="/auth/login" className="btn-primary w-full text-center py-3">
+            <Link to="/auth/login"
+              className="flex items-center justify-center py-3 rounded-xl bg-brand text-white font-medium hover:bg-brand-light transition-colors">
               برای خرید وارد شوید
             </Link>
           )}
 
-          {/* تماس سریع */}
-          <div className="flex gap-2">
-            {product.whatsapp_link && (
-              <a href={product.whatsapp_link} target="_blank" rel="noreferrer"
-                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl
-                  bg-green-500/10 text-green-500 border border-green-500/20
-                  hover:bg-green-500/20 transition-colors text-sm font-medium">
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
-                  <path d="M12 0C5.373 0 0 5.373 0 12c0 2.127.563 4.122 1.538 5.848L0 24l6.335-1.617A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.943 0-3.77-.524-5.345-1.437l-.384-.228-3.981 1.016.908-3.888-.25-.395A9.951 9.951 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
-                </svg>
-                واتساپ
-              </a>
-            )}
-            {product.bale_link && (
-              <a href={product.bale_link} target="_blank" rel="noreferrer"
-                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl
-                  bg-blue-500/10 text-blue-400 border border-blue-500/20
-                  hover:bg-blue-500/20 transition-colors text-sm font-medium">
-                💬 بله
-              </a>
-            )}
-            {product.has_datasheet && (
-              <a href={product.datasheet_pdf} target="_blank" rel="noreferrer"
-                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl
-                  bg-brand/10 text-brand dark:text-cyan border border-brand/20
-                  hover:bg-brand/20 transition-colors text-sm font-medium">
-                📄 دیتاشیت
-              </a>
-            )}
-          </div>
-
-          {/* مشخصات فنی */}
-          <div className="card p-4">
-            <h3 className="font-semibold text-sm mb-3">مشخصات فنی</h3>
-            <SpecRow label="نوع قطعه" value={partTypeLabel[product.part_type]} />
-            <SpecRow label="چیپست" value={product.chipset} />
-            <SpecRow label="ولتاژ" value={product.voltage} />
-            <SpecRow label="مانت لنز" value={lensMountLabel[product.lens_mount]} />
-            <SpecRow label="رزولوشن" value={product.resolution} />
-            <SpecRow label="برند" value={product.brand} />
-            <SpecRow label="شماره مدل" value={product.model_number} />
-            {product.extra_specs && Object.entries(product.extra_specs).map(([k, v]) => (
-              <SpecRow key={k} label={k} value={String(v)} />
-            ))}
-          </div>
+          {/* دیتاشیت */}
+          {product.has_datasheet && product.datasheet_pdf && (
+            <a href={product.datasheet_pdf} target="_blank" rel="noreferrer"
+              className="flex items-center justify-center gap-2 py-2.5 rounded-xl
+                bg-brand/10 text-brand dark:text-cyan border border-brand/20
+                hover:bg-brand/20 transition-colors text-sm font-medium">
+              📄 دانلود دیتاشیت
+            </a>
+          )}
         </div>
       </div>
 
-      {/* توضیحات */}
+      {specs.length > 0 && (
+        <div className="mt-10"><SpecsTable specs={specs} /></div>
+      )}
+
       {product.description && (
-        <section className="mt-12">
+        <section className="mt-8">
           <h2 className="font-display font-bold text-xl text-white mb-4">توضیحات</h2>
           <div className="card p-6 text-sm text-gray-700 dark:text-gray-300 leading-loose whitespace-pre-line">
             {product.description}
@@ -263,9 +274,8 @@ export default function ProductDetailPage() {
         </section>
       )}
 
-      {/* محصولات سازگار */}
       {product.compatible_with?.length > 0 && (
-        <section className="mt-12">
+        <section className="mt-8">
           <h2 className="font-display font-bold text-xl text-white mb-4">محصولات سازگار</h2>
           <div className="flex flex-wrap gap-2">
             {product.compatible_with.map(p => (

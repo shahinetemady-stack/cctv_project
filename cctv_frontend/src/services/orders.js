@@ -11,8 +11,8 @@ export const orderService = {
   removeFromCart: (variant_id) =>
     api.delete('/orders/cart/', { data: { variant_id } }).then(r => r.data),
 
-  checkout: (shipping_address = '') =>
-    api.post('/orders/cart/checkout/', { shipping_address }).then(r => r.data),
+  checkout: (shipping_address = '', shipping_method = 'post', freight_company = '') =>
+    api.post('/orders/cart/checkout/', { shipping_address, shipping_method, freight_company }).then(r => r.data),
 
   // سبد استعلام
   getInquiryCart: () =>

@@ -1,4 +1,3 @@
-// src/pages/auth/LoginPage.jsx
 import { useState } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { authService } from '../../services/auth'
@@ -8,7 +7,7 @@ export function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { setAuth } = useAuthStore()
-  const [form, setForm] = useState({ email: '', password: '' })
+  const [form, setForm] = useState({ username: '', password: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const from = location.state?.from?.pathname || '/'
@@ -22,7 +21,7 @@ export function LoginPage() {
       setAuth(data.user, data.access, data.refresh)
       navigate(from, { replace: true })
     } catch (err) {
-      setError(err.response?.data?.non_field_errors?.[0] || 'خطا در ورود')
+      setError(err.response?.data?.non_field_errors?.[0] || 'اطلاعات ورود اشتباه است')
     } finally {
       setLoading(false)
     }
@@ -31,10 +30,8 @@ export function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
-        {/* لوگو */}
         <div className="text-center mb-8">
-          <div className="w-14 h-14 bg-brand rounded-2xl flex items-center justify-center
-            shadow-brand mx-auto mb-4">
+          <div className="w-14 h-14 bg-brand rounded-2xl flex items-center justify-center shadow-brand mx-auto mb-4">
             <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
               <path d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.889L15 14v-4zM3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
             </svg>
@@ -51,19 +48,23 @@ export function LoginPage() {
           )}
 
           <div>
-            <label className="label">ایمیل</label>
-            <input type="email" value={form.email}
-              onChange={e => setForm({ ...form, email: e.target.value })}
-              required placeholder="example@email.com"
-              className="input" dir="ltr" />
+            <label className="label">شماره موبایل یا ایمیل</label>
+            <input
+              type="text" value={form.username}
+              onChange={e => setForm({ ...form, username: e.target.value })}
+              required placeholder="09123456789 یا example@email.com"
+              className="input" dir="ltr"
+            />
           </div>
 
           <div>
             <label className="label">رمز عبور</label>
-            <input type="password" value={form.password}
+            <input
+              type="password" value={form.password}
               onChange={e => setForm({ ...form, password: e.target.value })}
               required placeholder="••••••••"
-              className="input" dir="ltr" />
+              className="input" dir="ltr"
+            />
           </div>
 
           <button type="submit" disabled={loading} className="btn-primary w-full py-3">
