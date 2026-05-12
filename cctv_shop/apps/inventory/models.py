@@ -1,140 +1,159 @@
-"""
-apps/inventory/models.py
-─────────────────────────
-Inventory management models:
-
-  StockMovement  — تاریخچه کامل تمام تغییرات موجودی (audit log)
-  StockAlert     — هشدارهای موجودی کم (ارسال ایمیل به ادمین)
-"""
-
-from django.conf import settings
 from django.db import models
+from django.conf import settings
 
-from apps.core.models import TimeStampedModel
+
+class Warehouse(models.Model):
+    class Type(models.TextChoices):
+        AIR_TRANSIT = "air_transit", "در راه هوایی"
+        SEA_TRANSIT = "sea_transit", "در راه دریایی"
+        SHOP1       = "shop1",       "فروشگاه یک"
+        SHOP2       = "shop2",       "فروشگاه دو"
+        ASSEMBLY    = "assembly",    "انبار مونتاژ"
+
+    name           = models.CharField(max_length=100, verbose_name="نام انبار")
+    code           = models.CharField(max_length=20, unique=True, verbose_name="کد انبار")
+    warehouse_type = models.CharField(max_length=20, choices=Type.choices, verbose_name="نوع انبار")
+    is_public      = models.BooleanField(default=False, verbose_name="نمایش به مشتری",
+                        help_text="اگر فعال باشد موجودی این انبار به مشتریان نشان داده می‌شود")
+    is_active      = models.BooleanField(default=True, verbose_name="فعال")
+    address        = models.TextField(blank=True, verbose_name="آدرس")
+    created_at     = models.DateTimeField(auto_now_add=True)
+    updated_at     = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "inventory_warehouse"
+        verbose_name = "انبار"
+        verbose_name_plural = "انبارها"
+
+    def __str__(self):
+        return f"{self.name} ({self.get_warehouse_type_display()})"
 
 
-class StockMovement(TimeStampedModel):
-    """
-    Immutable audit log of every stock change.
-    Created automatically by signals or service functions whenever
-    stock_quantity or reserved_qty changes.
-    """
+class WarehouseStock(models.Model):
+    warehouse    = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name="stocks", verbose_name="انبار")
+    variant      = models.ForeignKey("catalog.ProductVariant", on_delete=models.CASCADE, related_name="warehouse_stocks", verbose_name="محصول")
+    quantity     = models.PositiveIntegerField(default=0, verbose_name="موجودی")
+    min_quantity = models.PositiveIntegerField(default=0, verbose_name="حداقل موجودی")
+    created_at   = models.DateTimeField(auto_now_add=True)
+    updated_at   = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        db_table = "inventory_warehouse_stock"
+        verbose_name = "موجودی انبار"
+        verbose_name_plural = "موجودی‌های انبار"
+        unique_together = [("warehouse", "variant")]
+
+    def __str__(self):
+        return f"{self.warehouse.name} — {self.variant} — {self.quantity}"
+
+    @property
+    def is_low(self):
+        return self.quantity <= self.min_quantity and self.quantity > 0
+
+    @property
+    def is_out(self):
+        return self.quantity == 0
+
+
+class StockTransfer(models.Model):
+    class Status(models.TextChoices):
+        PENDING   = "pending",   "در انتظار"
+        DONE      = "done",      "انجام شده"
+        CANCELLED = "cancelled", "لغو شده"
+
+    from_warehouse  = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="transfers_out", verbose_name="از انبار")
+    to_warehouse    = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="transfers_in", verbose_name="به انبار")
+    variant         = models.ForeignKey("catalog.ProductVariant", on_delete=models.PROTECT, related_name="transfers", verbose_name="محصول")
+    quantity        = models.PositiveIntegerField(verbose_name="تعداد")
+    status          = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING, verbose_name="وضعیت")
+    note            = models.TextField(blank=True, verbose_name="توضیحات")
+    transferred_by  = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                        null=True, blank=True, verbose_name="انتقال دهنده")
+    created_at      = models.DateTimeField(auto_now_add=True)
+    updated_at      = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "inventory_stock_transfer"
+        verbose_name = "انتقال موجودی"
+        verbose_name_plural = "انتقال‌های موجودی"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.variant} | {self.from_warehouse.name} → {self.to_warehouse.name} ({self.quantity})"
+
+    def execute(self, user=None):
+        """انجام انتقال — کسر از مبدأ و اضافه به مقصد"""
+        from django.db import transaction
+        with transaction.atomic():
+            src, _ = WarehouseStock.objects.get_or_create(warehouse=self.from_warehouse, variant=self.variant)
+            if src.quantity < self.quantity:
+                raise ValueError(f"موجودی کافی نیست ({src.quantity} < {self.quantity})")
+            src.quantity -= self.quantity
+            src.save()
+            dst, _ = WarehouseStock.objects.get_or_create(warehouse=self.to_warehouse, variant=self.variant)
+            dst.quantity += self.quantity
+            dst.save()
+            self.status = self.Status.DONE
+            if user:
+                self.transferred_by = user
+            self.save()
+
+
+class StockMovement(models.Model):
+    """کاردکس — هر ورود/خروج کالا یک رکورد"""
     class MovementType(models.TextChoices):
-        PURCHASE = "purchase", "خرید / دریافت کالا"
-        SALE = "sale", "فروش"
-        RESERVATION = "reservation", "رزرو"
-        RESERVATION_RELEASE = "reservation_release", "آزادسازی رزرو"
-        ADJUSTMENT = "adjustment", "تعدیل دستی"
-        RETURN = "return", "مرجوعی"
-        DAMAGE = "damage", "ضایعات"
+        PURCHASE  = "purchase",  "خرید"
+        SALE      = "sale",      "فروش"
+        TRANSFER_IN  = "transfer_in",  "انتقال ورودی"
+        TRANSFER_OUT = "transfer_out", "انتقال خروجی"
+        ADJUSTMENT   = "adjustment",   "تعدیل موجودی"
+        RETURN    = "return",    "مرجوعی"
 
-    variant = models.ForeignKey(
-        "catalog.ProductVariant",
-        on_delete=models.CASCADE,
-        related_name="stock_movements",
-        verbose_name="نسخه محصول",
-    )
-    order = models.ForeignKey(
-        "orders.Order",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="stock_movements",
-        verbose_name="سفارش مرتبط",
-    )
-    performed_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="stock_movements",
-        verbose_name="انجام شده توسط",
-    )
-
-    movement_type = models.CharField(
-        max_length=25,
-        choices=MovementType.choices,
-        verbose_name="نوع حرکت موجودی",
-    )
-    quantity_change = models.IntegerField(
-        verbose_name="تغییر تعداد",
-        help_text="مثبت = افزایش، منفی = کاهش",
-    )
-    stock_before = models.PositiveIntegerField(verbose_name="موجودی قبل")
-    stock_after = models.PositiveIntegerField(verbose_name="موجودی بعد")
-    note = models.CharField(max_length=500, blank=True, verbose_name="یادداشت")
+    warehouse   = models.ForeignKey(Warehouse, on_delete=models.PROTECT,
+                    related_name="movements", verbose_name="انبار")
+    variant     = models.ForeignKey("catalog.ProductVariant", on_delete=models.PROTECT,
+                    related_name="movements", verbose_name="محصول")
+    movement_type = models.CharField(max_length=20, choices=MovementType.choices, verbose_name="نوع حرکت")
+    quantity    = models.IntegerField(verbose_name="تعداد", help_text="مثبت=ورود، منفی=خروج")
+    unit_price  = models.PositiveBigIntegerField(default=0, verbose_name="قیمت واحد (تومان)")
+    balance_after = models.PositiveIntegerField(default=0, verbose_name="موجودی بعد از حرکت")
+    reference   = models.CharField(max_length=100, blank=True, verbose_name="مرجع (شماره سفارش/فاکتور)")
+    note        = models.TextField(blank=True, verbose_name="توضیحات")
+    created_by  = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                    null=True, blank=True, verbose_name="ثبت کننده")
+    created_at  = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = "inventory_stock_movement"
-        verbose_name = "حرکت موجودی"
-        verbose_name_plural = "حرکات موجودی"
+        verbose_name = "حرکت موجودی (کاردکس)"
+        verbose_name_plural = "کاردکس موجودی"
         ordering = ["-created_at"]
 
     def __str__(self):
-        sign = "+" if self.quantity_change >= 0 else ""
-        return (
-            f"{self.get_movement_type_display()} | "
-            f"{self.variant.sku}: {sign}{self.quantity_change} "
-            f"({self.stock_before} → {self.stock_after})"
-        )
+        sign = "+" if self.quantity > 0 else ""
+        return f"{self.warehouse.name} | {self.variant} | {sign}{self.quantity}"
 
-
-class StockAlert(TimeStampedModel):
-    """
-    Alert record created when a variant's available_stock drops below
-    settings.LOW_STOCK_THRESHOLD (default: 5).
-
-    is_resolved is set to True when admin increases stock.
-    email_sent tracks whether the admin email has already been sent
-    (to avoid duplicate emails).
-    """
-
-    variant = models.ForeignKey(
-        "catalog.ProductVariant",
-        on_delete=models.CASCADE,
-        related_name="stock_alerts",
-        verbose_name="نسخه محصول",
-    )
-    stock_at_alert = models.PositiveIntegerField(
-        verbose_name="موجودی در لحظه هشدار",
-    )
-    threshold = models.PositiveSmallIntegerField(
-        verbose_name="آستانه هشدار",
-        help_text="مقدار LOW_STOCK_THRESHOLD در لحظه ایجاد هشدار",
-    )
-    email_sent = models.BooleanField(
-        default=False,
-        verbose_name="ایمیل ارسال شد",
-    )
-    email_sent_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        verbose_name="زمان ارسال ایمیل",
-    )
-    is_resolved = models.BooleanField(
-        default=False,
-        verbose_name="برطرف شده",
-        db_index=True,
-    )
-    resolved_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        verbose_name="زمان برطرف شدن",
-    )
-
-    class Meta:
-        db_table = "inventory_stock_alert"
-        verbose_name = "هشدار موجودی کم"
-        verbose_name_plural = "هشدارهای موجودی کم"
-        ordering = ["-created_at"]
-        indexes = [
-            models.Index(
-                fields=["is_resolved", "email_sent"],
-                name="idx_alert_unresolved",
+    @classmethod
+    def record(cls, warehouse, variant, movement_type, quantity, unit_price=0,
+               reference="", note="", user=None):
+        """ثبت یک حرکت موجودی و بروزرسانی موجودی انبار"""
+        from django.db import transaction
+        with transaction.atomic():
+            stock, _ = WarehouseStock.objects.get_or_create(
+                warehouse=warehouse, variant=variant
             )
-        ]
-
-    def __str__(self):
-        status = "✓ برطرف" if self.is_resolved else "⚠ فعال"
-        return f"هشدار موجودی {self.variant.sku} ({self.stock_at_alert} عدد) — {status}"
+            stock.quantity += quantity
+            if stock.quantity < 0:
+                raise ValueError(f"موجودی کافی نیست ({stock.quantity + abs(quantity)} < {abs(quantity)})")
+            stock.save()
+            return cls.objects.create(
+                warehouse=warehouse,
+                variant=variant,
+                movement_type=movement_type,
+                quantity=quantity,
+                unit_price=unit_price,
+                balance_after=stock.quantity,
+                reference=reference,
+                note=note,
+                created_by=user,
+            )

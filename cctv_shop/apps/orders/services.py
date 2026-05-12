@@ -19,7 +19,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.orders.models import Order, OrderItem, StockReservation
-from apps.inventory.models import StockMovement
+
 
 logger = logging.getLogger(__name__)
 
