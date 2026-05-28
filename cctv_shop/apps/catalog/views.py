@@ -330,3 +330,228 @@ def bulk_upload_products(request):
             results["errors"].append(f"ردیف {row_idx} (SKU: {sku}): {e}")
 
     return Response(results, status=status.HTTP_200_OK)
+
+
+# ─── Variants (for Kardex) ───────────────────────────────────
+
+class VariantListView(generics.ListAPIView):
+    """
+    GET /api/catalog/variants/
+    لیست همه variant ها برای استفاده در صفحه کاردکس
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from .models import ProductVariant
+        qs = ProductVariant.objects.filter(is_active=True).select_related('product', 'product__category')
+        from apps.inventory.models import WarehouseStock
+        from django.db.models import Sum
+
+        # موجودی واقعی از WarehouseStock
+        stock_map = {}
+        for ws in WarehouseStock.objects.filter(warehouse__is_active=True).values('variant_id').annotate(total=Sum('quantity')):
+            stock_map[ws['variant_id']] = ws['total']
+
+        data = []
+        for v in qs:
+            # موجودی واقعی: اول از WarehouseStock، اگر نبود از stock_quantity
+            real_stock = stock_map.get(v.id, v.stock_quantity)
+            data.append({
+                'id': v.id,
+                'sku': v.sku,
+                'name': v.product.name + (' - ' + v.name_suffix if v.name_suffix else ''),
+                'product_name': v.product.name,
+                'product_id': v.product.id,
+                'category': v.product.category.name if v.product.category else '',
+                'stock_quantity': real_stock,
+            })
+        return Response(data)
+
+
+class SimilarProductsView(APIView):
+    """GET /api/catalog/products/<slug>/similar/ — محصولات مشابه برای کالای ناموجود"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        from django.db.models import Q
+        try:
+            product = Product.objects.get(slug=slug, is_active=True)
+        except Product.DoesNotExist:
+            return Response([])
+
+        # بررسی موجودی
+        total_stock = sum(v.stock_quantity for v in product.variants.filter(is_active=True))
+
+        # همیشه محصولات مشابه برمی‌گردانیم (حتی اگر موجود باشد)
+        filters = Q(is_active=True) & ~Q(id=product.id)
+
+        # فیلتر بر اساس مشخصات مشترک
+        conditions = []
+        if product.sensor_name:
+            conditions.append(Q(sensor_name=product.sensor_name))
+        if product.voltage:
+            conditions.append(Q(voltage=product.voltage))
+        if product.category:
+            conditions.append(Q(category=product.category))
+
+        similar = Product.objects.none()
+
+        # اول: همان سنسور و ولتاژ
+        if product.sensor_name and product.voltage:
+            similar = Product.objects.filter(
+                filters & Q(sensor_name=product.sensor_name) & Q(voltage=product.voltage)
+            ).prefetch_related('variants', 'images')[:3]
+
+        # اگر کافی نبود: همان دسته‌بندی
+        if similar.count() < 3 and product.category:
+            exclude_ids = [p.id for p in similar] + [product.id]
+            extra = Product.objects.filter(
+                filters & Q(category=product.category)
+            ).exclude(id__in=exclude_ids).prefetch_related('variants', 'images')[:3 - similar.count()]
+            from itertools import chain
+            similar = list(chain(similar, extra))
+
+        result = []
+        for p in similar[:3]:
+            variants = p.variants.filter(is_active=True)
+            stock = sum(v.stock_quantity for v in variants)
+            first_image = p.images.first()
+            result.append({
+                'id': p.id,
+                'name': p.name,
+                'slug': p.slug,
+                'category': p.category.name if p.category else '',
+                'sensor_name': p.sensor_name or '',
+                'voltage': p.voltage or '',
+                'stock': stock,
+                'is_available': stock > 0,
+                'image': first_image.image.url if first_image else None,
+                'price': variants.first().final_price if variants.exists() else 0,
+            })
+
+        return Response({
+            'is_out_of_stock': total_stock == 0,
+            'similar': result,
+        })
+
+
+class PackageListView(APIView):
+    """GET /api/catalog/packages/ — لیست پکیج‌ها"""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from .models import Package
+        packages = Package.objects.filter(is_active=True).prefetch_related(
+            'package_items__product__images',
+            'package_items__variant',
+        )
+        featured_only = request.query_params.get('featured') == '1'
+        if featured_only:
+            packages = packages.filter(is_featured=True)
+
+        result = []
+        for pkg in packages:
+            items = []
+            for item in pkg.package_items.all():
+                img = item.product.images.first()
+                items.append({
+                    'product_id': item.product_id,
+                    'product_name': item.product.name,
+                    'product_slug': item.product.slug,
+                    'variant_id': item.variant_id,
+                    'quantity': item.quantity,
+                    'unit_price': item.variant.final_price,
+                    'image': img.image.url if img else None,
+                })
+            result.append({
+                'id': pkg.id,
+                'name': pkg.name,
+                'slug': pkg.slug,
+                'description': pkg.description,
+                'image': pkg.image.url if pkg.image else None,
+                'discount_percent': float(pkg.discount_percent),
+                'original_price': pkg.original_price,
+                'final_price': pkg.final_price,
+                'savings': pkg.savings,
+                'is_featured': pkg.is_featured,
+                'items': items,
+            })
+        return Response(result)
+
+
+class PackageDetailView(APIView):
+    """GET /api/catalog/packages/<slug>/ — جزئیات پکیج"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        from .models import Package
+        try:
+            pkg = Package.objects.prefetch_related(
+                'package_items__product__images',
+                'package_items__variant',
+            ).get(slug=slug, is_active=True)
+        except Package.DoesNotExist:
+            return Response({'error': 'یافت نشد'}, status=404)
+
+        items = []
+        for item in pkg.package_items.all():
+            img = item.product.images.first()
+            items.append({
+                'product_id': item.product_id,
+                'product_name': item.product.name,
+                'product_slug': item.product.slug,
+                'variant_id': item.variant_id,
+                'quantity': item.quantity,
+                'unit_price': item.variant.final_price,
+                'subtotal': item.variant.final_price * item.quantity,
+                'image': img.image.url if img else None,
+                'stock': item.variant.stock_quantity,
+            })
+
+        return Response({
+            'id': pkg.id,
+            'name': pkg.name,
+            'slug': pkg.slug,
+            'description': pkg.description,
+            'image': pkg.image.url if pkg.image else None,
+            'discount_percent': float(pkg.discount_percent),
+            'original_price': pkg.original_price,
+            'final_price': pkg.final_price,
+            'savings': pkg.savings,
+            'items': items,
+        })
+
+
+class ProductPriceHistoryView(APIView):
+    """GET /api/catalog/products/<slug>/price-history/ — تاریخچه قیمت ۳۰ روزه"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        from datetime import date, timedelta
+        from .models import ProductPriceHistory, Product
+        try:
+            product = Product.objects.get(slug=slug)
+        except Product.DoesNotExist:
+            return Response([], status=404)
+
+        variant = product.variants.filter(is_active=True).first()
+        if not variant:
+            return Response([])
+
+        # ذخیره قیمت امروز
+        today = date.today()
+        ProductPriceHistory.objects.get_or_create(
+            variant=variant, date=today,
+            defaults={'price_irr': variant.final_price, 'price_cny': variant.purchase_price_cny or 0}
+        )
+
+        # ۳۰ روز اخیر
+        since = today - timedelta(days=30)
+        history = ProductPriceHistory.objects.filter(
+            variant=variant, date__gte=since
+        ).order_by('date')
+
+        return Response([{
+            'date': str(h.date),
+            'price': h.price_irr,
+        } for h in history])

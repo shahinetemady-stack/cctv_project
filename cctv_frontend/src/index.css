@@ -130,3 +130,330 @@
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
+
+/* ═══════════════════════════════════════════════
+   GALAXY & GLASS EFFECT
+═══════════════════════════════════════════════ */
+
+/* پس‌زمینه پایه */
+body {
+  background: #000008 !important;
+  color: rgba(255,255,255,0.85) !important;
+}
+
+/* ── Glass Card ── */
+.card {
+  background: rgba(8, 4, 30, 0.72) !important;
+  backdrop-filter: blur(24px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(160%) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  box-shadow:
+    0 8px 32px rgba(0,0,0,0.5),
+    0 1px 0 rgba(255,255,255,0.06) inset !important;
+  transition: border-color 0.3s, box-shadow 0.3s !important;
+}
+.card:hover {
+  border-color: rgba(255,165,0,0.2) !important;
+  box-shadow:
+    0 16px 48px rgba(0,0,0,0.6),
+    0 0 30px rgba(255,165,0,0.05),
+    0 1px 0 rgba(255,255,255,0.06) inset !important;
+}
+
+/* ── Header ── */
+header, [class*="header"] {
+  background: rgba(3,1,14,0.88) !important;
+  backdrop-filter: blur(32px) !important;
+  -webkit-backdrop-filter: blur(32px) !important;
+  border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+  box-shadow: 0 4px 30px rgba(0,0,0,0.5) !important;
+}
+
+/* ── Modals ── */
+.fixed.z-\[300\] > .card,
+.fixed.z-\[200\] > .card,
+.fixed.z-\[400\] > .card,
+.fixed.z-\[100\] > .card {
+  background: rgba(5,2,20,0.92) !important;
+  backdrop-filter: blur(40px) !important;
+  -webkit-backdrop-filter: blur(40px) !important;
+  border: 1px solid rgba(255,255,255,0.1) !important;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.7) !important;
+}
+
+/* پس‌زمینه modal */
+.fixed.inset-0.bg-black\/70,
+.fixed.inset-0.bg-black\/80 {
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+}
+
+/* ── Input ── */
+.input {
+  background: rgba(255,255,255,0.05) !important;
+  border: 1px solid rgba(255,255,255,0.1) !important;
+  color: rgba(255,255,255,0.9) !important;
+  backdrop-filter: blur(10px) !important;
+}
+.input:focus {
+  background: rgba(255,255,255,0.08) !important;
+  border-color: rgba(255,165,0,0.4) !important;
+  box-shadow: 0 0 0 3px rgba(255,165,0,0.08) !important;
+  outline: none !important;
+}
+.input::placeholder {
+  color: rgba(255,255,255,0.25) !important;
+}
+
+/* ── Dropdown / bg-navy ── */
+.bg-navy, [class*="bg-navy"] {
+  background: rgba(3,1,16,0.95) !important;
+  backdrop-filter: blur(24px) !important;
+  -webkit-backdrop-filter: blur(24px) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.6) !important;
+}
+
+/* ── Table ── */
+table { background: transparent !important; }
+tbody tr:nth-child(even) td { background: rgba(255,255,255,0.02) !important; }
+tbody tr:hover td { background: rgba(255,165,0,0.03) !important; }
+th { background: rgba(255,255,255,0.03) !important; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+::-webkit-scrollbar-thumb { background: rgba(255,165,0,0.25); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,165,0,0.45); }
+
+/* ── container-main ── */
+.container-main { position: relative; z-index: 1; }
+
+/* ── Label ── */
+.label { color: rgba(255,255,255,0.45) !important; }
+
+/* ── Select ── */
+select { background: rgba(8,4,30,0.8) !important; color: rgba(255,255,255,0.85) !important; }
+select option { background: #0a0520 !important; }
+
+/* ── btn-secondary ── */
+.btn-secondary {
+  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+  backdrop-filter: blur(10px) !important;
+}
+.btn-secondary:hover {
+  background: rgba(255,255,255,0.1) !important;
+  border-color: rgba(255,255,255,0.2) !important;
+}
+
+/* ── skeleton ── */
+.skeleton {
+  background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%) !important;
+  background-size: 200% 100% !important;
+  animation: shimmer 1.5s infinite !important;
+}
+@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+
+
+/* ═══════════════════════════════════════════════
+   GALAXY & GLASS EFFECT
+═══════════════════════════════════════════════ */
+
+/* پس‌زمینه پایه */
+body {
+  background: #000008 !important;
+  color: rgba(255,255,255,0.85) !important;
+}
+
+/* ── Glass Card ── */
+.card {
+  background: rgba(8, 4, 30, 0.72) !important;
+  backdrop-filter: blur(24px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(160%) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  box-shadow:
+    0 8px 32px rgba(0,0,0,0.5),
+    0 1px 0 rgba(255,255,255,0.06) inset !important;
+  transition: border-color 0.3s, box-shadow 0.3s !important;
+}
+.card:hover {
+  border-color: rgba(255,165,0,0.2) !important;
+  box-shadow:
+    0 16px 48px rgba(0,0,0,0.6),
+    0 0 30px rgba(255,165,0,0.05),
+    0 1px 0 rgba(255,255,255,0.06) inset !important;
+}
+
+/* ── Header ── */
+header, [class*="header"] {
+  background: rgba(3,1,14,0.88) !important;
+  backdrop-filter: blur(32px) !important;
+  -webkit-backdrop-filter: blur(32px) !important;
+  border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+  box-shadow: 0 4px 30px rgba(0,0,0,0.5) !important;
+}
+
+/* ── Modals ── */
+.fixed.z-\[300\] > .card,
+.fixed.z-\[200\] > .card,
+.fixed.z-\[400\] > .card,
+.fixed.z-\[100\] > .card {
+  background: rgba(5,2,20,0.92) !important;
+  backdrop-filter: blur(40px) !important;
+  -webkit-backdrop-filter: blur(40px) !important;
+  border: 1px solid rgba(255,255,255,0.1) !important;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.7) !important;
+}
+
+/* پس‌زمینه modal */
+.fixed.inset-0.bg-black\/70,
+.fixed.inset-0.bg-black\/80 {
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+}
+
+/* ── Input ── */
+.input {
+  background: rgba(255,255,255,0.05) !important;
+  border: 1px solid rgba(255,255,255,0.1) !important;
+  color: rgba(255,255,255,0.9) !important;
+  backdrop-filter: blur(10px) !important;
+}
+.input:focus {
+  background: rgba(255,255,255,0.08) !important;
+  border-color: rgba(255,165,0,0.4) !important;
+  box-shadow: 0 0 0 3px rgba(255,165,0,0.08) !important;
+  outline: none !important;
+}
+.input::placeholder {
+  color: rgba(255,255,255,0.25) !important;
+}
+
+/* ── Dropdown / bg-navy ── */
+.bg-navy, [class*="bg-navy"] {
+  background: rgba(3,1,16,0.95) !important;
+  backdrop-filter: blur(24px) !important;
+  -webkit-backdrop-filter: blur(24px) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.6) !important;
+}
+
+/* ── Table ── */
+table { background: transparent !important; }
+tbody tr:nth-child(even) td { background: rgba(255,255,255,0.02) !important; }
+tbody tr:hover td { background: rgba(255,165,0,0.03) !important; }
+th { background: rgba(255,255,255,0.03) !important; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+::-webkit-scrollbar-thumb { background: rgba(255,165,0,0.25); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,165,0,0.45); }
+
+/* ── container-main ── */
+.container-main { position: relative; z-index: 1; }
+
+/* ── Label ── */
+.label { color: rgba(255,255,255,0.45) !important; }
+
+/* ── Select ── */
+select { background: rgba(8,4,30,0.8) !important; color: rgba(255,255,255,0.85) !important; }
+select option { background: #0a0520 !important; }
+
+/* ── btn-secondary ── */
+.btn-secondary {
+  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+  backdrop-filter: blur(10px) !important;
+}
+.btn-secondary:hover {
+  background: rgba(255,255,255,0.1) !important;
+  border-color: rgba(255,255,255,0.2) !important;
+}
+
+/* ── skeleton ── */
+.skeleton {
+  background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%) !important;
+  background-size: 200% 100% !important;
+  animation: shimmer 1.5s infinite !important;
+}
+@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+
+/* GALAXY BACKGROUND + FLOATING GLASS WINDOWS - Final */
+
+body, #root, #root > div, .min-h-screen, .min-h-full {
+  background: transparent !important;
+  background-color: transparent !important;
+  color: rgba(255,255,255,0.87) !important;
+}
+section, main > section, div > section {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+.card {
+  background: rgba(8,4,28,0.62) !important;
+  backdrop-filter: blur(28px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(180%) !important;
+  border: 1px solid rgba(255,255,255,0.09) !important;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.55), 0 1px 0 rgba(255,255,255,0.07) inset !important;
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.25s !important;
+  position: relative;
+  z-index: 1;
+}
+.card:hover {
+  border-color: rgba(255,165,0,0.22) !important;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.65), 0 0 35px rgba(255,165,0,0.06), 0 1px 0 rgba(255,255,255,0.07) inset !important;
+  transform: translateY(-4px) !important;
+}
+header, nav {
+  background: rgba(2,1,10,0.82) !important;
+  backdrop-filter: blur(36px) !important;
+  -webkit-backdrop-filter: blur(36px) !important;
+  border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+}
+footer {
+  background: rgba(2,1,10,0.88) !important;
+  backdrop-filter: blur(24px) !important;
+  border-top: 1px solid rgba(255,255,255,0.05) !important;
+}
+[role="dialog"], .bg-navy, [class*="bg-navy"] {
+  background: rgba(4,2,20,0.92) !important;
+  backdrop-filter: blur(32px) !important;
+  border: 1px solid rgba(255,255,255,0.09) !important;
+}
+input, textarea, select {
+  background: rgba(255,255,255,0.05) !important;
+  border-color: rgba(255,255,255,0.1) !important;
+  color: rgba(255,255,255,0.87) !important;
+}
+input:focus, textarea:focus, select:focus {
+  background: rgba(255,255,255,0.08) !important;
+  border-color: rgba(255,165,0,0.4) !important;
+  box-shadow: 0 0 0 2px rgba(255,165,0,0.15) !important;
+  outline: none !important;
+}
+select option { background: #090420 !important; }
+[class*="bg-dark"], [class*="bg-gray-9"], [class*="bg-black"], [class*="bg-zinc-9"] {
+  background: transparent !important;
+}
+.card [class*="aspect"], .card .aspect-square {
+  background: linear-gradient(135deg, rgba(255,165,0,0.04) 0%, rgba(80,60,200,0.06) 100%) !important;
+}
+th { background: rgba(255,255,255,0.04) !important; }
+tbody tr:nth-child(even) td { background: rgba(255,255,255,0.018) !important; }
+tbody tr:hover td { background: rgba(255,165,0,0.04) !important; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
+::-webkit-scrollbar-thumb { background: rgba(255,165,0,0.28); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,165,0,0.5); }
+main, .container-main { position: relative; z-index: 1; }
+.btn-secondary {
+  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+  backdrop-filter: blur(12px) !important;
+}
+.btn-secondary:hover {
+  background: rgba(255,255,255,0.1) !important;
+  border-color: rgba(255,255,255,0.22) !important;
+}

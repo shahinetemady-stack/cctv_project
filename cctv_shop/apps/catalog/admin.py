@@ -7,13 +7,17 @@ from django.contrib import messages
 from .models import Category, ExchangeRateSetting, Product, ProductImage, ProductVariant, SeoSettings
 
 
+
 @admin.register(ExchangeRateSetting)
 class ExchangeRateSettingAdmin(admin.ModelAdmin):
-    list_display = ["rate_cny_to_irt", "updated_at"]
-    readonly_fields = ["updated_at", "created_at"]
-    def has_add_permission(self, request): return not ExchangeRateSetting.objects.exists()
-    def has_delete_permission(self, request, obj=None): return False
+    pass
 
+class ExchangeRateSettingAdmin(admin.ModelAdmin):
+    list_display = ['rate_cny_to_irt', 'updated_by']
+
+class ExchangeRateSettingAdmin(admin.ModelAdmin):
+    list_display = ['currency', 'rate_per_unit']
+    readonly_fields = []
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
@@ -153,3 +157,43 @@ class SeoSettingsAdmin(admin.ModelAdmin):
     fields = ["target_cities", "site_name"]
     def has_add_permission(self, request): return not SeoSettings.objects.exists()
     def has_delete_permission(self, request, obj=None): return False
+
+
+# ─── Package Admin ────────────────────────────────────────────
+from apps.catalog.models import Package, PackageItem
+
+class PackageItemInline(admin.TabularInline):
+    model = PackageItem
+    extra = 1
+    fields = ['product', 'variant', 'quantity']
+    autocomplete_fields = ['product']
+
+@admin.register(Package)
+class PackageAdmin(admin.ModelAdmin):
+    list_display  = ['name', 'discount_percent', 'original_price_display',
+                     'final_price_display', 'savings_display', 'is_active', 'is_featured']
+    list_filter   = ['is_active', 'is_featured']
+    search_fields = ['name']
+    prepopulated_fields = {'slug': ('name',)}
+    inlines = [PackageItemInline]
+
+    def original_price_display(self, obj):
+        return f"{obj.original_price:,} ت"
+    original_price_display.short_description = "قیمت اصلی"
+
+    def final_price_display(self, obj):
+        return f"{obj.final_price:,} ت"
+    final_price_display.short_description = "قیمت با تخفیف"
+
+    def savings_display(self, obj):
+        return f"{obj.savings:,} ت"
+    savings_display.short_description = "صرفه‌جویی"
+
+
+from apps.catalog.models import ProductPriceHistory
+
+@admin.register(ProductPriceHistory)
+class ProductPriceHistoryAdmin(admin.ModelAdmin):
+    list_display = ["variant", "date", "price_irr", "price_cny"]
+    list_filter  = ["date"]
+    date_hierarchy = "date"

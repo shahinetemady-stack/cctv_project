@@ -284,3 +284,81 @@ class ProductVariant(TimeStampedModel):
         self.reserved_qty   = max(0, self.reserved_qty - quantity)
         self.stock_quantity = max(0, self.stock_quantity - quantity)
         self.save(update_fields=["reserved_qty","stock_quantity","updated_at"])
+
+
+class Package(models.Model):
+    """پکیج پیشنهادی — ترکیب چند محصول با تخفیف"""
+
+    name        = models.CharField(max_length=200, verbose_name="نام پکیج")
+    slug        = models.SlugField(max_length=250, unique=True, allow_unicode=True, verbose_name="نامک")
+    description = models.TextField(blank=True, verbose_name="توضیحات")
+    image       = models.ImageField(upload_to='packages/', null=True, blank=True, verbose_name="تصویر")
+    products    = models.ManyToManyField('Product', through='PackageItem', related_name='packages', verbose_name="محصولات")
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="تخفیف (%)")
+    is_active   = models.BooleanField(default=True, verbose_name="فعال")
+    is_featured = models.BooleanField(default=False, verbose_name="ویژه")
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "catalog_package"
+        verbose_name = "پکیج"
+        verbose_name_plural = "پکیج‌ها"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def original_price(self):
+        """قیمت اصلی بدون تخفیف"""
+        total = 0
+        for item in self.package_items.select_related('variant').all():
+            total += item.variant.final_price * item.quantity
+        return total
+
+    @property
+    def final_price(self):
+        """قیمت نهایی با تخفیف"""
+        import math
+        disc = float(self.discount_percent) / 100
+        return math.ceil(self.original_price * (1 - disc))
+
+    @property
+    def savings(self):
+        return self.original_price - self.final_price
+
+
+class PackageItem(models.Model):
+    """آیتم داخل پکیج"""
+    package  = models.ForeignKey(Package, on_delete=models.CASCADE, related_name='package_items')
+    product  = models.ForeignKey('Product', on_delete=models.CASCADE, verbose_name="محصول")
+    variant  = models.ForeignKey('ProductVariant', on_delete=models.CASCADE, verbose_name="نوع محصول")
+    quantity = models.PositiveSmallIntegerField(default=1, verbose_name="تعداد")
+
+    class Meta:
+        db_table = "catalog_package_item"
+        verbose_name = "آیتم پکیج"
+        verbose_name_plural = "آیتم‌های پکیج"
+
+    def __str__(self):
+        return f"{self.package.name} — {self.product.name} × {self.quantity}"
+
+
+class ProductPriceHistory(models.Model):
+    """تاریخچه قیمت محصول — روزانه ذخیره می‌شود"""
+    variant    = models.ForeignKey('ProductVariant', on_delete=models.CASCADE,
+                   related_name='price_history', verbose_name="variant")
+    date       = models.DateField(verbose_name="تاریخ")
+    price_irr  = models.PositiveIntegerField(verbose_name="قیمت (تومان)")
+    price_cny  = models.DecimalField(max_digits=10, decimal_places=2,
+                   default=0, verbose_name="قیمت (یوان)")
+
+    class Meta:
+        db_table = "catalog_price_history"
+        verbose_name = "تاریخچه قیمت"
+        unique_together = [("variant", "date")]
+        ordering = ["-date"]
+
+    def __str__(self):
+        return f"{self.variant} | {self.date} | {self.price_irr:,}"

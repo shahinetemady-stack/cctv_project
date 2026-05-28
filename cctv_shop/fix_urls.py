@@ -1,29 +1,13 @@
-"""
-python fix_urls.py
-"""
-import os
-
-print("اصلاح catalog/urls.py ...")
-
-urls_content = """from django.urls import path
+with open('apps/inventory/urls.py', 'w', encoding='utf-8') as f:
+    f.write("""from django.urls import path
 from . import views
 
-app_name = "catalog"
-
 urlpatterns = [
-    path("categories/", views.CategoryListView.as_view(), name="category-list"),
-    path("products/", views.ProductListView.as_view(), name="product-list"),
-    path("products/search/", views.ProductSearchView.as_view(), name="product-search"),
-    path("products/bulk-upload/", views.bulk_upload_products, name="product-bulk-upload"),
-    path("products/<str:slug>/", views.ProductDetailView.as_view(), name="product-detail"),
-    path("exchange-rate/", views.ExchangeRateView.as_view(), name="exchange-rate"),
+    path("stock/<int:variant_id>/", views.PublicStockView.as_view()),
+    path("kardex/<int:variant_id>/", views.KardexView.as_view()),
+    path("warehouses/", views.WarehouseSummaryView.as_view()),
+    path("movements/", views.StockMovementCreateView.as_view()),
+    path("admin-stock/<int:variant_id>/", views.AdminStockView.as_view()),
 ]
-"""
-
-with open(os.path.join('apps', 'catalog', 'urls.py'), 'w', encoding='utf-8') as f:
-    f.write(urls_content)
-
-print("OK - slug:slug به str:slug تغییر کرد")
-print()
-print("حالا سرور را restart کنید:")
-print("Ctrl+C بزنید و دوباره: python manage.py runserver")
+""")
+print("done")

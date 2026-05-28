@@ -38,6 +38,9 @@ INSTALLED_APPS = [
     "apps.inventory",
     "apps.notifications",
     "apps.payment",
+    "apps.accounting",
+    "apps.education",
+    "django.contrib.humanize",
 
 ]
 

@@ -5,6 +5,7 @@ import { catalogService } from '../services/catalog'
 import { orderService } from '../services/orders'
 import useAuthStore from '../store/useAuthStore'
 import useCartStore from '../store/useCartStore'
+import { ProductPackages } from '../components/PackageComponents'
 import { PageLoader, ErrorMessage } from '../components/ui'
 
 function SpecsTable({ specs }) {
@@ -49,6 +50,144 @@ function VariantSelector({ variants, selected, onSelect }) {
         ))}
       </div>
     </div>
+  )
+}
+
+
+
+// ─── نمودار تغییر قیمت ───────────────────────────────────────
+function PriceChart({ slug }) {
+  const { data: history = [] } = useQuery({
+    queryKey: ['price-history', slug],
+    queryFn: () => api.get(`/catalog/products/${slug}/price-history/`).then(r => r.data),
+    staleTime: 3600000,
+  })
+
+  if (history.length < 2) return null
+
+  const prices = history.map(h => h.price)
+  const dates = history.map(h => h.date.slice(5))
+  const min = Math.min(...prices)
+  const max = Math.max(...prices)
+  const range = max - min || 1
+  const W = 500, H = 120, PL = 10, PR = 10, PT = 10, PB = 30
+
+  const points = prices.map((p, i) => {
+    const x = PL + (i / (prices.length - 1)) * (W - PL - PR)
+    const y = PT + (1 - (p - min) / range) * (H - PT - PB)
+    return [x, y]
+  })
+
+  const polyline = points.map(p => p.join(',')).join(' ')
+  const latest = prices[prices.length - 1]
+  const prev = prices[prices.length - 2]
+  const change = ((latest - prev) / prev * 100).toFixed(1)
+  const isUp = latest >= prev
+
+  return (
+    <section className="mt-8">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-display font-bold text-xl text-white">📈 تغییر قیمت ۳۰ روزه</h2>
+        <span className={`text-sm font-bold px-3 py-1 rounded-full ${isUp ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}`}>
+          {isUp ? '▲' : '▼'} {Math.abs(change)}%
+        </span>
+      </div>
+      <div className="card p-4">
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{height: 120}}>
+          {/* خط راهنما */}
+          {[0, 0.5, 1].map((t, i) => (
+            <line key={i}
+              x1={PL} x2={W-PR}
+              y1={PT + t*(H-PT-PB)}
+              y2={PT + t*(H-PT-PB)}
+              stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+          ))}
+          {/* نمودار */}
+          <polyline points={polyline}
+            fill="none" stroke="#0066FF" strokeWidth="2"
+            strokeLinecap="round" strokeLinejoin="round" />
+          {/* سایه زیر نمودار */}
+          <polyline
+            points={`${points[0][0]},${H-PB} ${polyline} ${points[points.length-1][0]},${H-PB}`}
+            fill="url(#grad)" opacity="0.3" />
+          <defs>
+            <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#0066FF" />
+              <stop offset="100%" stopColor="#0066FF" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          {/* نقطه آخر */}
+          <circle cx={points[points.length-1][0]} cy={points[points.length-1][1]}
+            r="4" fill="#0066FF" />
+          {/* برچسب‌های تاریخ */}
+          {[0, Math.floor(dates.length/2), dates.length-1].map(i => (
+            <text key={i} x={points[i][0]} y={H-5}
+              textAnchor="middle" fill="rgba(255,255,255,0.4)" fontSize="9">
+              {dates[i]}
+            </text>
+          ))}
+        </svg>
+        <div className="flex justify-between text-xs text-gray-steel mt-1">
+          <span>کمترین: {min.toLocaleString('fa-IR')} ت</span>
+          <span>بیشترین: {max.toLocaleString('fa-IR')} ت</span>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+// ─── جایگزین‌های پیشنهادی ────────────────────────────────────
+function SimilarProducts({ slug }) {
+  const { data } = useQuery({
+    queryKey: ['similar-products', slug],
+    queryFn: () => fetch(`/api/catalog/products/${slug}/similar/`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` }
+    }).then(r => r.json()),
+    staleTime: 60000,
+  })
+
+  if (!data?.similar?.length) return null
+
+  return (
+    <section className="mt-8">
+      <div className="flex items-center gap-3 mb-4">
+        <h2 className="font-display font-bold text-xl text-white">
+          {data.is_out_of_stock ? '🔄 جایگزین‌های پیشنهادی' : '📦 محصولات مشابه'}
+        </h2>
+        {data.is_out_of_stock && (
+          <span className="text-xs bg-red-500/20 text-red-400 px-3 py-1 rounded-full">
+            کالا ناموجود است
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        {data.similar.map(p => (
+          <Link key={p.id} to={`/products/${p.slug}`}
+            className="card p-4 hover:border-brand/30 transition-all group">
+            {p.image && (
+              <img src={p.image} alt={p.name}
+                className="w-full h-32 object-contain mb-3 rounded-lg bg-white/5" />
+            )}
+            <div className="text-sm font-semibold text-white group-hover:text-brand transition-colors truncate">
+              {p.name}
+            </div>
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              <span className={`text-[10px] px-2 py-0.5 rounded-full ${
+                p.is_available ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+              }`}>
+                {p.is_available ? `موجود (${p.stock} عدد)` : 'ناموجود'}
+              </span>
+              {p.category && (
+                <span className="text-[10px] text-gray-steel">{p.category}</span>
+              )}
+            </div>
+            {p.sensor_name && (
+              <div className="text-[10px] text-gray-steel mt-1">سنسور: {p.sensor_name}</div>
+            )}
+          </Link>
+        ))}
+      </div>
+    </section>
   )
 }
 
@@ -274,18 +413,42 @@ export default function ProductDetailPage() {
         </section>
       )}
 
+
+      {/* پکیج‌های مرتبط */}
+      <ProductPackages productId={product.id} />
+
+      {/* نمودار قیمت */}
+      <PriceChart slug={product.slug} />
+
+      {/* جایگزین‌های پیشنهادی */}
+      <SimilarProducts slug={product.slug} />
+
       {product.compatible_with?.length > 0 && (
         <section className="mt-8">
-          <h2 className="font-display font-bold text-xl text-white mb-4">محصولات سازگار</h2>
-          <div className="flex flex-wrap gap-2">
+          <h2 className="font-display font-bold text-xl text-white mb-4">🔗 قطعات سازگار</h2>
+          <div className="grid grid-cols-2 gap-3">
             {product.compatible_with.map(p => (
               <Link key={p.id} to={`/products/${p.slug}`}
-                className="px-4 py-2 rounded-xl border border-brand/20 bg-brand/5
-                  text-brand dark:text-cyan text-sm hover:bg-brand/10 transition-colors">
-                {p.name}
+                className="card p-4 flex items-center gap-3 hover:border-brand/30 transition-all group">
+                {p.image && (
+                  <img src={p.image} alt={p.name}
+                    className="w-14 h-14 object-contain rounded-lg bg-white/5 flex-shrink-0" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-white group-hover:text-brand transition-colors truncate">
+                    {p.name}
+                  </div>
+                  {p.category_name && (
+                    <div className="text-xs text-gray-steel mt-0.5">{p.category_name}</div>
+                  )}
+                  <div className="text-xs text-cyan mt-1">مشاهده محصول ←</div>
+                </div>
               </Link>
             ))}
           </div>
+          <p className="text-xs text-gray-steel mt-3">
+            این قطعات با یکدیگر سازگار هستند و می‌توانند در کنار هم استفاده شوند.
+          </p>
         </section>
       )}
     </div>

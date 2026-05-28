@@ -1,0 +1,125 @@
+/* ─── Galaxy & Glass Effect ──────────────────────────────────── */
+
+body {
+  background: #000008 !important;
+}
+
+/* ── card های شناور ── */
+.card {
+  background: rgba(8, 4, 28, 0.7) !important;
+  backdrop-filter: blur(24px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 0 0 0.5px rgba(255,255,255,0.03) !important;
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.2s !important;
+}
+
+.card:hover {
+  border-color: rgba(255, 165, 0, 0.18) !important;
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.6),
+    0 0 24px rgba(255, 165, 0, 0.05),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset !important;
+  transform: translateY(-1px) !important;
+}
+
+/* ── header شناور ── */
+header, nav, .header {
+  background: rgba(4, 2, 16, 0.85) !important;
+  backdrop-filter: blur(30px) saturate(200%) !important;
+  -webkit-backdrop-filter: blur(30px) saturate(200%) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.4) !important;
+}
+
+/* ── modal / dialog شناور ── */
+.modal-bg > div,
+[class*="card p-6"],
+[class*="card p-5"],
+[class*="card p-4"] {
+  background: rgba(6, 3, 22, 0.88) !important;
+  backdrop-filter: blur(32px) !important;
+  -webkit-backdrop-filter: blur(32px) !important;
+}
+
+/* overlay پشت modal */
+.fixed.inset-0.z-\[300\],
+.fixed.inset-0.z-\[200\],
+.fixed.inset-0.z-\[400\] {
+  background: rgba(0, 0, 8, 0.75) !important;
+  backdrop-filter: blur(8px) !important;
+}
+
+/* ── input شناور ── */
+.input {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  backdrop-filter: blur(10px) !important;
+  color: #fff !important;
+}
+
+.input:focus {
+  background: rgba(255, 255, 255, 0.07) !important;
+  border-color: rgba(255, 165, 0, 0.35) !important;
+  box-shadow: 0 0 0 3px rgba(255,165,0,0.06) !important;
+  outline: none !important;
+}
+
+/* ── select ── */
+select.input {
+  color: rgba(255,255,255,0.85) !important;
+}
+
+/* ── table ── */
+table {
+  background: transparent !important;
+}
+
+tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.018) !important;
+}
+
+tbody tr:hover td {
+  background: rgba(255, 165, 0, 0.03) !important;
+}
+
+/* ── dropdown شناور ── */
+.bg-navy,
+[class*="bg-navy"] {
+  background: rgba(4, 2, 18, 0.95) !important;
+  backdrop-filter: blur(24px) !important;
+  -webkit-backdrop-filter: blur(24px) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.6) !important;
+}
+
+/* ── container-main ── */
+.container-main {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── sidebar / admin panels ── */
+[class*="sidebar"],
+[class*="admin"] .card {
+  background: rgba(6, 3, 20, 0.8) !important;
+  backdrop-filter: blur(20px) !important;
+}
+
+/* ── scrollbar کهکشانی ── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.3);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,165,0,0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,165,0,0.5);
+}

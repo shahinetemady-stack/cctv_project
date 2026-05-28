@@ -219,10 +219,18 @@ export default function OrdersPage() {
                   <span className="font-bold text-brand dark:text-cyan text-sm">
                     {Number(order.total_amount||0).toLocaleString('fa-IR')} تومان
                   </span>
-                  <button onClick={() => setSelectedOrder(order)}
-                    className="text-xs px-4 py-2 rounded-xl border border-brand/30 text-brand dark:text-cyan hover:bg-brand/10 transition-colors">
-                    📄 پیش‌فاکتور
-                  </button>
+                  <div className="flex gap-2">
+                    {order.tracking_code && (
+                      <Link to={`/track/${order.order_number}`}
+                        className="text-xs px-4 py-2 rounded-xl border border-green-500/30 text-green-400 hover:bg-green-500/10 transition-colors">
+                        🚚 رهگیری
+                      </Link>
+                    )}
+                    <button onClick={() => setSelectedOrder(order)}
+                      className="text-xs px-4 py-2 rounded-xl border border-brand/30 text-brand dark:text-cyan hover:bg-brand/10 transition-colors">
+                      📄 پیش‌فاکتور
+                    </button>
+                  </div>
                 </div>
               </div>
             )

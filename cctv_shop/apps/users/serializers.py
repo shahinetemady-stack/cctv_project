@@ -94,12 +94,27 @@ class UserProfileSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     profile = UserProfileSerializer(read_only=True)
     is_partner = serializers.BooleanField(read_only=True)
+    staff_role = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = ["id", "phone", "email", "first_name", "last_name",
-                  "is_partner", "date_joined", "profile"]
-        read_only_fields = ["phone", "date_joined"]
+                  "is_partner", "is_staff", "date_joined", "profile", "staff_role"]
+        read_only_fields = ["phone", "date_joined", "is_staff"]
+
+    def get_staff_role(self, obj):
+        if not obj.is_staff:
+            return None
+        try:
+            sp = obj.staff_profile
+            return {
+                "role_name": sp.role.name if sp.role else "",
+                "permissions": sp.role.permissions if sp.role else [],
+            }
+        except Exception:
+            if obj.is_superuser:
+                return {"role_name": "ادمین", "permissions": ["all"]}
+            return None
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):

@@ -248,6 +248,33 @@ class Order(TimeStampedModel):
         help_text="ادمین باید تا این زمان سفارش استعلامی را تأیید کند",
     )
 
+
+    # ─── فیلدهای رهگیری ──────────────────────────────────────
+    courier_company = models.CharField(
+        max_length=20, blank=True, default='',
+        choices=[
+            ('post', 'پست'), ('tipax', 'تیپاکس'),
+            ('chapar', 'چاپار'), ('snap', 'اسنپ‌باکس'), ('other', 'سایر'),
+        ],
+        verbose_name='شرکت حمل'
+    )
+    delivery_status = models.CharField(
+        max_length=20, blank=True, default='pending',
+        choices=[
+            ('pending', 'در انتظار ارسال'), ('shipped', 'ارسال شده'),
+            ('in_transit', 'در مسیر'), ('delivered', 'تحویل داده شده'),
+            ('returned', 'مرجوع شده'),
+        ],
+        verbose_name='وضعیت ارسال'
+    )
+    shipped_at = models.DateTimeField(null=True, blank=True, verbose_name='تاریخ ارسال')
+    delivered_at = models.DateTimeField(null=True, blank=True, verbose_name='تاریخ تحویل')
+    updated_by = models.ForeignKey(
+        'users.User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='updated_orders', verbose_name='آپدیت شده توسط'
+    )
+    status_updated_at = models.DateTimeField(null=True, blank=True, verbose_name='تاریخ آخرین تغییر وضعیت')
+
     class Meta:
         db_table = "orders_order"
         verbose_name = "سفارش"
@@ -459,3 +486,44 @@ class PaymentLog(TimeStampedModel):
             f"[{self.get_step_display()}] {self.order.order_number} "
             f"— {self.get_status_display()}"
         )
+
+
+class ChinaOrderRequest(models.Model):
+    """درخواست سفارش مستقیم از چین"""
+
+    class Status(models.TextChoices):
+        PENDING   = "pending",   "در انتظار بررسی"
+        REVIEWING = "reviewing", "در حال بررسی"
+        APPROVED  = "approved",  "تأیید شده"
+        REJECTED  = "rejected",  "رد شده"
+
+    # اطلاعات درخواست‌دهنده
+    name        = models.CharField(max_length=100, verbose_name="نام و نام خانوادگی")
+    phone       = models.CharField(max_length=20, verbose_name="شماره تماس")
+    email       = models.EmailField(blank=True, verbose_name="ایمیل")
+    user        = models.ForeignKey(
+        'users.User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='china_requests', verbose_name="کاربر"
+    )
+
+    # اطلاعات کالا
+    product_name = models.CharField(max_length=300, verbose_name="نام کالا")
+    quantity     = models.PositiveIntegerField(verbose_name="تعداد")
+    description  = models.TextField(blank=True, verbose_name="توضیحات")
+    product_link = models.URLField(blank=True, verbose_name="لینک کالا (اختیاری)")
+
+    # وضعیت
+    status      = models.CharField(max_length=20, choices=Status.choices,
+                    default=Status.PENDING, verbose_name="وضعیت")
+    admin_note  = models.TextField(blank=True, verbose_name="یادداشت ادمین")
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "orders_china_request"
+        verbose_name = "درخواست از چین"
+        verbose_name_plural = "درخواست‌های از چین"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name} | {self.product_name} × {self.quantity}"
