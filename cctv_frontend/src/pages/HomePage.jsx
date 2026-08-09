@@ -245,10 +245,10 @@ export default function HomePage() {
           {/* تیتر */}
           <h1 style={{ fontWeight: 900, lineHeight: 1.3, margin: 0 }}>
             <span className="animate-slide-up" style={{ display: 'block', animationDelay: '120ms', fontSize: 'clamp(30px, 6.5vw, 56px)', color: T1 }}>
-              قطعات دوربین مداربسته‌ات رو پیدا کن،
+              قطعات دوربین مداربسته‌ات رو راحت پیدا کن
             </span>
             <span className="animate-slide-up gold-text" style={{ display: 'block', animationDelay: '240ms', fontSize: 'clamp(30px, 6.5vw, 56px)' }}>
-              یا از ربات مشاور بپرس
+              بسپارش به ربات هوشمند دوربینکار
             </span>
           </h1>
 
@@ -256,6 +256,7 @@ export default function HomePage() {
           <p className="animate-slide-up" style={{ animationDelay: '360ms', fontSize: 'clamp(13px, 2vw, 16px)', color: T2, lineHeight: 1.9, maxWidth: 620, margin: '18px auto 0' }}>
             بین هزاران قطعه با <b style={{ color: T1 }}>جستجوی پیشرفته</b> دقیقاً همان چیزی را که می‌خواهی پیدا کن — مدل، چیپست، برند.
             اگر مطمئن نیستی، <b style={{ color: T1 }}>ربات مشاور</b> در انتخاب قطعه مناسب، مچ کردن لنز و برد و پاسخ به سوالات فنی کمکت می‌کند.
+            فقط کافیه توی کادر زیر هر سوالی داری ازش بپرسی.
           </p>
 
           {/* باکس هوشمند */}
@@ -430,7 +431,7 @@ export default function HomePage() {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(160px, 100%), 1fr))', gap: 'clamp(12px, 2vw, 20px)' }}>
-            {products.length > 0 ? products.slice(0, 8).map((p, i) => (
+            {products.length > 0 ? products.map((p, i) => (
               <Section key={p.id} delay={i * 60}><ProductCard product={p}/></Section>
             )) : (
               [...Array(8)].map((_, i) => (
@@ -467,7 +468,7 @@ export default function HomePage() {
 
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))',
               gap: 'clamp(16px, 3vw, 24px)', maxWidth: 1100, margin: '0 auto',
             }}>
               {(() => {
