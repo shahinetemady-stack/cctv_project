@@ -9,6 +9,11 @@
 - **سایت‌مپ**: `VideoSitemap` (`/videos/<slug>`، منتشرشده‌ها) + صفحه `/china-order/faq` به صفحات ثابت.
 - **مانده (نیازمند تصمیم)**: prerender/SSR — مهم‌ترین قدم برای دیده‌شدن توسط AIها؛ sameAs شبکه‌های اجتماعی وقتی هندل‌ها معلوم شد؛ ثبت در Search Console.
 
+## دیپلوی + امنیت (۹ آگوست)
+- دیپلوی روی سرور: `config/sitemaps.py` کپی و `cctv-backend` ری‌استارت شد؛ فرانت با `rsync dist/` → `/opt/cctv/frontend` (بک‌آپ tar در `/root/backups/`). نسخه زنده فعلاً روی `http://185.116.162.244` است — **دامنه doorbinkar.com هنوز به سرور قدیمی (185.143.x.x) اشاره می‌کند** و انتقال DNS (+TLS + ALLOWED_HOSTS دامنه) قدم جداست.
+- حادثه گیت: کامیت اشتباه `.env`/node_modules با force push اصلاح شد؛ `.env`/`db.sqlite3`/`node_modules`/`__pycache__` از tracking خارج و `.gitignore` کامیت شد. **تاریخچه قدیمی ریپو از قبل `.env` داشت — کلیدها (AI_API_KEY و…) باید rotate شوند.**
+- هاردنینگ سرور: ufw فعال (فقط 3031/80/443 — قواعد 8000/5173 حذف شد) + fail2ban نصب و فعال. DEBUG=False و gunicorn/Ollama روی localhost (از قبل سالم بود).
+
 # نقطه ادامه کار — ۷ آگوست ۲۰۲۶
 
 ## صفحه سوالات متداول + اتصال FAQ به چت‌بات
