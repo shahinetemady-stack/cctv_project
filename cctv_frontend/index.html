@@ -1,19 +1,101 @@
 <!doctype html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>فروشگاه قطعات دوربین مداربسته</title>
-    <meta name="description" content="خرید تخصصی قطعات دوربین مداربسته — سنسور، لنز، برد، ISP" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&family=Exo+2:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>دوربینکار | فروشگاه آنلاین قطعات دوربین مداربسته</title>
+    <meta name="description" content="فروشگاه تخصصی قطعات دوربین مداربسته — برد، لنز، سنسور، مودم و بدنه با قیمت همکار؛ جستجوی هوشمند و ربات مشاور برای انتخاب قطعه سازگار، ارسال به سراسر ایران." />
+    <meta name="theme-color" content="#0A0A0B" />
+
+    <!-- Open Graph / اشتراک‌گذاری (استاتیک — برای خزنده‌هایی که JS اجرا نمی‌کنند) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="fa_IR" />
+    <meta property="og:site_name" content="دوربینکار" />
+    <meta property="og:title" content="دوربینکار | فروشگاه آنلاین قطعات دوربین مداربسته" />
+    <meta property="og:description" content="فروشگاه تخصصی قطعات دوربین مداربسته — برد، لنز، سنسور، مودم و بدنه با قیمت همکار؛ جستجوی هوشمند و ربات مشاور برای انتخاب قطعه سازگار." />
+    <meta property="og:url" content="https://www.doorbinkar.com/" />
+    <meta property="og:image" content="https://www.doorbinkar.com/icons/icon-512.png" />
+    <link rel="canonical" href="https://www.doorbinkar.com/" />
+
+    <!-- داده ساخت‌یافته استاتیک — خزنده‌های گوگل و AI که JS اجرا نمی‌کنند فقط همین را می‌بینند -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "دوربینکار",
+      "url": "https://www.doorbinkar.com/",
+      "logo": "https://www.doorbinkar.com/icons/icon-512.png",
+      "telephone": ["+98-21-66415219", "+98-21-66416988", "+98-21-66764003", "+98-21-66764005"],
+      "areaServed": "IR"
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "دوربینکار",
+      "url": "https://www.doorbinkar.com/",
+      "inLanguage": "fa-IR",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": {
+          "@type": "EntryPoint",
+          "urlTemplate": "https://www.doorbinkar.com/products?search={search_term_string}"
+        },
+        "query-input": "required name=search_term_string"
+      }
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Store",
+      "name": "دوربینکار",
+      "url": "https://www.doorbinkar.com/",
+      "image": "https://www.doorbinkar.com/icons/icon-512.png",
+      "telephone": "+98-21-66415219",
+      "priceRange": "$$",
+      "currenciesAccepted": "IRR",
+      "address": { "@type": "PostalAddress", "addressCountry": "IR", "addressLocality": "تهران" }
+    }
+    </script>
+    <!-- اعمال تم قبل از اولین رندر (جلوگیری از فلش) -->
+    <script>
+      try {
+        var __t = JSON.parse(localStorage.getItem('site-theme') || '{}').state;
+        document.documentElement.dataset.theme = (__t && __t.theme) || 'dark';
+        if (__t && __t.theme === 'light') document.documentElement.classList.remove('dark');
+      } catch (e) { document.documentElement.dataset.theme = 'dark'; }
+    </script>
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="دوربینکار" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="دوربینکار" />
+    <meta name="format-detection" content="telephone=no" />
+
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- Apple Touch Icon -->
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="152x152" href="/icons/icon-152.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png" />
+
+    <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
+
+    <!-- Fonts (self-hosted) -->
+    <link rel="preload" href="/fonts/vazirmatn-arabic.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/vazirmatn-latin.woff2" as="font" type="font/woff2" crossorigin />
+
+    <!-- iOS splash screen -->
+    <link rel="apple-touch-startup-image" href="/icons/splash-1125x2436.png" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3)" />
   </head>
-  <body class="bg-surface-light dark:bg-navy text-gray-900 dark:text-white font-sans antialiased">
+  <body class="font-sans antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
