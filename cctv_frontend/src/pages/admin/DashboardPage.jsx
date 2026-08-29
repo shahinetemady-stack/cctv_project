@@ -1,6 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
+import {
+  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
+  PieChart, Pie, Cell, BarChart, Bar,
+} from 'recharts'
+import {
+  TrendingUp, ShoppingBag, Users, Package, Wallet,
+  ArrowUpRight, ArrowDownRight, Boxes,
+} from 'lucide-react'
 import api from '../../services/api'
 import { PageLoader } from '../../components/ui'
+import { formatDate } from '../../utils/date'
 
 const STATUS_FA = {
   pending: 'در انتظار', confirmed: 'تأیید شده',
@@ -8,147 +17,302 @@ const STATUS_FA = {
   ready_to_ship: 'آماده ارسال', shipped: 'ارسال شده', cancelled: 'لغو شده',
 }
 const STATUS_COLOR = {
-  pending: '#FF9500', confirmed: '#0066FF', awaiting_payment: '#8B5CF6',
-  paid: '#00C896', ready_to_ship: '#00C896', shipped: '#0066FF', cancelled: '#FF3B3B',
+  pending: '#FBBF24', confirmed: '#60A5FA', awaiting_payment: '#8B5CF6',
+  paid: '#34D399', ready_to_ship: '#22D3EE', shipped: '#0EA5E9', cancelled: '#F87171',
+}
+const PALETTE = ['#FBC02D', '#60A5FA', '#34D399', '#FBBF24', '#8B5CF6', '#F87171']
+const AXIS = { fill: '#7C8DA6', fontSize: 11 }
+const TOOLTIP_STYLE = {
+  background: 'var(--color-bg-elevated)',
+  border: '1px solid var(--color-border-strong)',
+  borderRadius: 12, fontSize: 12, direction: 'rtl', textAlign: 'right',
 }
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
+function compact(n) {
+  n = Number(n || 0)
+  if (n >= 1e9) return `${(n / 1e9).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} ممد`
+  if (n >= 1e6) return `${(n / 1e6).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} م`
+  if (n >= 1e3) return `${(n / 1e3).toLocaleString('fa-IR', { maximumFractionDigits: 0 })} ه`
+  return fmt(n)
+}
 
+// ─── کارت KPI ─────────────────────────────────────────────────
+function Kpi({ icon: Icon, label, value, unit, sub, delta, color = '#FBC02D' }) {
+  return (
+    <div className="card p-4 flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-gray-steel">{label}</span>
+        <span className="w-8 h-8 rounded-lg flex items-center justify-center"
+          style={{ background: color + '1A', color }}>
+          <Icon size={16} />
+        </span>
+      </div>
+      <div className="flex items-end gap-1.5">
+        <span className="text-xl font-extrabold text-white font-mono leading-none">{fmt(value)}</span>
+        {unit && <span className="text-[10px] text-gray-steel mb-0.5">{unit}</span>}
+      </div>
+      <div className="flex items-center gap-2 text-[10px]">
+        {delta != null && (
+          <span className={`inline-flex items-center gap-0.5 font-bold ${delta >= 0 ? 'text-alert-green' : 'text-alert-red'}`}>
+            {delta >= 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+            {fmt(Math.abs(delta))}٪
+          </span>
+        )}
+        {sub && <span className="text-gray-steel">{sub}</span>}
+      </div>
+    </div>
+  )
+}
+
+// ─── قاب کارت نمودار ──────────────────────────────────────────
+function ChartCard({ title, sub, children, className = '', height = 220 }) {
+  return (
+    <div className={`card p-5 ${className}`}>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-semibold text-sm text-white">{title}</h3>
+        {sub && <span className="text-[10px] text-gray-steel">{sub}</span>}
+      </div>
+      <div dir="ltr" style={{ height }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════
 export default function DashboardPage() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['dashboard'],
     queryFn: () => api.get('/dashboard/stats/').then(r => r.data),
     refetchInterval: 60000,
   })
-
   const { data: bs } = useQuery({
     queryKey: ['balance-sheet-dash'],
     queryFn: () => api.get('/accounting/reports/balance-sheet/').then(r => r.data),
     staleTime: 300000,
   })
 
-  if (isLoading) return <PageLoader />
   if (isError) return (
     <div className="container-main py-20 text-center text-gray-steel">
       خطا در بارگذاری — با حساب ادمین وارد شوید
     </div>
   )
 
-  const { sales, orders, users, inventory, monthly_sales, last_orders } = data
-  const maxSale = Math.max(...monthly_sales.map(d => d.total), 1)
+  const {
+    sales = {}, orders = {}, users = {}, inventory = {}, last_orders = [],
+    daily_sales = [], prev_month_sales = 0,
+    orders_by_status = [], top_products = [], sales_by_category = [],
+  } = data || {}
+
+  // برچسب شمسی برای محور روزها — مقدار ISO خام در day باقی می‌ماند
+  const dailyChart = daily_sales.map(d => ({ ...d, label: formatDate(d.day, { short: true }) }))
+
+  const momDelta = prev_month_sales > 0
+    ? Math.round(((sales.month - prev_month_sales) / prev_month_sales) * 100)
+    : null
+  const totalOrders = orders_by_status.reduce((a, b) => a + b.count, 0)
+
+  const finance = [
+    { name: 'طلب از مشتریان', value: bs?.assets?.receivable || 0, color: '#60A5FA' },
+    { name: 'بدهی به تامین‌کنندگان', value: bs?.liabilities?.payable_irr || 0, color: '#F87171' },
+    { name: 'موجودی بانک', value: bs?.assets?.cash_irr || 0, color: '#34D399' },
+    { name: 'سود ناخالص', value: bs?.profit?.gross_profit || 0, color: '#FBC02D' },
+  ]
+  const maxFin = Math.max(...finance.map(f => Math.abs(f.value)), 1)
 
   return (
-    <div className="container-main py-8 max-w-5xl">
-      <div className="flex items-center justify-between mb-8">
+    <div className="container-main py-8 max-w-6xl">
+      <div className="flex items-center justify-between mb-6">
         <h1 className="font-display font-bold text-2xl text-white">داشبورد مدیریت</h1>
         <span className="text-xs text-gray-steel">بروزرسانی خودکار هر دقیقه</span>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 mb-4">
-        <div className="card p-5">
-          <div className="text-xs text-gray-steel mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-green-400 inline-block"></span>آمار فروش
-          </div>
-          <div className="grid grid-cols-3 gap-4">
-            <div><div className="text-xs text-gray-steel mb-1">امروز</div><div className="text-lg font-bold text-green-400">{fmt(sales.today)}</div><div className="text-[10px] text-gray-steel">تومان</div></div>
-            <div><div className="text-xs text-gray-steel mb-1">این هفته</div><div className="text-lg font-bold text-white">{fmt(sales.week)}</div><div className="text-[10px] text-gray-steel">تومان</div></div>
-            <div><div className="text-xs text-gray-steel mb-1">این ماه</div><div className="text-lg font-bold text-brand">{fmt(sales.month)}</div><div className="text-[10px] text-gray-steel">تومان</div></div>
-          </div>
-        </div>
-
-        <div className="card p-5">
-          <div className="text-xs text-gray-steel mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-blue-400 inline-block"></span>وضعیت سفارشات
-          </div>
-          <div className="grid grid-cols-3 gap-4">
-            <div><div className="text-xs text-gray-steel mb-1">امروز</div><div className="text-lg font-bold text-white">{fmt(orders.today)}</div><div className="text-[10px] text-gray-steel">سفارش</div></div>
-            <div><div className="text-xs text-gray-steel mb-1">در انتظار</div><div className="text-lg font-bold text-orange-400">{fmt(orders.pending)}</div><div className="text-[10px] text-gray-steel">سفارش</div></div>
-            <div><div className="text-xs text-gray-steel mb-1">پرداخت</div><div className="text-lg font-bold text-purple-400">{fmt(orders.awaiting_payment)}</div><div className="text-[10px] text-gray-steel">در انتظار</div></div>
-          </div>
-        </div>
-
-        <div className="card p-5">
-          <div className="text-xs text-gray-steel mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-purple-400 inline-block"></span>کاربران
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div><div className="text-xs text-gray-steel mb-1">جدید امروز</div><div className="text-lg font-bold text-white">{fmt(users.new_today)}</div><div className="text-[10px] text-gray-steel">کاربر</div></div>
-            <div><div className="text-xs text-gray-steel mb-1">درخواست همکار</div><div className="text-lg font-bold text-purple-400">{fmt(users.partner_requests)}</div><div className="text-[10px] text-gray-steel">در انتظار تأیید</div></div>
-          </div>
-        </div>
-
-        <div className="card p-5">
-          <div className="text-xs text-gray-steel mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-orange-400 inline-block"></span>انبار
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div><div className="text-xs text-gray-steel mb-1">موجودی کم</div><div className="text-lg font-bold text-orange-400">{fmt(inventory.low_stock)}</div><div className="text-[10px] text-gray-steel">محصول</div></div>
-            <div><div className="text-xs text-gray-steel mb-1">ناموجود</div><div className="text-lg font-bold text-red-400">{fmt(inventory.out_of_stock)}</div><div className="text-[10px] text-gray-steel">محصول</div></div>
-          </div>
-        </div>
+      {/* ─── KPI ها ─────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+        <Kpi icon={TrendingUp} label="فروش امروز" value={sales.today} unit="ریال"
+          sub={`هفته: ${compact(sales.week)}`} color="#FBC02D" />
+        <Kpi icon={Wallet} label="فروش این ماه" value={sales.month} unit="ریال"
+          delta={momDelta} sub={momDelta == null ? '—' : 'نسبت به ماه قبل'} color="#34D399" />
+        <Kpi icon={ShoppingBag} label="سفارشات امروز" value={orders.today} unit="سفارش"
+          sub={`در انتظار: ${fmt(orders.pending)} · پرداخت: ${fmt(orders.awaiting_payment)}`} color="#60A5FA" />
+        <Kpi icon={Users} label="کاربران جدید امروز" value={users.new_today} unit="کاربر"
+          sub={`درخواست همکار: ${fmt(users.partner_requests)}`} color="#8B5CF6" />
       </div>
 
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <div className="card p-5">
-          <div className="text-xs text-gray-steel mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 inline-block"></span>دریافت و پرداخت
-          </div>
-          <div className="grid grid-cols-3 gap-4">
-            <div><div className="text-xs text-gray-steel mb-1">طلب از مشتریان</div><div className="text-lg font-bold text-blue-400">{fmt(bs?.assets?.receivable)}</div><div className="text-[10px] text-gray-steel">تومان</div></div>
-            <div><div className="text-xs text-gray-steel mb-1">بدهی به تامین‌کنندگان</div><div className="text-lg font-bold text-red-400">{fmt(bs?.liabilities?.payable_irr)}</div><div className="text-[10px] text-gray-steel">تومان</div></div>
-            <div><div className="text-xs text-gray-steel mb-1">موجودی بانک</div><div className="text-lg font-bold text-green-400">{fmt(bs?.assets?.cash_irr)}</div><div className="text-[10px] text-gray-steel">تومان</div></div>
-          </div>
-        </div>
+      {/* ─── روند فروش + وضعیت سفارش‌ها ─────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+        <ChartCard title="روند فروش ۳۰ روز اخیر" sub="ریال" className="lg:col-span-2" height={240}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={dailyChart} margin={{ top: 5, right: 8, left: 8, bottom: 0 }}>
+              <defs>
+                <linearGradient id="salesGold" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#FBC02D" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#FBC02D" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="rgba(128,128,128,0.14)" vertical={false} />
+              <XAxis dataKey="label" reversed tick={AXIS} axisLine={false} tickLine={false} dy={6} interval={4} />
+              <YAxis orientation="right" width={56} tick={{ ...AXIS, fontSize: 10 }} axisLine={false} tickLine={false}
+                tickFormatter={compact} />
+              <Tooltip contentStyle={TOOLTIP_STYLE}
+                formatter={(v) => [`${fmt(v)} ریال`, 'فروش']} labelFormatter={(l) => `روز ${l}`} />
+              <Area type="monotone" dataKey="total" stroke="#FBC02D" strokeWidth={2} fill="url(#salesGold)" isAnimationActive={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </ChartCard>
 
-        <div className="card p-5">
-          <div className="text-xs text-gray-steel mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-brand inline-block"></span>تراز کلی
-          </div>
-          <div className="grid grid-cols-3 gap-4">
-            <div><div className="text-xs text-gray-steel mb-1">سود ناخالص</div><div className={`text-lg font-bold ${(bs?.profit?.gross_profit||0)>=0?'text-green-400':'text-red-400'}`}>{fmt(bs?.profit?.gross_profit)}</div><div className="text-[10px] text-gray-steel">تومان</div></div>
-            <div><div className="text-xs text-gray-steel mb-1">ارزش موجودی کالا</div><div className="text-lg font-bold text-white">{fmt(bs?.assets?.stock_value)}</div><div className="text-[10px] text-gray-steel">تومان</div></div>
-            <div><div className="text-xs text-gray-steel mb-1">خالص دارایی</div><div className={`text-lg font-bold ${(bs?.equity||0)>=0?'text-green-400':'text-red-400'}`}>{fmt(bs?.equity)}</div><div className="text-[10px] text-gray-steel">تومان</div></div>
-          </div>
-        </div>
-      </div>
-
-      <div className="card p-5 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="font-semibold text-sm text-white">فروش ۶ ماه اخیر</h2>
-          <span className="text-xs text-gray-steel">تومان</span>
-        </div>
-        <div className="flex items-end gap-3 h-32">
-          {monthly_sales.map((d, i) => (
-            <div key={i} className="flex-1 flex flex-col items-center gap-1">
-              <div className="text-[10px] text-gray-steel">{d.count > 0 ? d.count : ''}</div>
-              <div className="w-full rounded-t-lg transition-all duration-500"
-                style={{ height: Math.max((d.total/maxSale)*90, d.total>0?4:0), background: i===monthly_sales.length-1?'#0066FF':'#0066FF33', minHeight: d.total>0?4:0 }} />
-              <div className="text-[10px] text-gray-steel">{d.month}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="card p-5">
-        <h2 className="font-semibold text-sm text-white mb-4">آخرین سفارشات</h2>
-        <div className="space-y-0">
-          {last_orders.map((o, i) => (
-            <div key={i} className="flex items-center justify-between py-3 border-b border-white/5 last:border-0">
-              <div className="flex items-center gap-3">
-                <span className="font-mono text-xs text-brand">{o.order_number}</span>
-                <span className="text-xs text-gray-steel">{o.user}</span>
-              </div>
-              <div className="flex items-center gap-4">
-                <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                  style={{ color: STATUS_COLOR[o.status], background: STATUS_COLOR[o.status]+'20' }}>
-                  {STATUS_FA[o.status] || o.status}
-                </span>
-                <span className="text-xs font-bold text-white">{fmt(o.amount)} ت</span>
-                <span className="text-[10px] text-gray-steel" dir="ltr">{o.created_at}</span>
+        <ChartCard title="وضعیت سفارش‌ها" sub={`مجموع: ${fmt(totalOrders)}`} height={240}>
+          {totalOrders === 0 ? (
+            <div className="h-full flex items-center justify-center text-gray-steel text-xs">سفارشی ثبت نشده</div>
+          ) : (
+            <div className="relative h-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={orders_by_status} dataKey="count" nameKey="status"
+                    innerRadius="58%" outerRadius="85%" paddingAngle={3} strokeWidth={0} isAnimationActive={false}>
+                    {orders_by_status.map(s => (
+                      <Cell key={s.status} fill={STATUS_COLOR[s.status] || '#71717A'} />
+                    ))}
+                  </Pie>
+                  <Tooltip contentStyle={TOOLTIP_STYLE}
+                    formatter={(v, name) => [`${fmt(v)} سفارش`, STATUS_FA[name] || name]} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <span className="text-2xl font-extrabold text-white font-mono">{fmt(totalOrders)}</span>
+                <span className="text-[10px] text-gray-steel">سفارش</span>
               </div>
             </div>
-          ))}
-        </div>
+          )}
+          <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-2" dir="rtl">
+            {orders_by_status.map(s => (
+              <span key={s.status} className="inline-flex items-center gap-1 text-[10px] text-gray-steel">
+                <span className="w-2 h-2 rounded-full inline-block" style={{ background: STATUS_COLOR[s.status] || '#71717A' }} />
+                {STATUS_FA[s.status] || s.status} ({fmt(s.count)})
+              </span>
+            ))}
+          </div>
+        </ChartCard>
+      </div>
+
+      {/* ─── فروش دسته‌ای + محصولات برتر ─────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+        <ChartCard title="فروش بر اساس دسته‌بندی" sub="ریال" height={230}>
+          {sales_by_category.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-gray-steel text-xs">داده‌ای نیست</div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={sales_by_category} margin={{ top: 5, right: 8, left: 8, bottom: 0 }}>
+                <CartesianGrid stroke="rgba(128,128,128,0.14)" vertical={false} />
+                <XAxis dataKey="name" reversed tick={{ ...AXIS, fontSize: 10 }} axisLine={false} tickLine={false} dy={6} />
+                <YAxis orientation="right" width={56} tick={{ ...AXIS, fontSize: 10 }} axisLine={false} tickLine={false}
+                  tickFormatter={compact} />
+                <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'rgba(251,192,45,0.06)' }}
+                  formatter={(v) => [`${fmt(v)} ریال`, 'فروش']} />
+                <Bar dataKey="total" radius={[6, 6, 0, 0]} isAnimationActive={false}>
+                  {sales_by_category.map((c, i) => (
+                    <Cell key={c.name} fill={PALETTE[i % PALETTE.length]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </ChartCard>
+
+        <ChartCard title="۵ محصول برتر بر اساس درآمد" sub="ریال" height={230}>
+          {top_products.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-gray-steel text-xs">داده‌ای نیست</div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={top_products} layout="vertical" margin={{ top: 0, right: 8, left: 8, bottom: 0 }}>
+                <CartesianGrid stroke="rgba(128,128,128,0.14)" horizontal={false} />
+                <XAxis type="number" hide />
+                <YAxis type="category" dataKey="name" orientation="right" width={150}
+                  tick={{ ...AXIS, fontSize: 10 }} axisLine={false} tickLine={false}
+                  tickFormatter={(n) => n.length > 22 ? n.slice(0, 22) + '…' : n} />
+                <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'rgba(251,192,45,0.06)' }}
+                  formatter={(v, name, item) => [`${fmt(v)} ریال (${fmt(item.payload.qty)} عدد)`, 'درآمد']} />
+                <Bar dataKey="revenue" radius={[0, 6, 6, 0]} fill="#FBC02D" barSize={18} isAnimationActive={false} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </ChartCard>
+      </div>
+
+      {/* ─── مالی + انبار + آخرین سفارشات ────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <ChartCard title="وضعیت مالی" sub="ریال" height={210}>
+          <div className="h-full flex flex-col justify-center gap-4" dir="rtl">
+            {finance.map(f => (
+              <div key={f.name}>
+                <div className="flex items-center justify-between text-[11px] mb-1">
+                  <span className="text-gray-steel">{f.name}</span>
+                  <span className="font-mono font-bold text-white">{compact(f.value)}</span>
+                </div>
+                <div className="h-2 rounded-full bg-white/5 overflow-hidden">
+                  <div className="h-full rounded-full transition-all duration-700"
+                    style={{ width: `${Math.max((Math.abs(f.value) / maxFin) * 100, f.value ? 3 : 0)}%`, background: f.color }} />
+                </div>
+              </div>
+            ))}
+            <div className="flex items-center justify-between pt-3 border-t border-white/5 text-[11px]">
+              <span className="text-gray-steel">خالص دارایی</span>
+              <span className={`font-mono font-bold ${(bs?.equity || 0) >= 0 ? 'text-alert-green' : 'text-alert-red'}`}>
+                {compact(bs?.equity)} ریال
+              </span>
+            </div>
+          </div>
+        </ChartCard>
+
+        <ChartCard title="سلامت انبار" height={210}>
+          <div className="h-full flex flex-col justify-center gap-3" dir="rtl">
+            <div className="flex items-center gap-3">
+              <span className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: '#FBBF241A', color: '#FBBF24' }}>
+                <Boxes size={17} />
+              </span>
+              <div className="flex-1">
+                <div className="text-[11px] text-gray-steel">موجودی کم (≤ ۵)</div>
+                <div className="text-lg font-extrabold text-white font-mono">{fmt(inventory.low_stock)} <span className="text-[10px] font-normal text-gray-steel">محصول</span></div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: '#F871711A', color: '#F87171' }}>
+                <Package size={17} />
+              </span>
+              <div className="flex-1">
+                <div className="text-[11px] text-gray-steel">ناموجود</div>
+                <div className="text-lg font-extrabold text-white font-mono">{fmt(inventory.out_of_stock)} <span className="text-[10px] font-normal text-gray-steel">محصول</span></div>
+              </div>
+            </div>
+            <div className="pt-3 border-t border-white/5 flex items-center justify-between text-[11px]">
+              <span className="text-gray-steel">ارزش موجودی کالا</span>
+              <span className="font-mono font-bold text-gold">{compact(bs?.assets?.stock_value)} ریال</span>
+            </div>
+          </div>
+        </ChartCard>
+
+        <ChartCard title="آخرین سفارشات" height={210}>
+          <div className="h-full overflow-y-auto space-y-0 -mx-2 px-2" dir="rtl">
+            {last_orders.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-gray-steel text-xs">سفارشی نیست</div>
+            ) : last_orders.map((o, i) => (
+              <div key={i} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
+                <div className="flex flex-col">
+                  <span className="font-mono text-[11px] text-gold">{o.order_number}</span>
+                  <span className="text-[10px] text-gray-steel" dir="ltr">{o.user}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full"
+                    style={{ color: STATUS_COLOR[o.status], background: (STATUS_COLOR[o.status] || '#71717A') + '20' }}>
+                    {STATUS_FA[o.status] || o.status}
+                  </span>
+                  <span className="text-[11px] font-bold text-white font-mono">{compact(o.amount)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </ChartCard>
       </div>
     </div>
   )

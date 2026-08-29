@@ -1,14 +1,18 @@
 import { Link } from 'react-router-dom'
-import useAuthStore from '../../store/useAuthStore'
-import useCartStore from '../../store/useCartStore'
-import { orderService } from '../../services/orders'
+import { RotateCw, Scale } from 'lucide-react'
+import useCompareStore from '../../store/useCompareStore'
 import { useState } from 'react'
 
 const CATEGORY_TYPE_ICON = {
   board: '📟', lens: '🔭', modem: '📡', housing: '📦', other: '🔧',
 }
 
-function StockBadge({ available_stock }) {
+function StockBadge({ available_stock, availability }) {
+  // به‌زودی/توقف تولید مستقل از عدد موجودی است — موجودی صفرِ عادی همان «ناموجود» می‌ماند
+  if (availability === 'coming_soon')
+    return <span className="badge-blue text-[10px]">🔜 به‌زودی</span>
+  if (availability === 'discontinued')
+    return <span className="badge-red text-[10px]">توقف تولید</span>
   if (available_stock === 0)
     return <span className="badge-red text-[10px]">ناموجود</span>
   if (available_stock <= 5)
@@ -17,34 +21,32 @@ function StockBadge({ available_stock }) {
 }
 
 export default function ProductCard({ product }) {
-  const { isAuthenticated, isPartner } = useAuthStore()
-  const { increment } = useCartStore()
-  const [adding, setAdding] = useState(false)
+  const { add: addToCompare, remove: removeFromCompare, has: inCompare } = useCompareStore()
+  const [flipped, setFlipped] = useState(false)
 
   const variant = product.variants?.[0]
-  const isUserPartner = isAuthenticated() && isPartner()
-  const originalPrice = product.min_price || variant?.final_price
-  const partnerPrice = product.partner_min_price
-  const price = isUserPartner && partnerPrice ? partnerPrice : originalPrice
-  const hasDiscount = isUserPartner && partnerPrice && product.partner_discount_percent > 0
-  const inStock = product.available_stock > 0
+  const price = product.min_price || variant?.final_price
   const catType = product.category_type || 'other'
+  const compared = inCompare(product.slug)
+  // چیپ‌های مشخصات زیر مدل — همان استایل کارت هوم‌پیج (زرد = رنگ برند)
+  const specChips = catType === 'lens'
+    ? [{ v: product.lens_resolution, lat: 1 }, { v: product.lens_degree, lat: 1 }, { v: product.focal_ratio }, { v: product.brand }]
+    : catType === 'board'
+      ? [{ v: product.board_system, lat: 1 }, { v: product.board_resolution, lat: 1 }, { v: product.brand }]
+      : [{ v: product.brand }, { v: product.sensor_name, gray: 1 }, { v: product.lens_name, gray: 1 }]
 
-  const handleAddToCart = async (e) => {
+  const handleCompare = (e) => {
     e.preventDefault()
-    if (!variant || !inStock) return
-    setAdding(true)
-    try {
-      if (isPartner()) {
-        await orderService.addToInquiryCart(variant.id)
-      } else {
-        await orderService.addToCart(variant.id)
-      }
-      increment()
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setAdding(false)
+    if (compared) {
+      removeFromCompare(product.slug)
+    } else {
+      addToCompare({
+        slug: product.slug,
+        name: product.name,
+        category_id: product.category_id,
+        image: product.main_image?.image || null,
+        min_price: price || null,
+      })
     }
   }
 
@@ -52,22 +54,59 @@ export default function ProductCard({ product }) {
     <Link to={`/products/${product.slug}`}
       className="card card-hover flex flex-col group overflow-hidden cursor-pointer">
 
-      {/* تصویر */}
-      <div className="relative aspect-square bg-gradient-to-br from-navy to-steel overflow-hidden">
+      {/* تصویر — استیج روشن برای خوانایی محصولات مشکی؛ با تصویر دوم، هاور = چرخش به نمای پشت */}
+      <div className="relative aspect-square product-media-stage overflow-hidden">
         {product.main_image ? (
-          <img
-            src={product.main_image.image}
-            alt={product.name}
-            className="w-full h-full object-contain p-4 group-hover:scale-105 transition-transform duration-500"
-          />
+          product.secondary_image ? (
+            <div className="product-flip">
+              <div className={`product-flip-inner${flipped ? ' flipped' : ''}`}>
+                <div className="product-flip-face">
+                  <img
+                    src={product.main_image.image}
+                    alt={product.name}
+                    className="w-full h-full object-contain p-4"
+                  />
+                </div>
+                <div className="product-flip-face product-flip-back">
+                  <img
+                    src={product.secondary_image.image}
+                    alt={`${product.name} — نمای دیگر`}
+                    loading="lazy"
+                    className="w-full h-full object-contain p-4"
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <img
+              src={product.main_image.image}
+              alt={product.name}
+              className="w-full h-full object-contain p-4 group-hover:scale-105 transition-transform duration-500"
+            />
+          )
         ) : (
           <div className="w-full h-full flex flex-col items-center justify-center gap-2">
             <span className="text-4xl">{CATEGORY_TYPE_ICON[catType]}</span>
           </div>
         )}
+        {/* دکمه چرخش تصویر — فقط روی دستگاه‌های لمسی نمایش داده می‌شود (CSS: hover: none) */}
+        {product.secondary_image && (
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setFlipped(v => !v) }}
+            aria-label="نمایش نمای دیگر محصول"
+            className="product-flip-btn absolute bottom-2 left-2 z-10 w-11 h-11 rounded-full items-center justify-center border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)]/80 backdrop-blur text-[#FFB25C] active:scale-90 transition-transform"
+          >
+            <RotateCw size={17} />
+          </button>
+        )}
         {product.is_featured && (
-          <div className="absolute top-2 right-2 badge bg-brand text-white text-[10px]">
+          <div className="absolute top-2 right-2 badge badge-gold text-[10px]">
             ⭐ ویژه
+          </div>
+        )}
+        {(product.discount_percent || 0) > 0 && (
+          <div className="absolute top-2 left-2 badge badge-red text-[10px]">
+            ٪{Number(product.discount_percent).toLocaleString('fa-IR')} تخفیف
           </div>
         )}
       </div>
@@ -78,7 +117,7 @@ export default function ProductCard({ product }) {
           <span className="text-[10px] font-mono text-gray-steel uppercase tracking-wider">
             {product.category_name || ''}
           </span>
-          <StockBadge available_stock={product.available_stock} />
+          <StockBadge available_stock={product.available_stock} availability={product.availability} />
         </div>
 
         <h3 className="font-semibold text-sm leading-snug line-clamp-2
@@ -86,60 +125,62 @@ export default function ProductCard({ product }) {
           {product.name}
         </h3>
 
-        <div className="flex flex-wrap gap-1 mt-auto">
-          {product.brand && (
-            <span className="text-[10px] bg-brand/10 text-brand dark:text-cyan px-2 py-0.5 rounded-full">
-              {product.brand}
-            </span>
-          )}
-          {product.sensor_name && (
-            <span className="text-[10px] bg-white/5 text-gray-steel px-2 py-0.5 rounded-full">
-              {product.sensor_name}
-            </span>
-          )}
-          {product.lens_name && (
-            <span className="text-[10px] bg-white/5 text-gray-steel px-2 py-0.5 rounded-full">
-              {product.lens_name}
-            </span>
-          )}
-        </div>
+        {/* مدل (خط مونو) + چیپ‌های مشخصات زیر آن — استایل یکسان با کارت هوم‌پیج */}
+        {/* مدل فقط وقتی جدا نشان داده می‌شود که داخل نام محصول نباشد */}
+        {product.model_number && (catType === 'lens' || catType === 'board' || !product.name.includes(product.model_number)) && (
+          <div dir="ltr" className="text-right text-[15px] font-extrabold font-mono tracking-wide
+            text-gray-700 dark:text-[var(--color-text-secondary)] -mt-0.5">
+            {product.model_number}
+          </div>
+        )}
+        {specChips.some(c => c.v) && (
+          <div className="flex flex-wrap gap-1">
+            {specChips.filter(c => c.v).map((c, i) => (
+              <span key={i} dir={c.lat ? 'ltr' : undefined}
+                className={`rounded-full whitespace-nowrap${c.lat ? ' font-mono' : ''}`}
+                style={{
+                  fontSize: 13, padding: '3px 10px',
+                  background: c.gray ? 'var(--color-bg-tertiary)' : 'rgba(251,192,45,0.12)',
+                  color: c.gray ? 'var(--color-text-muted)' : 'var(--color-brand)',
+                }}>
+                {c.v}
+              </span>
+            ))}
+          </div>
+        )}
 
-        <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-white/5 mt-1">
+        <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-white/5 mt-auto">
           <div>
             {price ? (
               <div>
-                <div className="text-xs text-gray-steel">
-                  {isUserPartner ? 'قیمت همکار' : 'قیمت'}
-                </div>
-                <div className="text-sm font-bold text-brand dark:text-cyan font-mono">
-                  {Number(price).toLocaleString('fa-IR')}
-                  <span className="text-[10px] font-normal text-gray-steel mr-1">تومان</span>
-                </div>
-                {hasDiscount && (
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <span className="text-[10px] text-gray-steel line-through">
-                      {Number(originalPrice).toLocaleString('fa-IR')}
-                    </span>
-                    <span className="text-[10px] text-alert-green">
-                      {product.partner_discount_percent}٪ تخفیف
-                    </span>
+                {product.min_price_original && (
+                  <div className="text-[11px] text-gray-steel line-through">
+                    {Number(product.min_price_original).toLocaleString('fa-IR')}
                   </div>
                 )}
+                <div className="text-sm font-bold text-brand dark:text-cyan">
+                  {Number(price).toLocaleString('fa-IR')}
+                  <span className="text-[10px] font-normal text-gray-steel mr-1">ریال</span>
+                </div>
               </div>
             ) : (
               <span className="text-xs text-gray-steel">—</span>
             )}
           </div>
 
-          {isAuthenticated() && inStock && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={handleAddToCart}
-              disabled={adding}
-              className="btn-secondary text-xs px-3 py-1.5"
+              onClick={handleCompare}
+              className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-all ${
+                compared
+                  ? 'border-brand text-brand bg-brand/10'
+                  : 'border-white/10 text-gray-steel hover:text-white hover:border-white/25'
+              }`}
             >
-              {adding ? '...' : isPartner() ? '+ استعلام' : '+ سبد'}
+              <Scale size={13} />
+              <span>مقایسه</span>
             </button>
-          )}
+          </div>
         </div>
       </div>
     </Link>

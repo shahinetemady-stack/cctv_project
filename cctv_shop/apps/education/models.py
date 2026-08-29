@@ -81,6 +81,16 @@ class Article(models.Model):
     views_count      = models.PositiveIntegerField(default=0, verbose_name="بازدید")
     likes_count      = models.PositiveIntegerField(default=0, verbose_name="لایک")
     is_published     = models.BooleanField(default=True, verbose_name="منتشر شده")
+    legacy_id        = models.PositiveIntegerField(
+        null=True, blank=True, unique=True, db_index=True,
+        verbose_name="Ø´ÙØ§Ø³Ù Ø¯Ø± Ø³Ø§ÛØª ÙØ¯ÛÙÛ",
+        help_text="Ø¨Ø±Ø§Û Ø±ÛØ¯Ø§ÛØ±Ú©Øª Û³Û°Û± Ø§Ø² doorbinkar.com",
+    )
+    publish_at       = models.DateTimeField(
+        null=True, blank=True, db_index=True,
+        verbose_name="زمان انتشار برنامه‌ریزی‌شده",
+        help_text="برای پیش‌نویسها: با رسیدن این زمان، هشدار انتشار در پنل مدیریت نمایش داده می‌شود.",
+    )
     created_at       = models.DateTimeField(auto_now_add=True)
     updated_at       = models.DateTimeField(auto_now=True)
 
@@ -92,3 +102,21 @@ class Article(models.Model):
 
     def __str__(self):
         return self.title
+
+    def save(self, *args, **kwargs):
+        if self.pk and self.slug:
+            old_slug = (Article.objects.filter(pk=self.pk)
+                        .values_list('slug', flat=True).first())
+            if old_slug and old_slug != self.slug:
+                from apps.catalog.models import SlugRedirect
+                SlugRedirect.record(f'/blog/{old_slug}', f'/blog/{self.slug}')
+        super().save(*args, **kwargs)
+
+    @property
+    def read_time(self):
+        """تخمین زمان مطالعه بر اساس طول محتوا (حدود ۳۰۰ کلمه در دقیقه)"""
+        if not self.content:
+            return 0
+        word_count = len(self.content.split())
+        minutes = max(1, round(word_count / 300))
+        return minutes

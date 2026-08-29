@@ -1,12 +1,18 @@
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../../services/api'
+import { formatDate } from '../../utils/date'
+import AmountInput from '../../components/ui/AmountInput'
+import usePermissions from '../../hooks/usePermissions'
+import AddContactModal from '../../components/accounting/AddContactModal'
 
 const TYPE_LABELS = {
   supplier_cn: 'تامین‌کننده چینی',
   clearance: 'ترخیص‌کار',
   shipping_co: 'شرکت حمل',
   staff: 'کارمند / فروشنده',
+  customer: 'مشتری',
+  partner: 'همکار',
   other: 'سایر',
 }
 const TYPE_COLORS = {
@@ -14,224 +20,1025 @@ const TYPE_COLORS = {
   clearance: '#FF9500',
   shipping_co: '#00C896',
   staff: '#8B5CF6',
+  customer: '#4FC3F7',
+  partner: '#FFD54F',
   other: '#888',
 }
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 
-export default function ContactsPage() {
+// تبدیل ارقام فارسی/عربی به لاتین — برای جستجوی شماره موبایل با هر نوع صفحه‌کلید
+const toEnDigits = (s) => String(s || '')
+  .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+  .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+
+// ─── تب تراز کلی ───────────────────────────────────────────────
+function BalanceTab() {
+  const [filter, setFilter] = useState('')
+  const { data, isLoading } = useQuery({
+    queryKey: ['balance-report'],
+    queryFn: () => api.get('/accounting/reports/balance/').then(r => r.data),
+  })
+  const contacts = (data?.contacts || []).filter(c =>
+    !filter || c.name.includes(filter) || c.contact_type_display.includes(filter)
+  )
+  const totalDebtIrr = contacts.filter(c => c.balance_irr > 0).reduce((s, c) => s + c.balance_irr, 0)
+  const totalCreditIrr = contacts.filter(c => c.balance_irr < 0).reduce((s, c) => s + Math.abs(c.balance_irr), 0)
+  const totalDebtCny = contacts.filter(c => c.balance_cny > 0).reduce((s, c) => s + c.balance_cny, 0)
+  const totalCreditCny = contacts.filter(c => c.balance_cny < 0).reduce((s, c) => s + Math.abs(c.balance_cny), 0)
+
+  return (
+    <div>
+      <div className="grid grid-cols-4 gap-4 mb-6">
+        {[
+          { label: 'بدهکاران (ریال)', value: fmt(totalDebtIrr) + ' ت', color: '#FF3B3B' },
+          { label: 'بستانکاران (ریال)', value: fmt(totalCreditIrr) + ' ت', color: '#00C896' },
+          { label: 'بدهکاران (یوان)', value: fmt(totalDebtCny) + ' ¥', color: '#FF3B3B' },
+          { label: 'بستانکاران (یوان)', value: fmt(totalCreditCny) + ' ¥', color: '#00C896' },
+        ].map(item => (
+          <div key={item.label} className="card p-4 text-center">
+            <div className="text-xs text-gray-steel mb-1">{item.label}</div>
+            <div className="text-lg font-bold" style={{ color: item.color }}>{item.value}</div>
+          </div>
+        ))}
+      </div>
+      <div className="mb-4">
+        <input value={filter} onChange={e => setFilter(e.target.value)}
+          className="input text-sm max-w-xs" placeholder="جستجو نام یا نوع..." />
+      </div>
+      <div className="card p-5">
+        {isLoading ? <div className="text-center py-8 text-gray-steel">در حال بارگذاری...</div>
+          : contacts.length === 0 ? <div className="text-center py-12 text-gray-steel">تراکنشی یافت نشد</div>
+          : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.1)' }}>
+                {['طرف حساب', 'نوع', 'مانده ریال', 'وضعیت', 'مانده یوان', 'وضعیت'].map(h => (
+                  <th key={h} style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {contacts.map((c, i) => (
+                <tr key={c.id} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                  <td style={{ padding: '10px 12px', fontWeight: 600 }}>{c.name}</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <span style={{ color: TYPE_COLORS[c.contact_type] || '#888', background: (TYPE_COLORS[c.contact_type] || '#888') + '20', padding: '2px 8px', borderRadius: 20, fontSize: 11 }}>{c.contact_type_display}</span>
+                  </td>
+                  <td style={{ padding: '10px 12px', fontWeight: 700, color: c.balance_irr > 0 ? '#FF3B3B' : '#00C896' }}>{fmt(Math.abs(c.balance_irr))} ریال</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <span style={{ color: c.balance_irr > 0 ? '#FF3B3B' : '#00C896', background: (c.balance_irr > 0 ? '#FF3B3B' : '#00C896') + '20', padding: '2px 10px', borderRadius: 20, fontSize: 11 }}>
+                      {c.balance_irr > 0 ? 'بستانکار' : 'بدهکار'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '10px 12px', fontWeight: 700, color: c.balance_cny > 0 ? '#FF3B3B' : '#00C896' }}>
+                    {c.balance_cny !== 0 ? `${fmt(Math.abs(c.balance_cny))} ¥` : '—'}
+                  </td>
+                  <td style={{ padding: '10px 12px' }}>
+                    {c.balance_cny !== 0 && (
+                      <span style={{ color: c.balance_cny > 0 ? '#FF3B3B' : '#00C896', background: (c.balance_cny > 0 ? '#FF3B3B' : '#00C896') + '20', padding: '2px 10px', borderRadius: 20, fontSize: 11 }}>
+                        {c.balance_cny > 0 ? 'بستانکار' : 'بدهکار'}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── نمای ریز اقلام کاردکس — همان جدول سندها + اقلام باز زیر هر فاکتور ──
+function KardexItemsView({ timeline }) {
+  const tdS = { padding: '8px 10px' }
+  return (
+    <div className="overflow-x-auto">
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead>
+          <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.1)' }}>
+            {['تاریخ', 'نوع سند', 'شرح', 'بدهکار ریال', 'بدهکار یوان', 'بستانکار ریال', 'بستانکار یوان', 'مانده ریال', 'مانده یوان'].map(h => (
+              <th key={h} style={{ padding: '6px 10px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500, whiteSpace: 'nowrap', fontSize: 11 }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {timeline.map((item, i) => (
+            <Fragment key={i}>
+              <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                <td style={{ ...tdS, color: 'var(--color-text-secondary)', fontSize: 11, whiteSpace: 'nowrap' }}>{formatDate(item.date)}</td>
+                <td style={tdS}>
+                  <span style={{ color: item.type === 'invoice' ? '#0066FF' : '#00C896', background: (item.type === 'invoice' ? '#0066FF' : '#00C896') + '20', padding: '2px 8px', borderRadius: 20, fontSize: 11, whiteSpace: 'nowrap' }}>
+                    {item.type_label}
+                  </span>
+                </td>
+                <td style={{ ...tdS, color: 'var(--color-text-secondary)', fontSize: 11 }}>{item.description}</td>
+                <td style={{ ...tdS, color: '#FF3B3B', fontWeight: item.debit_irr ? 600 : 400 }}>
+                  {item.debit_irr ? fmt(item.debit_irr) : '—'}
+                </td>
+                <td style={{ ...tdS, color: '#FF9500', fontWeight: item.debit_cny ? 600 : 400 }}>
+                  {item.debit_cny ? fmt(item.debit_cny) + ' ¥' : '—'}
+                </td>
+                <td style={{ ...tdS, color: '#00C896', fontWeight: item.credit_irr ? 600 : 400 }}>
+                  {item.credit_irr ? fmt(item.credit_irr) : '—'}
+                </td>
+                <td style={{ ...tdS, color: '#00C896', fontWeight: item.credit_cny ? 600 : 400 }}>
+                  {item.credit_cny ? fmt(item.credit_cny) + ' ¥' : '—'}
+                </td>
+                <td style={{ ...tdS, fontWeight: 700, whiteSpace: 'nowrap', color: item.bal_irr > 0 ? '#FF3B3B' : item.bal_irr < 0 ? '#00C896' : '#888' }}>
+                  {item.bal_irr !== 0 ? <>{fmt(Math.abs(item.bal_irr))} <span style={{ fontSize: 10 }}>{item.bal_irr > 0 ? 'بس' : 'بد'}</span></> : '✓'}
+                </td>
+                <td style={{ ...tdS, fontWeight: 700, whiteSpace: 'nowrap', color: item.bal_cny > 0 ? '#FF3B3B' : item.bal_cny < 0 ? '#00C896' : '#888' }}>
+                  {item.bal_cny !== 0 ? <>{fmt(Math.abs(item.bal_cny))} ¥ <span style={{ fontSize: 10 }}>{item.bal_cny > 0 ? 'بس' : 'بد'}</span></> : '—'}
+                </td>
+              </tr>
+              {/* زیرشاخه اقلام فاکتور — همیشه باز */}
+              {item.inv_items.map((it, j) => (
+                <tr key={`${i}-${j}`} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.04)', background: 'rgba(251,192,45,0.03)' }}>
+                  <td style={{ padding: '4px 10px', color: 'var(--color-text-muted)', fontSize: 10, whiteSpace: 'nowrap' }}>{formatDate(item.date)}</td>
+                  <td style={{ padding: '4px 10px' }} />
+                  <td style={{ padding: '4px 10px 4px 26px', color: 'var(--color-text-secondary)', fontSize: 11, textAlign: 'right' }}>
+                    <span className="text-gray-steel ml-1">↳</span>
+                    {it.product_name}
+                    <span className="text-gray-steel text-[10px]" dir="ltr"> [{it.sku}]</span>
+                    <span className="text-gray-steel text-[10px]"> × {fmt(it.quantity)}</span>
+                  </td>
+                  <td style={{ padding: '4px 10px' }} />
+                  <td style={{ padding: '4px 10px' }} />
+                  <td style={{ padding: '4px 10px', color: '#00C896', fontSize: 11 }}>
+                    {item.purchase_type === 'domestic' ? `${fmt(it.unit_price_irr)} ریال` : ''}
+                  </td>
+                  <td style={{ padding: '4px 10px', color: '#00C896', fontSize: 11 }}>
+                    {item.purchase_type !== 'domestic' ? `${fmt(it.unit_price_cny)} ¥` : ''}
+                  </td>
+                  <td colSpan={2} style={{ padding: '4px 10px' }} />
+                </tr>
+              ))}
+            </Fragment>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ─── تب کاردکس اشخاص ───────────────────────────────────────────
+function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelectedName, showEdit, setShowEdit }) {
+  const { can } = usePermissions()
   const qc = useQueryClient()
-  const [showForm, setShowForm] = useState(false)
-  const [selected, setSelected] = useState(null)
-  const [filterType, setFilterType] = useState('')
-  const [form, setForm] = useState({ name: '', contact_type: 'supplier_cn', currency: 'CNY', phone: '', wechat: '', note: '' })
+  const [search, setSearch] = useState('')
+  const [showDropdown, setShowDropdown] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const [kardexView, setKardexView] = useState('docs')   // docs = سندها | items = ریز اقلام
+  const [expandedInv, setExpandedInv] = useState(null)   // فاکتور بازشده برای نمایش ریز
+
+  const { data: contacts = [] } = useQuery({
+    queryKey: ['contacts-all'],
+    // همه مشتریان (ثبت‌نامی سایت + طرف حساب‌های دستی) در کاردکس اشخاص دیده می‌شوند
+    queryFn: () => api.get('/accounting/contacts/', { params: { include_registered: '1', registered_filter: 'all' } }).then(r => r.data),
+  })
+
+  const { data: detail, isLoading } = useQuery({
+    queryKey: ['contact-kardex', selectedId],
+    queryFn: () => api.get(`/accounting/contacts/${selectedId}/`).then(r => r.data),
+    enabled: !!selectedId,
+  })
+
+  // نرخ یوان روز — برای «مانده کل» به ریال
+  const { data: rateData } = useQuery({
+    queryKey: ['exchange-rate'],
+    queryFn: () => api.get('/catalog/exchange-rate/').then(r => r.data),
+    staleTime: 60000,
+  })
+  const dayRate = Number(rateData?.rate_cny_to_irt || 0)
+
+  // حذف طرف حساب — اگر سند داشته باشد بک‌اند غیرفعالش می‌کند
+  const deleteMut = useMutation({
+    mutationFn: () => api.delete(`/accounting/contacts/${selectedId}/`).then(r => r.data),
+    onSuccess: (r) => {
+      qc.invalidateQueries(['contacts-all'])
+      setConfirmDelete(false)
+      setSelectedId(null)
+      setSelectedName('')
+      setMsg(null)
+      alert(r.deactivated ? 'طرف حساب سند داشت و به‌جای حذف، غیرفعال شد' : 'طرف حساب حذف شد')
+    },
+    onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا در حذف' }),
+  })
+
+  const q = toEnDigits(search)
+  const filtered = contacts.filter(c =>
+    !q || c.name.includes(search) || c.contact_type_display.includes(search) || toEnDigits(c.phone).includes(q)
+  ).slice(0, 15)
+
+  // ساخت timeline — دیدگاه از نظر ما:
+  // فاکتور خرید = طرف حساب طلبکار از ما شد → ستون بستانکار (او بستانکار است)
+  // پرداخت خروجی = ما پول دادیم، بدهی کم شد → ستون بدهکار (او بدهکار شد)
+  // مانده مثبت = ما هنوز بدهکاریم
+  const buildTimeline = (detail) => {
+    if (!detail) return []
+    const items = []
+
+    // فاکتورهای فروش (کاربران ثبت‌نامی) — مشتری بدهکار شد → بستانکار
+    for (const inv of (detail.sale_invoices || [])) {
+      items.push({
+        date: inv.date,
+        type: 'invoice',
+        type_label: 'فاکتور فروش',
+        description: `فاکتور فروش ${inv.invoice_number || inv.id} | ${inv.status_display}`,
+        inv_id: inv.id,
+        inv_number: inv.invoice_number,
+        purchase_type: inv.currency === 'CNY' ? 'foreign' : 'domestic',
+        inv_items: (inv.items || []).map(it => ({
+          product_name: it.product_name, sku: it.sku, quantity: it.quantity,
+          unit_price_irr: it.unit_price, unit_price_cny: it.unit_price,
+        })),
+        debit_irr: 0,
+        debit_cny: 0,
+        credit_irr: inv.currency === 'CNY' ? 0 : (inv.total_amount || 0),
+        credit_cny: inv.currency === 'CNY' ? (inv.total_amount || 0) : 0,
+      })
+    }
+
+    // پرداخت‌های مشتری (تسویه فاکتور) — بدهی کم شد → بدهکار
+    for (const p of (detail.sale_payments || [])) {
+      items.push({
+        date: p.date,
+        type: 'payment',
+        type_label: `دریافت — ${p.method_display || ''}`,
+        description: ['دریافت', p.account_name && `در ${p.account_name}`, p.reference].filter(Boolean).join(' | '),
+        inv_items: [],
+        debit_irr: p.currency === 'CNY' ? 0 : Number(p.amount),
+        debit_cny: p.currency === 'CNY' ? Number(p.amount) : 0,
+        credit_irr: 0,
+        credit_cny: 0,
+      })
+    }
+
+    for (const inv of (detail.invoices || [])) {
+      items.push({
+        date: inv.date,
+        type: 'invoice',
+        type_label: inv.role === 'shipper' ? 'فاکتور حمل' : 'فاکتور خرید',
+        description: inv.description,
+        inv_id: inv.id,
+        inv_number: inv.invoice_number,
+        purchase_type: inv.purchase_type,
+        inv_items: inv.items || [],
+        // فاکتور = طرف حساب طلبکار → بستانکار
+        debit_irr: 0,
+        debit_cny: 0,
+        credit_irr: inv.amount_irr || 0,
+        credit_cny: inv.amount_cny || 0,
+      })
+    }
+
+    for (const p of (detail.payments || [])) {
+      if (p.direction === 'out') {
+        items.push({
+          date: p.date,
+          type: 'payment',
+          type_label: p.payment_type_display || 'پرداخت',
+          description: [p.payment_type_display, p.from_account_name && `از ${p.from_account_name}`, p.rate_irr > 0 && `نرخ ${Number(p.rate_irr).toLocaleString('fa-IR')}`, p.reference, p.note]
+            .filter(Boolean).join(' | '),
+          inv_items: [],
+          // پرداخت = ما پول دادیم → بدهکار
+          debit_irr: p.currency === 'IRR' ? Number(p.amount) : 0,
+          debit_cny: p.currency === 'CNY' ? Number(p.amount) : 0,
+          credit_irr: 0,
+          credit_cny: 0,
+        })
+      } else {
+        items.push({
+          date: p.date,
+          type: 'payment',
+          type_label: `دریافت — ${p.payment_type_display || ''}`,
+          description: ['دریافت', p.to_account_name && `در ${p.to_account_name}`, p.rate_irr > 0 && `نرخ ${Number(p.rate_irr).toLocaleString('fa-IR')}`, p.reference, p.note]
+            .filter(Boolean).join(' | '),
+          inv_items: [],
+          // دریافت از طرف حساب = بدهی ما بیشتر شد → بستانکار
+          debit_irr: 0,
+          debit_cny: 0,
+          credit_irr: p.currency === 'IRR' ? Number(p.amount) : 0,
+          credit_cny: p.currency === 'CNY' ? Number(p.amount) : 0,
+        })
+      }
+    }
+
+    items.sort((a, b) => new Date(a.date) - new Date(b.date))
+
+    let balIrr = 0, balCny = 0
+    return items.map(item => {
+      // مانده = بستانکار (طلب طرف حساب) - بدهکار (پرداخت ما) — مثبت = بدهکاریم
+      balIrr += item.credit_irr - item.debit_irr
+      balCny += item.credit_cny - item.debit_cny
+      return { ...item, bal_irr: balIrr, bal_cny: balCny }
+    }).reverse()
+  }
+
+  const timeline = buildTimeline(detail)
+
+  return (
+    <div>
+      <div className="card p-5 mb-6">
+        <div className="max-w-md">
+          <label className="label text-xs mb-1 block">جستجو و انتخاب طرف حساب</label>
+          <div className="relative">
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-steel pointer-events-none">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </span>
+            <input value={search}
+              onChange={e => { setSearch(e.target.value); setShowDropdown(true) }}
+              onFocus={() => setShowDropdown(true)}
+              onKeyDown={e => { if (e.key === 'Escape') setShowDropdown(false) }}
+              placeholder="نام، نوع یا موبایل طرف حساب..."
+              className="input text-sm"
+              style={{ paddingRight: '2.4rem', paddingLeft: '2.4rem' }} />
+            {(search || selectedId) && (
+              <button type="button" title="پاک کردن"
+                onClick={() => { setSearch(''); setSelectedId(null); setSelectedName(''); setShowDropdown(false) }}
+                className="absolute left-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-lg flex items-center justify-center text-gray-steel hover:text-white hover:bg-white/10 transition-colors">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            )}
+          {showDropdown && (
+            <div className="absolute z-50 top-full right-0 left-0 mt-1.5 bg-navy border border-white/10 rounded-xl shadow-2xl overflow-hidden">
+              <div className="max-h-72 overflow-y-auto">
+                {filtered.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-xs text-gray-steel">🔍 موردی با این مشخصات یافت نشد</div>
+                ) : filtered.map(c => (
+                  <button key={c.id}
+                    className={`w-full text-right px-3 py-2.5 hover:bg-white/5 border-b border-white/5 last:border-0 flex items-center gap-3 transition-colors ${selectedId === c.id ? 'bg-brand/10' : ''}`}
+                    onClick={() => { setSelectedId(c.id); setSelectedName(c.name); setSearch(c.name); setShowDropdown(false) }}>
+                    <span className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0"
+                      style={{ color: TYPE_COLORS[c.contact_type] || '#888', background: (TYPE_COLORS[c.contact_type] || '#888') + '20' }}>
+                      {c.name?.[0] || '؟'}
+                    </span>
+                    <span className="flex-1 min-w-0">
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-sm text-white truncate">{c.name}</span>
+                        {c.is_registered && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-white/5 text-gray-steel flex-shrink-0">🌐 سایت</span>
+                        )}
+                        {selectedId === c.id && <span className="text-brand text-xs flex-shrink-0 font-bold">✓</span>}
+                      </span>
+                      <span className="flex gap-2 mt-1 flex-wrap items-center">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-md"
+                          style={{ color: TYPE_COLORS[c.contact_type] || '#888', background: (TYPE_COLORS[c.contact_type] || '#888') + '20' }}>
+                          {c.contact_type_display}
+                        </span>
+                        {c.partner_tier_display && (
+                          <span className="text-[10px] text-gold">{c.partner_tier_display}</span>
+                        )}
+                        {c.phone && <span className="text-[10px] text-gray-steel" dir="ltr">{c.phone}</span>}
+                        {c.is_registered ? (
+                          <>
+                            {c.sale_debt > 0 && (
+                              <span className="text-[10px] font-bold text-red-400">بدهی: {fmt(c.sale_debt)} ریال</span>
+                            )}
+                            {c.sale_debt_cny > 0 && (
+                              <span className="text-[10px] font-bold text-red-400">{fmt(c.sale_debt_cny)} ¥</span>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <span className={`text-[10px] font-bold ${c.balance_irr > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                              {c.balance_irr > 0 ? 'بستانکار' : 'بدهکار'}: {fmt(Math.abs(c.balance_irr))} ریال
+                            </span>
+                            {c.balance_cny !== 0 && (
+                              <span className={`text-[10px] font-bold ${c.balance_cny > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                {fmt(Math.abs(c.balance_cny))} ¥
+                              </span>
+                            )}
+                            {/* بدهی فاکتور فروش — از کاربر سایهٔ لینک‌شده به این طرف حساب */}
+                            {c.sale_debt > 0 && (
+                              <span className="text-[10px] font-bold text-red-400">بدهی فروش: {fmt(c.sale_debt)} ریال</span>
+                            )}
+                            {c.sale_debt_cny > 0 && (
+                              <span className="text-[10px] font-bold text-red-400">بدهی فروش: {fmt(c.sale_debt_cny)} ¥</span>
+                            )}
+                          </>
+                        )}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {showDropdown && <div className="fixed inset-0 z-40" onClick={() => setShowDropdown(false)} />}
+          </div>
+
+          {detail && (
+            <div className="mt-2 flex gap-4 flex-wrap">
+              {detail.is_registered ? (
+                <>
+                  <span className={`text-sm font-bold ${detail.sale_debt > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                    بدهی فاکتور: {detail.sale_debt > 0 ? `${fmt(detail.sale_debt)} ریال` : 'تسویه ✓'}
+                  </span>
+                  {detail.sale_debt_cny > 0 && (
+                    <span className="text-sm font-bold text-red-400">
+                      بدهی فاکتور یوانی: {fmt(detail.sale_debt_cny)} ¥
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <span className={`text-sm font-bold ${detail.balance_irr > 0 ? 'text-red-400' : detail.balance_irr < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
+                    مانده ریال: {detail.balance_irr === 0 ? 'تسویه ✓' : `${detail.balance_irr > 0 ? 'بستانکار' : 'بدهکار'} ${fmt(Math.abs(detail.balance_irr))} ریال`}
+                  </span>
+                  <span className={`text-sm font-bold ${detail.balance_cny > 0 ? 'text-red-400' : detail.balance_cny < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
+                    مانده یوان: {detail.balance_cny === 0 ? 'تسویه ✓' : `${detail.balance_cny > 0 ? 'بستانکار' : 'بدهکار'} ${fmt(Math.abs(detail.balance_cny))} ¥`}
+                  </span>
+                  {/* مانده کل به ریال با نرخ روز یوان */}
+                  {(() => {
+                    const total = Number(detail.balance_irr || 0) + Number(detail.balance_cny || 0) * dayRate
+                    return (
+                      <span className={`text-sm font-bold ${total > 0 ? 'text-red-400' : total < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
+                        | مانده کل (با نرخ روز): {total === 0 ? 'تسویه ✓' : `${total > 0 ? 'بستانکار' : 'بدهکار'} ${fmt(Math.abs(total))} ریال`}
+                      </span>
+                    )
+                  })()}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* مانده اول دوره + حذف طرف حساب — دستی با پرمیشن contacts_edit */}
+          {detail && !detail.is_registered && can('contacts_edit') && (
+            <div className="flex items-center justify-between mt-3 pt-3 border-t border-white/10 flex-wrap gap-2">
+              <div className="text-xs text-gray-steel">
+                مانده اول دوره:
+                <span className="text-white mr-1">{fmt(detail.opening_balance_irr)} ریال</span>
+                {Number(detail.opening_balance_cny) !== 0 && (
+                  <span className="text-white mr-2">| {fmt(detail.opening_balance_cny)} یوان</span>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                {confirmDelete ? (
+                  <span className="flex items-center gap-2">
+                    <span className="text-[10px] text-red-400">حذف شود؟</span>
+                    <button onClick={() => deleteMut.mutate()} disabled={deleteMut.isPending}
+                      className="text-xs px-2 py-1 rounded bg-red-500/20 text-red-400 border border-red-500/40 disabled:opacity-50">
+                      {deleteMut.isPending ? '...' : 'بله'}
+                    </button>
+                    <button onClick={() => setConfirmDelete(false)} className="text-xs text-gray-steel hover:text-white">خیر</button>
+                  </span>
+                ) : (
+                  <button onClick={() => setConfirmDelete(true)}
+                    className="text-xs text-red-400 hover:text-red-300">🗑 حذف طرف حساب</button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {msg && (
+            <div className={`mt-3 rounded-lg px-4 py-2 text-xs ${msg.type === 'success' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+              {msg.text}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {selectedId && (
+        isLoading ? <div className="text-center py-8 text-gray-steel">در حال بارگذاری...</div> : (
+          <div className="card p-5">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <h3 className="text-sm font-semibold text-white">کاردکس {selectedName}</h3>
+              {/* سوییچ دو حالت نمایش */}
+              <div className="flex gap-1 bg-white/5 rounded-lg p-1">
+                {[['docs', '📑 سندها'], ['items', '🧾 ریز اقلام']].map(([k, label]) => (
+                  <button key={k} onClick={() => setKardexView(k)}
+                    className={`text-xs px-3 py-1.5 rounded-md transition-all ${kardexView === k ? 'bg-brand/20 text-brand' : 'text-gray-steel hover:text-white'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {timeline.length === 0 ? (
+              <div className="text-center py-8 text-gray-steel text-sm">هیچ تراکنشی ثبت نشده</div>
+            ) : kardexView === 'items' ? (
+              /* ── حالت ریز اقلام — همان جدول سندها با اقلام باز زیر هر فاکتور ── */
+              <KardexItemsView timeline={timeline} />
+            ) : (
+              <div className="overflow-x-auto">
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.1)' }}>
+                      {['تاریخ', 'نوع سند', 'شرح', 'بدهکار ریال', 'بدهکار یوان', 'بستانکار ریال', 'بستانکار یوان', 'مانده ریال', 'مانده یوان'].map(h => (
+                        <th key={h} style={{ padding: '6px 10px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500, whiteSpace: 'nowrap', fontSize: 11 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {timeline.map((item, i) => (
+                      <Fragment key={i}>
+                        <tr
+                          onClick={item.type === 'invoice' && item.inv_items.length > 0
+                            ? () => setExpandedInv(expandedInv === i ? null : i) : undefined}
+                          style={{
+                            borderBottom: expandedInv === i ? 'none' : '0.5px solid rgba(255,255,255,0.05)',
+                            background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent',
+                            cursor: item.type === 'invoice' && item.inv_items.length > 0 ? 'pointer' : 'default',
+                          }}>
+                          <td style={{ padding: '8px 10px', color: 'var(--color-text-secondary)', fontSize: 11, whiteSpace: 'nowrap' }}>{formatDate(item.date)}</td>
+                          <td style={{ padding: '8px 10px' }}>
+                            <span style={{ color: item.type === 'invoice' ? '#0066FF' : '#00C896', background: (item.type === 'invoice' ? '#0066FF' : '#00C896') + '20', padding: '2px 8px', borderRadius: 20, fontSize: 11, whiteSpace: 'nowrap' }}>
+                              {item.type_label}
+                            </span>
+                          </td>
+                          <td style={{ padding: '8px 10px', color: 'var(--color-text-secondary)', fontSize: 11 }}>
+                            {item.type === 'invoice' && item.inv_items.length > 0 && (
+                              <span className="text-brand ml-1">{expandedInv === i ? '▼' : '◀'}</span>
+                            )}
+                            {item.description}
+                          </td>
+                          <td style={{ padding: '8px 10px', color: '#FF3B3B', fontWeight: item.debit_irr ? 600 : 400 }}>
+                            {item.debit_irr ? fmt(item.debit_irr) : '—'}
+                          </td>
+                          <td style={{ padding: '8px 10px', color: '#FF9500', fontWeight: item.debit_cny ? 600 : 400 }}>
+                            {item.debit_cny ? fmt(item.debit_cny) + ' ¥' : '—'}
+                          </td>
+                          <td style={{ padding: '8px 10px', color: '#00C896', fontWeight: item.credit_irr ? 600 : 400 }}>
+                            {item.credit_irr ? fmt(item.credit_irr) : '—'}
+                          </td>
+                          <td style={{ padding: '8px 10px', color: '#00C896', fontWeight: item.credit_cny ? 600 : 400 }}>
+                            {item.credit_cny ? fmt(item.credit_cny) + ' ¥' : '—'}
+                          </td>
+                          <td style={{ padding: '8px 10px', fontWeight: 700, whiteSpace: 'nowrap', color: item.bal_irr > 0 ? '#FF3B3B' : item.bal_irr < 0 ? '#00C896' : '#888' }}>
+                            {item.bal_irr !== 0 ? <>{fmt(Math.abs(item.bal_irr))} <span style={{ fontSize: 10 }}>{item.bal_irr > 0 ? 'بس' : 'بد'}</span></> : '✓'}
+                          </td>
+                          <td style={{ padding: '8px 10px', fontWeight: 700, whiteSpace: 'nowrap', color: item.bal_cny > 0 ? '#FF3B3B' : item.bal_cny < 0 ? '#00C896' : '#888' }}>
+                            {item.bal_cny !== 0 ? <>{fmt(Math.abs(item.bal_cny))} ¥ <span style={{ fontSize: 10 }}>{item.bal_cny > 0 ? 'بس' : 'بد'}</span></> : '—'}
+                          </td>
+                        </tr>
+                        {/* ریز اقلام فاکتور — با کلیک روی سند */}
+                        {expandedInv === i && (
+                          <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: 'rgba(251,192,45,0.04)' }}>
+                            <td colSpan={9} style={{ padding: '6px 24px 12px' }}>
+                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                                <thead>
+                                  <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.08)' }}>
+                                    {['کالا', 'تعداد', 'قیمت واحد', 'جمع'].map(h => (
+                                      <th key={h} style={{ padding: '4px 8px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500, fontSize: 10 }}>{h}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {item.inv_items.map((it, j) => (
+                                    <tr key={j}>
+                                      <td style={{ padding: '5px 8px', textAlign: 'right' }}>
+                                        {it.product_name}
+                                        <span className="text-gray-steel text-[10px]" dir="ltr"> [{it.sku}]</span>
+                                      </td>
+                                      <td style={{ padding: '5px 8px' }}>{fmt(it.quantity)}</td>
+                                      <td style={{ padding: '5px 8px' }}>
+                                        {item.purchase_type === 'domestic' ? `${fmt(it.unit_price_irr)} ریال` : `${fmt(it.unit_price_cny)} ¥`}
+                                      </td>
+                                      <td style={{ padding: '5px 8px', fontWeight: 600 }}>
+                                        {item.purchase_type === 'domestic'
+                                          ? `${fmt((it.unit_price_irr || 0) * it.quantity)} ریال`
+                                          : `${fmt(it.unit_price_cny * it.quantity)} ¥`}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )
+      )}
+
+      {!selectedId && (
+        <div className="card p-12 text-center">
+          <div className="text-4xl mb-3">👤</div>
+          <div className="text-gray-steel text-sm">نام طرف حساب را جستجو کنید</div>
+        </div>
+      )}
+
+      {showEdit && detail && (
+        <EditContactModal detail={detail} onClose={() => setShowEdit(false)}
+          onDeleted={() => { setSelectedId(null); setSelectedName(''); setSearch('') }} />
+      )}
+    </div>
+  )
+}
+
+// ─── استان‌های ایران ────────────────────────────────────────────
+const PROVINCES = [
+  'آذربایجان شرقی', 'آذربایجان غربی', 'اردبیل', 'اصفهان', 'البرز', 'ایلام', 'بوشهر',
+  'تهران', 'چهارمحال و بختیاری', 'خراسان جنوبی', 'خراسان رضوی', 'خراسان شمالی', 'خوزستان',
+  'زنجان', 'سمنان', 'سیستان و بلوچستان', 'فارس', 'قزوین', 'قم', 'کردستان', 'کرمان',
+  'کرمانشاه', 'کهگیلویه و بویراحمد', 'گلستان', 'گیلان', 'لرستان', 'مازندران', 'مرکزی',
+  'هرمزگان', 'همدان', 'یزد',
+]
+
+const CONTACT_TYPE_OPTIONS = [
+  ['supplier_cn', 'تامین‌کننده چینی'],
+  ['clearance', 'ترخیص‌کار'],
+  ['shipping_co', 'شرکت حمل'],
+  ['staff', 'کارمند / فروشنده'],
+  ['customer', 'مشتری'],
+  ['partner', 'همکار'],
+  ['other', 'سایر'],
+]
+
+// ─── مودال ویرایش کامل اطلاعات طرف حساب (همه انواع) ────────────
+function EditContactModal({ detail, onClose, onDeleted }) {
+  const qc = useQueryClient()
+  const isReg = !!detail.is_registered
+  const [form, setForm] = useState(isReg ? {
+    first_name: detail.first_name || '',
+    last_name: detail.last_name || '',
+    phone: detail.phone || '',
+    email: detail.email || '',
+    company_name: detail.company_name || '',
+    province: detail.province || '',
+    address: detail.address || '',
+    opening_balance_irr: detail.opening_balance_irr ?? '',
+    opening_balance_cny: detail.opening_balance_cny ?? '',
+    partner_approved: !!detail.partner_approved,
+    partner_tier: detail.partner_tier || '',
+  } : {
+    name: detail.name || '',
+    contact_type: detail.contact_type || 'other',
+    currency: detail.currency || 'CNY',
+    phone: detail.phone || '',
+    wechat: detail.wechat || '',
+    province: detail.province || '',
+    address: detail.address || '',
+    note: detail.note || '',
+    partner_tier: detail.partner_tier || '',
+    opening_balance_irr: detail.opening_balance_irr ?? '',
+    opening_balance_cny: detail.opening_balance_cny ?? '',
+  })
+  const [msg, setMsg] = useState(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [pwMsg, setPwMsg] = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  // فعال‌سازی/تعیین رمز حساب کاربری سایت برای طرف حساب حضوری
+  const activateMut = useMutation({
+    mutationFn: () => api.post(`/accounting/contacts/${detail.id}/activate-user/`, { password: newPassword }).then(r => r.data),
+    onSuccess: (r) => {
+      setPwMsg({ type: 'success', text: r.message || 'حساب فعال شد' })
+      setNewPassword('')
+      qc.invalidateQueries(['contact-kardex', detail.id])
+    },
+    onError: (e) => setPwMsg({ type: 'error', text: e.response?.data?.error || 'خطا' }),
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: () => api.delete(`/accounting/contacts/${detail.id}/`).then(r => r.data),
+    onSuccess: (r) => {
+      qc.invalidateQueries(['contacts-all'])
+      onDeleted?.()
+      onClose()
+      if (r.deactivated) alert('طرف حساب سند داشت و به‌جای حذف، غیرفعال شد')
+    },
+    onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا در حذف' }),
+  })
+
+  const saveMut = useMutation({
+    mutationFn: () => {
+      const payload = {
+        ...form,
+        opening_balance_irr: Number(form.opening_balance_irr) || 0,
+        opening_balance_cny: Number(form.opening_balance_cny) || 0,
+      }
+      return api.patch(`/accounting/contacts/${detail.id}/`, payload).then(r => r.data)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries(['contacts-all'])
+      qc.invalidateQueries(['contact-kardex', detail.id])
+      onClose()
+    },
+    onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا در ذخیره' }),
+  })
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="card p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <h2 className="font-bold text-white text-base mb-4">ویرایش اطلاعات {detail.name}</h2>
+        {msg && (
+          <div className="rounded-lg px-4 py-2 text-xs mb-3 bg-red-500/20 text-red-400">{msg.text}</div>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          {isReg ? (
+            <>
+              <label className="text-xs text-gray-steel">نام
+                <input value={form.first_name} onChange={e => set('first_name', e.target.value)} className="input text-sm mt-1" />
+              </label>
+              <label className="text-xs text-gray-steel">نام خانوادگی
+                <input value={form.last_name} onChange={e => set('last_name', e.target.value)} className="input text-sm mt-1" />
+              </label>
+              <label className="text-xs text-gray-steel">موبایل
+                <input value={form.phone} onChange={e => set('phone', e.target.value)} dir="ltr" className="input text-sm mt-1" />
+              </label>
+              <label className="text-xs text-gray-steel">ایمیل
+                <input value={form.email} onChange={e => set('email', e.target.value)} dir="ltr" className="input text-sm mt-1" />
+              </label>
+              <label className="text-xs text-gray-steel col-span-2">نام شرکت / برند
+                <input value={form.company_name} onChange={e => set('company_name', e.target.value)} className="input text-sm mt-1" />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="text-xs text-gray-steel col-span-2">نام طرف حساب
+                <input value={form.name} onChange={e => set('name', e.target.value)} className="input text-sm mt-1" />
+              </label>
+              <label className="text-xs text-gray-steel">نوع
+                <select value={form.contact_type} onChange={e => set('contact_type', e.target.value)} className="input text-sm mt-1">
+                  {CONTACT_TYPE_OPTIONS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-gray-steel">ارز پیش‌فرض
+                <select value={form.currency} onChange={e => set('currency', e.target.value)} className="input text-sm mt-1">
+                  <option value="CNY">یوان چین</option>
+                  <option value="IRR">ریال ایران</option>
+                  <option value="USD">دلار</option>
+                </select>
+              </label>
+              <label className="text-xs text-gray-steel">موبایل
+                <input value={form.phone} onChange={e => set('phone', e.target.value)} dir="ltr" className="input text-sm mt-1" />
+              </label>
+              <label className="text-xs text-gray-steel">وی‌چت / واتساپ / تلفن
+                <input value={form.wechat} onChange={e => set('wechat', e.target.value)} dir="ltr" className="input text-sm mt-1" />
+              </label>
+            </>
+          )}
+          <label className="text-xs text-gray-steel">استان
+            <input value={form.province} onChange={e => set('province', e.target.value)}
+              list="province-options" className="input text-sm mt-1" placeholder="جستجو یا انتخاب استان..." />
+            <datalist id="province-options">
+              {PROVINCES.map(p => <option key={p} value={p} />)}
+            </datalist>
+          </label>
+          <label className="text-xs text-gray-steel col-span-2">آدرس
+            <textarea value={form.address} onChange={e => set('address', e.target.value)} rows={2} className="input text-sm mt-1" />
+          </label>
+          {!isReg && (
+            <label className="text-xs text-gray-steel col-span-2">توضیحات
+              <textarea value={form.note} onChange={e => set('note', e.target.value)} rows={2} className="input text-sm mt-1" />
+            </label>
+          )}
+          <label className="text-xs text-gray-steel">مانده اول دوره (ریال)
+            <AmountInput value={form.opening_balance_irr}
+              onChange={e => set('opening_balance_irr', e.target.value)}
+              className="input text-sm mt-1" placeholder="0" />
+          </label>
+          <label className="text-xs text-gray-steel">مانده اول دوره (یوان)
+            <AmountInput value={form.opening_balance_cny}
+              onChange={e => set('opening_balance_cny', e.target.value)}
+              className="input text-sm mt-1" placeholder="0" />
+          </label>
+          <div className="col-span-2 text-[10px] text-gray-steel">مثبت = طرف حساب به ما بدهکار | منفی = ما به او بدهکاریم</div>
+        </div>
+        {(isReg || form.contact_type === 'partner') && (
+          <div className="mt-4 pt-4 border-t border-white/10 space-y-3">
+            {isReg && (
+              <label className="flex items-center gap-2 text-xs text-gray-steel cursor-pointer">
+                <input type="checkbox" checked={form.partner_approved}
+                  onChange={e => set('partner_approved', e.target.checked)} className="accent-[#FBC02D]" />
+                همکار تأییدشده
+              </label>
+            )}
+            {(isReg ? form.partner_approved : form.contact_type === 'partner') && (
+              <select value={form.partner_tier} onChange={e => set('partner_tier', e.target.value)} className="input text-xs">
+                {TIER_OPTIONS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+              </select>
+            )}
+          </div>
+        )}
+        {/* حساب کاربری سایت — فقط طرف حساب‌های حضوری؛ مشتری با موبایل + این رمز لاگین می‌کند */}
+        {!isReg && (
+          <div className="mt-4 pt-4 border-t border-white/10">
+            <div className="text-xs font-bold text-white mb-1">🌐 حساب کاربری سایت</div>
+            <div className="text-[11px] text-gray-steel mb-2">
+              {detail.linked_user_phone
+                ? <>موبایل حساب: <b className="text-white" dir="ltr">{detail.linked_user_phone}</b> — وضعیت: {detail.linked_user_active
+                    ? <span className="text-green-400">فعال</span>
+                    : <span className="text-yellow-400">بدون رمز (غیرفعال)</span>}</>
+                : 'هنوز حسابی لینک نشده — با تعیین رمز، حساب با موبایل همین طرف حساب ساخته/لینک می‌شود.'}
+            </div>
+            <div className="flex gap-2">
+              <input type="text" value={newPassword} onChange={e => setNewPassword(e.target.value)}
+                dir="ltr" placeholder="رمز عبور جدید (حداقل ۸ کاراکتر)"
+                className="input text-sm flex-1" autoComplete="off" />
+              <button type="button" disabled={newPassword.length < 8 || activateMut.isPending}
+                onClick={() => activateMut.mutate()}
+                className="btn-primary text-xs px-4 disabled:opacity-50">
+                {activateMut.isPending ? '...' : detail.linked_user_active ? 'تغییر رمز' : 'فعال‌سازی'}
+              </button>
+            </div>
+            {pwMsg && (
+              <div className={`text-[11px] mt-2 rounded-lg px-3 py-2 ${pwMsg.type === 'success' ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                {pwMsg.text}
+              </div>
+            )}
+          </div>
+        )}
+        <div className="flex gap-2 mt-5">
+          {confirmDelete ? (
+            <>
+              <button onClick={() => deleteMut.mutate()} disabled={deleteMut.isPending}
+                className="flex-1 text-sm py-2.5 rounded-xl bg-red-500/20 text-red-400 border border-red-500/40 disabled:opacity-50">
+                {deleteMut.isPending ? '...' : 'بله، حذف شود'}
+              </button>
+              <button onClick={() => setConfirmDelete(false)} className="btn-secondary text-sm py-2.5 px-5">خیر</button>
+            </>
+          ) : (
+            <button onClick={() => setConfirmDelete(true)}
+              className="text-xs px-3 py-2.5 rounded-xl text-red-400 border border-red-500/30 hover:bg-red-500/10">
+              🗑 حذف
+            </button>
+          )}
+          <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}
+            className="btn-primary flex-1 text-sm py-2.5 disabled:opacity-50">
+            {saveMut.isPending ? '...' : 'ذخیره'}
+          </button>
+          <button onClick={onClose} className="btn-secondary text-sm py-2.5 px-5">انصراف</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── تب درخواست‌های همکاری (رسیدگی و تأیید) ─────────────────────
+const TIER_OPTIONS = [
+  ['',        'مشتری عمومی — قیمت عمومی'],
+  ['silver',  'همکار سیلور — قیمت یکماهه'],
+  ['gold',    'همکار گلد — قیمت تو حسابی'],
+  ['platinum','همکار پلاتینیوم — تو حسابی + گزینه‌ها'],
+]
+
+function PartnerRequestsTab() {
+  const qc = useQueryClient()
+  const [approving, setApproving] = useState(null)  // درخواست در حال تأیید (انتخاب سطح)
+  const [tier, setTier] = useState('silver')
   const [msg, setMsg] = useState(null)
 
-  const { data: contacts = [], isLoading } = useQuery({
-    queryKey: ['contacts', filterType],
-    queryFn: () => api.get('/accounting/contacts/', { params: filterType ? { type: filterType } : {} }).then(r => r.data),
+  const { data: requests = [], isLoading } = useQuery({
+    queryKey: ['partner-requests'],
+    queryFn: () => api.get('/users/admin/partners/', { params: { pending: 'true' } }).then(r => r.data),
   })
 
-  const { data: detail } = useQuery({
-    queryKey: ['contact-detail', selected],
-    queryFn: () => api.get(`/accounting/contacts/${selected}/`).then(r => r.data),
-    enabled: !!selected,
-  })
-
-  const createMut = useMutation({
-    mutationFn: (d) => api.post('/accounting/contacts/', d).then(r => r.data),
-    onSuccess: () => {
-      qc.invalidateQueries(['contacts'])
-      setMsg({ type: 'success', text: 'طرف حساب اضافه شد' })
-      setForm({ name: '', contact_type: 'supplier_cn', currency: 'CNY', phone: '', wechat: '', note: '' })
-      setTimeout(() => { setMsg(null); setShowForm(false) }, 1500)
+  const actMut = useMutation({
+    mutationFn: ({ userId, payload }) => api.post(`/users/admin/partners/${userId}/approve/`, payload).then(r => r.data),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries(['partner-requests'])
+      qc.invalidateQueries(['admin-badges'])
+      qc.invalidateQueries(['contacts-all'])
+      setMsg({ type: 'success', text: vars.payload.is_approved ? 'همکار تأیید شد' : 'درخواست رد شد' })
+      setApproving(null)
+      setTimeout(() => setMsg(null), 1500)
     },
     onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا' }),
   })
 
-  const filtered = filterType ? contacts.filter(c => c.contact_type === filterType) : contacts
+  if (isLoading) return <div className="text-center py-8 text-gray-steel text-sm">در حال بارگذاری...</div>
 
   return (
-    <div className="container-main py-8 max-w-6xl">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="font-display font-bold text-2xl text-white">طرف حساب‌ها</h1>
-        <button onClick={() => setShowForm(true)} className="btn-primary text-sm px-4 py-2">+ افزودن طرف حساب</button>
-      </div>
-
-      {/* فیلتر نوع */}
-      <div className="flex gap-2 mb-6 flex-wrap">
-        {[['', 'همه'], ...Object.entries(TYPE_LABELS)].map(([k, v]) => (
-          <button key={k} onClick={() => setFilterType(k)}
-            className={`text-xs px-4 py-2 rounded-full border transition-all ${filterType === k ? 'bg-brand border-brand text-white' : 'border-white/10 text-gray-steel hover:border-white/30'}`}>
-            {v}
-          </button>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-3 gap-6">
-        {/* لیست */}
-        <div className="col-span-1 space-y-2">
-          {isLoading && <div className="text-gray-steel text-sm text-center py-8">در حال بارگذاری...</div>}
-          {filtered.map(c => (
-            <div key={c.id} onClick={() => setSelected(c.id)}
-              className={`card p-4 cursor-pointer transition-all ${selected === c.id ? 'border border-brand/40 bg-brand/10' : 'hover:bg-white/5'}`}>
-              <div className="flex items-center justify-between mb-1">
-                <div className="font-semibold text-sm text-white">{c.name}</div>
-                <span style={{ color: TYPE_COLORS[c.contact_type], background: TYPE_COLORS[c.contact_type] + '20' }}
-                  className="text-[10px] px-2 py-0.5 rounded-full">{c.contact_type_display}</span>
-              </div>
-              <div className="flex gap-4 mt-2">
-                <div className={`text-xs ${c.balance_irr > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                  {c.balance_irr > 0 ? 'بدهکار: ' : 'بستانکار: '}{fmt(Math.abs(c.balance_irr))} ت
+    <div>
+      {msg && (
+        <div className={`rounded-lg px-4 py-2 text-xs mb-4 ${msg.type === 'success' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+          {msg.text}
+        </div>
+      )}
+      {requests.length === 0 ? (
+        <div className="card p-12 text-center">
+          <div className="text-4xl mb-3">🤝</div>
+          <div className="text-gray-steel text-sm">درخواست همکاری در انتظاری نیست</div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {requests.map(r => (
+            <div key={r.user_id} className="card p-4 flex items-center gap-4 flex-wrap">
+              <div className="flex-1 min-w-[200px]">
+                <div className="font-semibold text-white text-sm">{r.full_name || r.phone}</div>
+                <div className="text-[11px] text-gray-steel mt-1 flex gap-3 flex-wrap">
+                  <span dir="ltr">{r.phone}</span>
+                  {r.company_name && <span>🏢 {r.company_name}</span>}
+                  <span>📅 {formatDate(r.created_at)}</span>
                 </div>
-                {c.balance_cny !== 0 && (
-                  <div className={`text-xs ${c.balance_cny > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                    {fmt(Math.abs(c.balance_cny))} ¥
-                  </div>
-                )}
+                {r.address && <div className="text-[11px] text-gray-steel mt-1">📍 {r.address}</div>}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setApproving(r); setTier('silver') }}
+                  disabled={actMut.isPending}
+                  className="btn-primary text-xs px-4 py-2 disabled:opacity-50">
+                  ✓ تأیید همکار
+                </button>
+                <button
+                  onClick={() => actMut.mutate({ userId: r.user_id, payload: { is_approved: false } })}
+                  disabled={actMut.isPending}
+                  className="text-xs px-4 py-2 rounded-lg text-red-400 border border-red-500/30 hover:bg-red-500/10 disabled:opacity-50">
+                  ✕ رد
+                </button>
               </div>
             </div>
           ))}
-          {!isLoading && filtered.length === 0 && (
-            <div className="text-center py-12 text-gray-steel text-sm">طرف حسابی یافت نشد</div>
-          )}
         </div>
+      )}
 
-        {/* جزئیات */}
-        <div className="col-span-2">
-          {selected && detail ? (
-            <div className="space-y-4">
-              <div className="card p-5">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h2 className="font-bold text-white text-lg">{detail.name}</h2>
-                    <div className="text-xs text-gray-steel mt-1">{detail.contact_type_display} | ارز: {detail.currency}</div>
-                    {detail.phone && <div className="text-xs text-gray-steel mt-1">📞 {detail.phone}</div>}
-                    {detail.wechat && <div className="text-xs text-gray-steel mt-0.5">💬 {detail.wechat}</div>}
-                  </div>
-                  <div className="text-left">
-                    <div className={`text-lg font-bold ${detail.balance_irr > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                      {detail.balance_irr > 0 ? 'بدهکار' : 'بستانکار'}
-                    </div>
-                    <div className="text-sm text-white">{fmt(Math.abs(detail.balance_irr))} ریال</div>
-                    {detail.balance_cny !== 0 && (
-                      <div className="text-xs text-gray-steel">{fmt(Math.abs(detail.balance_cny))} یوان</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* فاکتورها */}
-              {detail.invoices?.length > 0 && (
-                <div className="card p-4">
-                  <h3 className="text-sm font-semibold text-white mb-3">فاکتورهای خرید</h3>
-                  <div className="space-y-2">
-                    {detail.invoices.map(inv => (
-                      <div key={inv.id} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
-                        <div>
-                          <div className="text-xs text-white">{inv.invoice_number || `#${inv.id}`}</div>
-                          <div className="text-[10px] text-gray-steel">{inv.date}</div>
-                        </div>
-                        <div className="text-left">
-                          <div className="text-xs text-white">{fmt(inv.total_irr)} ت</div>
-                          <span className="text-[10px] text-gray-steel">{inv.status_display}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* پرداخت‌ها */}
-              {detail.payments?.length > 0 && (
-                <div className="card p-4">
-                  <h3 className="text-sm font-semibold text-white mb-3">تاریخچه پرداخت‌ها</h3>
-                  <div className="space-y-2">
-                    {detail.payments.map(p => (
-                      <div key={p.id} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
-                        <div>
-                          <div className="text-xs text-white">{p.payment_type_display}</div>
-                          <div className="text-[10px] text-gray-steel">{p.date} {p.reference && `| ${p.reference}`}</div>
-                        </div>
-                        <div className={`text-sm font-bold ${p.direction === 'out' ? 'text-red-400' : 'text-green-400'}`}>
-                          {p.direction === 'out' ? '-' : '+'}{fmt(p.amount)} {p.currency}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="card p-12 text-center">
-              <div className="text-4xl mb-3">👤</div>
-              <div className="text-gray-steel text-sm">یک طرف حساب را انتخاب کنید</div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* مودال افزودن */}
-      {showForm && (
+      {/* مودال انتخاب سطح همکار قبل از تأیید نهایی */}
+      {approving && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="card p-6 w-full max-w-md">
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="font-bold text-white text-lg">افزودن طرف حساب</h2>
-              <button onClick={() => setShowForm(false)} className="text-gray-steel hover:text-white text-2xl">×</button>
+          <div className="card p-6 w-full max-w-sm">
+            <h2 className="font-bold text-white text-base mb-1">تأیید همکاری {approving.full_name || approving.phone}</h2>
+            <div className="text-xs text-gray-steel mb-4">کدام نوع همکار باشد؟</div>
+            <div className="space-y-2 mb-5">
+              {TIER_OPTIONS.map(([k, label]) => (
+                <label key={k} className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 cursor-pointer text-xs transition-all ${
+                  tier === k ? 'border-brand bg-brand/10 text-white' : 'border-white/10 text-gray-steel hover:border-white/30'
+                }`}>
+                  <input type="radio" name="tier" checked={tier === k} onChange={() => setTier(k)}
+                    className="accent-[#FBC02D]" />
+                  {label}
+                </label>
+              ))}
             </div>
-            <div className="space-y-3">
-              <div>
-                <label className="label text-xs mb-1 block">نام *</label>
-                <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  className="input text-sm" placeholder="نام طرف حساب" />
-              </div>
-              <div>
-                <label className="label text-xs mb-1 block">نوع *</label>
-                <select value={form.contact_type} onChange={e => setForm(f => ({ ...f, contact_type: e.target.value }))} className="input text-sm">
-                  {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label text-xs mb-1 block">ارز پیش‌فرض</label>
-                <select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value }))} className="input text-sm">
-                  <option value="CNY">یوان چین (CNY)</option>
-                  <option value="IRR">ریال ایران (IRR)</option>
-                  <option value="USD">دلار (USD)</option>
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="label text-xs mb-1 block">تلفن</label>
-                  <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-                    className="input text-sm" placeholder="اختیاری" />
-                </div>
-                <div>
-                  <label className="label text-xs mb-1 block">وی‌چت / واتساپ</label>
-                  <input value={form.wechat} onChange={e => setForm(f => ({ ...f, wechat: e.target.value }))}
-                    className="input text-sm" placeholder="اختیاری" />
-                </div>
-              </div>
-              <div>
-                <label className="label text-xs mb-1 block">توضیحات</label>
-                <textarea value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
-                  className="input text-sm resize-none" rows={2} />
-              </div>
-            </div>
-            {msg && (
-              <div className={`mt-3 rounded-lg px-4 py-2 text-sm ${msg.type === 'success' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                {msg.text}
-              </div>
-            )}
-            <div className="flex gap-3 mt-5">
-              <button onClick={() => createMut.mutate(form)} disabled={!form.name || createMut.isPending}
+            <div className="flex gap-2">
+              <button
+                onClick={() => actMut.mutate({ userId: approving.user_id, payload: { is_approved: true, partner_tier: tier } })}
+                disabled={actMut.isPending}
                 className="btn-primary flex-1 text-sm py-2.5 disabled:opacity-50">
-                {createMut.isPending ? 'در حال ذخیره...' : 'ذخیره'}
+                {actMut.isPending ? '...' : '✓ تأیید نهایی'}
               </button>
-              <button onClick={() => setShowForm(false)} className="btn-secondary text-sm py-2.5 px-5">انصراف</button>
+              <button onClick={() => setApproving(null)} className="btn-secondary text-sm py-2.5 px-5">انصراف</button>
             </div>
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── صفحه طرف حساب‌ها — تب‌دار: کاردکس اشخاص + تراز کلی ───────
+export default function ContactsPage() {
+  const { can, creatableContactTypes } = usePermissions()
+  const [tab, setTab] = useState('kardex')
+  const [showAdd, setShowAdd] = useState(false)
+  const [selectedId, setSelectedId] = useState(null)
+  const [selectedName, setSelectedName] = useState('')
+  const [showEdit, setShowEdit] = useState(false)
+
+  const tabs = [
+    ...(can('partner_approve') ? [{ key: 'partners', label: '🤝 درخواست‌های همکاری' }] : []),
+    { key: 'kardex',  label: '👤 کاردکس اشخاص' },
+    { key: 'balance', label: '📊 تراز کلی' },
+  ]
+  const activeTab = tabs.some(t => t.key === tab) ? tab : tabs[0].key
+  return (
+    <div className="container-main py-8 max-w-6xl">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="font-display font-bold text-2xl text-white">طرف حساب‌ها</h1>
+        <div className="flex items-center gap-2">
+          {activeTab === 'kardex' && selectedId && can('contacts_edit') && (
+            <button onClick={() => setShowEdit(true)} className="btn-secondary text-sm px-4 py-2">
+              ✏️ ویرایش اطلاعات
+            </button>
+          )}
+          {can('contacts_create') && (creatableContactTypes === null || creatableContactTypes.length > 0) && (
+            <button onClick={() => setShowAdd(true)} className="btn-primary text-sm px-4 py-2">+ افزودن طرف حساب</button>
+          )}
+        </div>
+      </div>
+      <div className="flex gap-2 mb-6 border-b border-white/10">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`text-sm px-5 py-2.5 rounded-t-lg border-b-2 transition-all ${activeTab === t.key ? 'border-brand text-white bg-brand/10' : 'border-transparent text-gray-steel hover:text-white'}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {activeTab === 'partners' && <PartnerRequestsTab />}
+      {activeTab === 'kardex' && (
+        <ContactKardexTab
+          selectedId={selectedId} setSelectedId={setSelectedId}
+          selectedName={selectedName} setSelectedName={setSelectedName}
+          showEdit={showEdit} setShowEdit={setShowEdit} />
+      )}
+      {activeTab === 'balance' && <BalanceTab />}
+
+      {showAdd && <AddContactModal creatableTypes={creatableContactTypes} onClose={() => setShowAdd(false)} />}
     </div>
   )
 }

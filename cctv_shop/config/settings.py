@@ -1,4 +1,4 @@
-﻿"""
+"""
 Django Settings — CCTV Parts Shop
 Django 5.0 | DRF | PostgreSQL
 """
@@ -11,7 +11,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ─── Security ────────────────────────────────────────────────────────────────
 SECRET_KEY = config("SECRET_KEY", default="change-me-in-production-use-decouple")
 DEBUG = config("DEBUG", default=True, cast=bool)
-ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv())
+ALLOWED_HOSTS = config(
+    "ALLOWED_HOSTS",
+    default="localhost,127.0.0.1,0.0.0.0,::1,192.168.1.12",
+    cast=Csv(),
+)
+# برای فرم‌های POST روی دامنه HTTPS (TLS در لبه CDN تمام می‌شود)
+CSRF_TRUSTED_ORIGINS = config(
+    "CSRF_TRUSTED_ORIGINS",
+    default="http://localhost:3000,http://127.0.0.1:3000",
+    cast=Csv(),
+)
+# سایت پشت nginx/CDN است — تشخیص https در build_absolute_uri (canonical/og:url درست شود)
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # ─── Applications ─────────────────────────────────────────────────────────────
 INSTALLED_APPS = [
@@ -22,6 +34,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.sitemaps",
     # Third-party
     "rest_framework",
     "rest_framework.authtoken",
@@ -40,6 +53,7 @@ INSTALLED_APPS = [
     "apps.payment",
     "apps.accounting",
     "apps.education",
+    "apps.assistant",
     "django.contrib.humanize",
 
 ]
@@ -51,8 +65,10 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "apps.core.middleware.CurrentUserMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "apps.users.middleware.ActivityLogMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -130,7 +146,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
+        # SessionAuthentication removed: with admin session cookie, frontend POSTs got 403 (CSRF)
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticatedOrReadOnly",
@@ -171,7 +187,7 @@ BEHPARDAKHT_USERNAME = config("BEHPARDAKHT_USERNAME", default="")
 BEHPARDAKHT_PASSWORD = config("BEHPARDAKHT_PASSWORD", default="")
 BEHPARDAKHT_CALLBACK_URL = config(
     "BEHPARDAKHT_CALLBACK_URL",
-    default="http://localhost:8000/api/orders/payment/callback/",
+    default="http://localhost:8000/api/payment/bank/verify/",
 )
 
 # ─── Business Logic Constants ─────────────────────────────────────────────────
@@ -210,8 +226,8 @@ REST_FRAMEWORK.update({
         "rest_framework.throttling.ScopedRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "100/day",
-        "user": "1000/day",
+        "anon": "60/min",
+        "user": "600/min",
     },
 })
 
@@ -222,3 +238,9 @@ PAYMENT_FAIL_URL    = config("PAYMENT_FAIL_URL",    default="http://localhost:30
 # ─── Frontend URLs (for payment redirect) ────────────────────────────────────
 FRONTEND_SUCCESS_URL = config("FRONTEND_SUCCESS_URL", default="http://localhost:3000/payment/success")
 FRONTEND_FAILURE_URL = config("FRONTEND_FAILURE_URL", default="http://localhost:3000/payment/failure")
+
+# ─── AI Assistant (ربات مشاور هوشمند) ────────────────────────────────────────
+# هر سرویس OpenAI-compatible — پیش‌فرض Moonshot/Kimi. کلید را در .env بگذارید.
+AI_API_KEY  = config("AI_API_KEY",  default="")
+AI_API_BASE = config("AI_API_BASE", default="https://api.moonshot.cn/v1")
+AI_API_MODEL = config("AI_API_MODEL", default="moonshot-v1-8k")

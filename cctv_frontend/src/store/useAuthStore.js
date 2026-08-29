@@ -24,7 +24,7 @@ const useAuthStore = create(
 
       isAuthenticated: () => !!get().accessToken,
       isPartner: () => get().user?.is_partner === true,
-      isAdmin: () => get().user?.profile?.user_type === 'staff',
+      isAdmin: () => get().user?.is_staff === true || get().user?.profile?.user_type === 'staff',
     }),
     {
       name: 'auth-store',

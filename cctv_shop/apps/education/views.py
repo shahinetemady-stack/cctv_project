@@ -21,7 +21,7 @@ class VideoListView(APIView):
             'duration': v.duration,
             'views_count': v.views_count,
             'embed_url': v.get_embed_url(),
-            'thumbnail': v.thumbnail.url if v.thumbnail else None,
+            'thumbnail': request.build_absolute_uri(v.thumbnail.url) if v.thumbnail else None,
         } for v in qs])
 
 
@@ -43,7 +43,7 @@ class VideoDetailView(APIView):
             'video_type_display': v.get_video_type_display(),
             'duration': v.duration,
             'views_count': v.views_count,
-            'thumbnail': v.thumbnail.url if v.thumbnail else None,
+            'thumbnail': request.build_absolute_uri(v.thumbnail.url) if v.thumbnail else None,
             'related_products': [{'id': p.id, 'name': p.name, 'slug': p.slug}
                                   for p in v.related_products.filter(is_active=True)[:6]],
         })
@@ -79,7 +79,8 @@ class ArticleListView(APIView):
             'tags': a.tags,
             'views_count': a.views_count,
             'likes_count': a.likes_count,
-            'thumbnail': a.thumbnail.url if a.thumbnail else None,
+            'read_time': a.read_time,
+            'thumbnail': request.build_absolute_uri(a.thumbnail.url) if a.thumbnail else None,
             'created_at': a.created_at.strftime('%Y-%m-%d'),
         } for a in qs])
 
@@ -92,6 +93,14 @@ class ArticleDetailView(APIView):
             a = Article.objects.prefetch_related('related_products', 'category').get(
                 slug=slug, is_published=True)
         except Article.DoesNotExist:
+            from apps.catalog.models import SlugRedirect
+            red = SlugRedirect.objects.filter(
+                old_slug=slug, new_path__startswith='/blog/').first()
+            if red:
+                new_slug = red.new_path.rstrip('/').rsplit('/', 1)[-1]
+                from django.http import HttpResponsePermanentRedirect
+                return HttpResponsePermanentRedirect(
+                    request.build_absolute_uri(f'/api/education/articles/{new_slug}/'))
             return Response({'error': 'یافت نشد'}, status=404)
         # افزایش بازدید
         Article.objects.filter(pk=a.pk).update(views_count=models.F('views_count') + 1)
@@ -105,7 +114,8 @@ class ArticleDetailView(APIView):
             'tags': a.tags,
             'views_count': a.views_count,
             'likes_count': a.likes_count,
-            'thumbnail': a.thumbnail.url if a.thumbnail else None,
+            'read_time': a.read_time,
+            'thumbnail': request.build_absolute_uri(a.thumbnail.url) if a.thumbnail else None,
             'created_at': a.created_at.strftime('%Y-%m-%d'),
             'related_products': [{'id': p.id, 'name': p.name, 'slug': p.slug}
                                   for p in a.related_products.filter(is_active=True)[:6]],
@@ -141,3 +151,256 @@ class PartSelectionGuideView(APIView):
 
 
 from django.db import models
+
+
+# ─── مدیریت محتوی (ادمین) ──────────────────────────────────────
+from rest_framework.permissions import IsAdminUser as _IsAdminUser
+from apps.catalog.seo import latin_slugify as _latin_slugify
+from django.utils import timezone
+
+
+def _unique_slug(model, base, exclude_pk=None):
+    base = _latin_slugify(base) or 'item'
+    slug, i = base, 2
+    def _exists(s):
+        qs = model.objects.filter(slug=s)
+        return qs.exclude(pk=exclude_pk).exists() if exclude_pk else qs.exists()
+    while _exists(slug):
+        slug = f'{base}-{i}'
+        i += 1
+    return slug
+
+
+def _article_admin_dict(a):
+    return {
+        'id': a.id, 'title': a.title, 'slug': a.slug,
+        'description': a.description, 'content': a.content,
+        'category': a.category_id,
+        'category_name': a.category.name if a.category else '',
+        'author': a.author, 'tags': a.tags,
+        'thumbnail': a.thumbnail.url if a.thumbnail else None,
+        'views_count': a.views_count, 'is_published': a.is_published,
+        'publish_at': (lambda dt: timezone.localtime(dt).strftime('%Y-%m-%d %H:%M'))(a.publish_at) if a.publish_at else None,
+        'created_at': a.created_at.strftime('%Y-%m-%d'),
+    }
+
+
+class AdminArticleListView(APIView):
+    """GET /api/education/admin/articles/ — لیست کامل | POST — ساخت مقاله"""
+    permission_classes = [_IsAdminUser]
+
+    def get(self, request):
+        qs = Article.objects.select_related('category').order_by('-created_at')
+        return Response([_article_admin_dict(a) for a in qs])
+
+    def post(self, request):
+        d = request.data
+        if not (d.get('title') or '').strip():
+            return Response({'error': 'عنوان الزامی است'}, status=400)
+        a = Article(
+            title=d['title'].strip(),
+            slug=_unique_slug(Article, d.get('slug') or d['title']),
+            description=d.get('description', ''),
+            content=d.get('content', ''),
+            category_id=d.get('category') or None,
+            author=d.get('author', ''),
+            tags=d.get('tags') or [],
+            is_published=bool(d.get('is_published', True)),
+        )
+        if d.get('publish_at'):
+            from django.utils.dateparse import parse_datetime
+            a.publish_at = parse_datetime(d['publish_at'])
+        a.save()
+        return Response(_article_admin_dict(a), status=201)
+
+
+class AdminArticleDetailView(APIView):
+    """GET/PATCH/DELETE /api/education/admin/articles/<pk>/"""
+    permission_classes = [_IsAdminUser]
+
+    def _get(self, pk):
+        return Article.objects.select_related('category').filter(pk=pk).first()
+
+    def get(self, request, pk):
+        a = self._get(pk)
+        if a is None:
+            return Response({'error': 'یافت نشد'}, status=404)
+        return Response(_article_admin_dict(a))
+
+    def patch(self, request, pk):
+        a = self._get(pk)
+        if a is None:
+            return Response({'error': 'یافت نشد'}, status=404)
+        d = request.data
+        for f in ('title', 'description', 'content', 'author'):
+            if f in d:
+                setattr(a, f, d[f])
+        if d.get('slug') and d['slug'] != a.slug:
+            a.slug = _unique_slug(Article, d['slug'], exclude_pk=a.pk)
+        if 'category' in d:
+            a.category_id = d['category'] or None
+        if 'tags' in d:
+            a.tags = d['tags'] or []
+        if 'is_published' in d:
+            a.is_published = bool(d['is_published'])
+        if 'publish_at' in d:
+            from django.utils.dateparse import parse_datetime
+            a.publish_at = parse_datetime(d['publish_at']) if d['publish_at'] else None
+        if request.FILES.get('thumbnail'):
+            a.thumbnail = request.FILES['thumbnail']
+        if d.get('remove_thumbnail'):
+            a.thumbnail = None
+        a.save()
+        return Response(_article_admin_dict(a))
+
+    def delete(self, request, pk):
+        a = self._get(pk)
+        if a is None:
+            return Response({'error': 'یافت نشد'}, status=404)
+        a.delete()
+        return Response({'deleted': True})
+
+
+def _video_admin_dict(v):
+    return {
+        'id': v.id, 'title': v.title, 'slug': v.slug,
+        'description': v.description, 'video_url': v.video_url,
+        'video_type': v.video_type,
+        'video_type_display': v.get_video_type_display(),
+        'duration': v.duration, 'order': v.order,
+        'views_count': v.views_count, 'is_published': v.is_published,
+        'created_at': v.created_at.strftime('%Y-%m-%d'),
+    }
+
+
+class AdminVideoListView(APIView):
+    """GET /api/education/admin/videos/ — لیست کامل | POST — ساخت ویدیو"""
+    permission_classes = [_IsAdminUser]
+
+    def get(self, request):
+        qs = Video.objects.all().order_by('order', '-created_at')
+        return Response([_video_admin_dict(v) for v in qs])
+
+    def post(self, request):
+        d = request.data
+        if not (d.get('title') or '').strip():
+            return Response({'error': 'عنوان الزامی است'}, status=400)
+        if not (d.get('video_url') or '').strip():
+            return Response({'error': 'لینک ویدیو الزامی است'}, status=400)
+        v = Video(
+            title=d['title'].strip(),
+            slug=_unique_slug(Video, d.get('slug') or d['title']),
+            description=d.get('description', ''),
+            video_url=d['video_url'].strip(),
+            video_type=d.get('video_type') or Video.VideoType.GENERAL,
+            duration=int(d.get('duration') or 0),
+            order=int(d.get('order') or 0),
+            is_published=bool(d.get('is_published', True)),
+        )
+        v.save()
+        return Response(_video_admin_dict(v), status=201)
+
+
+class AdminVideoDetailView(APIView):
+    """GET/PATCH/DELETE /api/education/admin/videos/<pk>/"""
+    permission_classes = [_IsAdminUser]
+
+    def _get(self, pk):
+        return Video.objects.filter(pk=pk).first()
+
+    def get(self, request, pk):
+        v = self._get(pk)
+        if v is None:
+            return Response({'error': 'یافت نشد'}, status=404)
+        return Response(_video_admin_dict(v))
+
+    def patch(self, request, pk):
+        v = self._get(pk)
+        if v is None:
+            return Response({'error': 'یافت نشد'}, status=404)
+        d = request.data
+        for f in ('title', 'description', 'video_url'):
+            if f in d:
+                setattr(v, f, d[f])
+        if d.get('slug') and d['slug'] != v.slug:
+            v.slug = _unique_slug(Video, d['slug'], exclude_pk=v.pk)
+        if 'video_type' in d:
+            if d['video_type'] not in Video.VideoType.values:
+                return Response({'error': 'نوع ویدیو نامعتبر است'}, status=400)
+            v.video_type = d['video_type']
+        for f in ('duration', 'order'):
+            if f in d:
+                try:
+                    setattr(v, f, int(d[f] or 0))
+                except (ValueError, TypeError):
+                    return Response({'error': f'مقدار {f} نامعتبر است'}, status=400)
+        if 'is_published' in d:
+            v.is_published = bool(d['is_published'])
+        v.save()
+        return Response(_video_admin_dict(v))
+
+    def delete(self, request, pk):
+        v = self._get(pk)
+        if v is None:
+            return Response({'error': 'یافت نشد'}, status=404)
+        v.delete()
+        return Response({'deleted': True})
+
+
+class AdminArticleCategoryListView(APIView):
+    """GET /api/education/admin/article-categories/ — لیست | POST — ساخت دسته مقاله"""
+    permission_classes = [_IsAdminUser]
+
+    def get(self, request):
+        cats = ArticleCategory.objects.all().order_by('order', 'name')
+        return Response([{
+            'id': c.id, 'name': c.name, 'slug': c.slug, 'order': c.order,
+            'article_count': c.articles.count(),
+        } for c in cats])
+
+    def post(self, request):
+        d = request.data
+        name = (d.get('name') or '').strip()
+        if not name:
+            return Response({'error': 'نام دسته الزامی است'}, status=400)
+        c = ArticleCategory(
+            name=name,
+            slug=_unique_slug(ArticleCategory, d.get('slug') or name),
+            order=int(d.get('order') or 0),
+        )
+        c.save()
+        return Response({'id': c.id, 'name': c.name, 'slug': c.slug, 'order': c.order}, status=201)
+
+
+class AdminArticleImageUploadView(APIView):
+    """POST /api/education/admin/upload-image/ — آپلود تصویر برای درج در متن مقاله (multipart)"""
+    permission_classes = [_IsAdminUser]
+    ALLOWED_EXT = ('.jpg', '.jpeg', '.png', '.webp', '.gif')
+
+    def post(self, request):
+        image = request.FILES.get('image')
+        if image is None:
+            return Response({'error': 'فایل تصویر ارسال نشده است'}, status=400)
+        import os
+        import uuid
+        ext = os.path.splitext(image.name)[1].lower() or '.jpg'
+        if ext not in self.ALLOWED_EXT:
+            return Response({'error': 'فرمت تصویر مجاز نیست'}, status=400)
+        from django.core.files.storage import default_storage
+        path = default_storage.save(f'education/articles/inline/{uuid.uuid4().hex[:12]}{ext}', image)
+        return Response({'url': f'/media/{path}'}, status=201)
+
+
+class AdminArticleCategoryDetailView(APIView):
+    """DELETE /api/education/admin/article-categories/<pk>/ — حذف دسته (اگر مقاله نداشته باشد)"""
+    permission_classes = [_IsAdminUser]
+
+    def delete(self, request, pk):
+        c = ArticleCategory.objects.filter(pk=pk).first()
+        if c is None:
+            return Response({'error': 'یافت نشد'}, status=404)
+        n = c.articles.count()
+        if n:
+            return Response({'error': f'این دسته {n} مقاله دارد — اول دسته مقالات را عوض کنید'}, status=400)
+        c.delete()
+        return Response({'deleted': True})

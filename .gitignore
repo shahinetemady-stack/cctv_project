@@ -51,3 +51,7 @@ qodex/
 *.zip
 *.tar.gz
 *.rar
+
+# Kimi Code session data
+.kimi-code/
+*.sqlite3.bak-*

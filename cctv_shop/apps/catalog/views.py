@@ -13,21 +13,28 @@ POST /api/catalog/products/bulk-upload/ آپلود اکسل (فقط ادمین)
 """
 
 import logging
-from django.db.models import Prefetch
-from rest_framework import generics, status
+from django.db.models import Count, Prefetch
+from django.http import Http404, HttpResponsePermanentRedirect
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import generics, serializers, status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticatedOrReadOnly
+from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .filters import ProductFilter
-from .models import Category, ExchangeRateSetting, Product, ProductImage, ProductVariant
+from .models import Category, CategoryBrand, CategorySpecField, ExchangeRateSetting, Package, PackageItem, Product, ProductImage, ProductVariant, SlugRedirect
+from .seo import generate_slug
 from .serializers import (
     CategorySerializer,
+    DatasheetPageSerializer,
     ExchangeRateSerializer,
     ExchangeRateUpdateSerializer,
     ProductDetailSerializer,
+    ProductImageSerializer,
     ProductListSerializer,
+    ProductVariantAdminSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,44 +58,75 @@ class CategoryListView(generics.ListAPIView):
         )
 
 
+class CategoryDetailView(APIView):
+    """
+    GET /api/catalog/categories/<slug>/
+    جزئیات یک دسته شامل زیردسته‌ها.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        try:
+            cat = Category.objects.prefetch_related("children").get(slug=slug, is_active=True)
+        except Category.DoesNotExist:
+            red = SlugRedirect.objects.filter(
+                old_slug=slug, new_path__startswith="/categories/"
+            ).first()
+            if red:
+                new_slug = red.new_path.rstrip("/").rsplit("/", 1)[-1]
+                return HttpResponsePermanentRedirect(
+                    request.build_absolute_uri(f"/api/catalog/categories/{new_slug}/")
+                )
+            return Response({"error": "یافت نشد"}, status=404)
+        serializer = CategorySerializer(cat, context={"request": request})
+        return Response(serializer.data)
+
+
 # ─── Products ─────────────────────────────────────────────────────────────────
+
+class NormalizingSearchFilter(SearchFilter):
+    """SearchFilter با نرمال‌سازی ارقام فارسی/عربی و حروف عربی — «۸۰۰» = «800»."""
+
+    def get_search_terms(self, request):
+        table = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+        return [
+            t.translate(table).replace("ك", "ک").replace("ي", "ی")
+            for t in super().get_search_terms(request)
+        ]
+
 
 class ProductListView(generics.ListAPIView):
     """
     GET /api/catalog/products/
-    پارامترهای فیلتر: part_type, chipset, voltage, lens_mount,
-                       category, in_stock, is_featured, search
+    پارامترهای فیلتر: category, category_slug, category_type, brand, in_stock,
+                       is_featured, discounted, search + فیلترهای اختصاصی هر نوع
+                       (board_system, sensor_name, lens_type, modem_type, ...)
+                       + فیلترهای پویا: spec_<key> بر اساس ویژگی‌های دسته
     مرتب‌سازی: ?ordering=name / -name / created_at / -created_at
     """
     serializer_class = ProductListSerializer
     permission_classes = [AllowAny]
     filterset_class = ProductFilter
-    search_fields = ["name", "brand", "model_number", "chipset"]
+    filter_backends = [DjangoFilterBackend, NormalizingSearchFilter, OrderingFilter]
+    search_fields = ["name", "brand", "model_number", "board_name", "sensor_name", "lens_name", "keywords"]
     ordering_fields = ["name", "created_at", "is_featured"]
     ordering = ["-is_featured", "-created_at"]
 
-    def list(self, request, *args, **kwargs):
-        import math
-        response = super().list(request, *args, **kwargs)
-        if request.user.is_authenticated:
-            try:
-                discount = float(request.user.profile.discount_percent or 0)
-                if discount > 0:
-                    for product in response.data.get("results", response.data if isinstance(response.data, list) else []):
-                        mp = product.get("min_price")
-                        if mp:
-                            product["partner_min_price"] = math.ceil(float(mp) * (1 - discount/100))
-                            product["partner_discount_percent"] = discount
-            except Exception:
-                pass
-        return response
-
     def get_queryset(self):
+        # پرسنل (is_staff) با ?include_inactive=1 همه محصولات را می‌بینند — برای صفحه
+        # مدیریت محصولات؛ برای عموم همیشه فقط فعال‌ها
+        include_inactive = (
+            self.request.user.is_staff
+            and self.request.query_params.get("include_inactive")
+        )
+        base = Product.objects.all() if include_inactive else Product.objects.filter(is_active=True)
         qs = (
-            Product.objects.filter(is_active=True)
+            base
             .select_related("category")
             .prefetch_related(
-                Prefetch("images", queryset=ProductImage.objects.filter(is_primary=True)),
+                # همه تصاویر prefetch شوند تا fallback سریالایزر (اولین تصویر
+                # در صورت نبود تصویر اصلی) درست کار کند؛ ترتیب مدل primary را اول می‌آورد
+                Prefetch("images", queryset=ProductImage.objects.all()),
                 Prefetch("variants", queryset=ProductVariant.objects.filter(is_active=True)),
             )
         )
@@ -103,6 +141,7 @@ class ProductListView(generics.ListAPIView):
         # فیلترهای اختصاصی لنز
         if p.get("lens_degree"):   qs = qs.filter(lens_degree__icontains=p["lens_degree"])
         if p.get("lens_type"):     qs = qs.filter(lens_type__icontains=p["lens_type"])
+        if p.get("lens_resolution"): qs = qs.filter(lens_resolution__icontains=p["lens_resolution"])
         if p.get("focal_ratio"):   qs = qs.filter(focal_ratio__icontains=p["focal_ratio"])
 
         # فیلترهای اختصاصی متعلقات
@@ -115,7 +154,89 @@ class ProductListView(generics.ListAPIView):
         if p.get("housing_type"):  qs = qs.filter(housing_type__icontains=p["housing_type"])
         if p.get("has_microphone") == "true": qs = qs.filter(has_microphone=True)
 
+        # فیلترهای پویا — ویژگی‌های دسته (CategorySpecField) به صورت spec_<key>=value
+        # مقدار روی Product.dynamic_specs ذخیره می‌شود؛ «true» برای checkbox است
+        for name, value in p.items():
+            if name.startswith("spec_") and value:
+                key = name[len("spec_"):]
+                if value == "true":
+                    qs = qs.filter(**{f"dynamic_specs__{key}": True})
+                else:
+                    qs = qs.filter(**{f"dynamic_specs__{key}__icontains": value})
+
         return qs
+
+
+class ProductBrandsView(APIView):
+    """GET /api/catalog/products/brands/ — لیست برندهای محصولات فعال برای دراپ‌داون فیلتر"""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        brands = (
+            Product.objects.filter(is_active=True)
+            .exclude(brand__isnull=True).exclude(brand="")
+            .values_list("brand", flat=True).distinct().order_by("brand")
+        )
+        return Response(list(brands))
+
+
+class ProductBrandsManageView(APIView):
+    """
+    مدیریت برندها (فقط ادمین) — برای اصلاح غلط‌های تایپی و ادغام برندهای تکراری
+    GET  /api/catalog/products/brands/manage/  لیست برندها با تعداد محصول
+    POST /api/catalog/products/brands/manage/  بدنه: {"from": "...", "to": "..."}
+         همه محصولات دارای برند from به to تغییر می‌کنند (اگر to از قبل باشد، ادغام می‌شود)
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        rows = (
+            Product.objects.exclude(brand__isnull=True).exclude(brand="")
+            .values("brand").annotate(count=Count("id")).order_by("brand")
+        )
+        return Response([{"name": r["brand"], "count": r["count"]} for r in rows])
+
+    def post(self, request):
+        src = (request.data.get("from") or "").strip()
+        dst = (request.data.get("to") or "").strip()
+        if not src or not dst:
+            return Response({"error": "هر دو مقدار from و to لازم است"}, status=status.HTTP_400_BAD_REQUEST)
+        if src == dst:
+            return Response({"error": "نام مبدأ و مقصد یکسان است"}, status=status.HTTP_400_BAD_REQUEST)
+        updated = Product.objects.filter(brand=src).update(brand=dst)
+        return Response({"updated": updated, "from": src, "to": dst})
+
+
+class ProductNeighborsView(APIView):
+    """GET /api/catalog/products/<slug>/neighbors/ — محصول قبلی/بعدی به ترتیب لیست محصولات."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        try:
+            product = Product.objects.get(slug=slug, is_active=True)
+        except Product.DoesNotExist:
+            return Response({"error": "محصول یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
+        ids = list(
+            Product.objects.filter(is_active=True)
+            .order_by("-is_featured", "-created_at")
+            .values_list("id", flat=True)
+        )
+        try:
+            idx = ids.index(product.id)
+        except ValueError:
+            return Response({"prev": None, "next": None})
+
+        def brief(i):
+            if i is None:
+                return None
+            p = Product.objects.filter(id=ids[i]).first()
+            return {"slug": p.slug, "name": p.name} if p else None
+
+        return Response({
+            "prev": brief(idx - 1 if idx > 0 else None),
+            "next": brief(idx + 1 if idx < len(ids) - 1 else None),
+        })
 
 
 class ProductDetailView(generics.RetrieveAPIView):
@@ -137,20 +258,43 @@ class ProductDetailView(generics.RetrieveAPIView):
             )
         )
 
-    def retrieve(self, request, *args, **kwargs):
-        import math
-        response = super().retrieve(request, *args, **kwargs)
-        if request.user.is_authenticated:
-            try:
-                discount = float(request.user.profile.discount_percent or 0)
-                if discount > 0:
-                    for v in response.data.get("variants", []):
-                        base = v.get("final_price", 0)
-                        v["partner_price"] = math.ceil(base * (1 - discount/100))
-                        v["partner_discount_percent"] = discount
-            except Exception:
-                pass
-        return response
+    def get(self, request, *args, **kwargs):
+        try:
+            return super().get(request, *args, **kwargs)
+        except Http404:
+            red = SlugRedirect.objects.filter(
+                old_slug=kwargs.get("slug", ""), new_path__startswith="/products/"
+            ).first()
+            if red:
+                new_slug = red.new_path.rstrip("/").rsplit("/", 1)[-1]
+                return HttpResponsePermanentRedirect(
+                    request.build_absolute_uri(f"/api/catalog/products/{new_slug}/")
+                )
+            raise
+
+
+class ProductCompareView(APIView):
+    """
+    GET /api/catalog/products/compare/?slugs=a,b,c,d
+    مقایسه ۲ تا ۴ محصول هم‌دسته — خروجی کامل مشخصات برای جدول مقایسه
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        slugs = [s.strip() for s in request.query_params.get("slugs", "").split(",") if s.strip()]
+        if not 2 <= len(slugs) <= 4:
+            return Response({"error": "بین ۲ تا ۴ محصول برای مقایسه انتخاب کنید"}, status=400)
+        products = list(
+            Product.objects.filter(is_active=True, slug__in=slugs)
+            .select_related("category")
+            .prefetch_related("images", "variants", "compatible_with")
+        )
+        if len(products) != len(slugs):
+            return Response({"error": "یک یا چند محصول یافت نشد"}, status=404)
+        if len({p.category_id for p in products}) > 1:
+            return Response({"error": "فقط محصولات هم‌دسته قابل مقایسه هستند"}, status=400)
+        products.sort(key=lambda p: slugs.index(p.slug))
+        return Response(ProductDetailSerializer(products, many=True, context={"request": request}).data)
 
 
 # ─── Smart Search ──────────────────────────────────────────────────────────────
@@ -177,10 +321,79 @@ class ProductSearchView(APIView):
     }
 
     def _normalize(self, text: str) -> str:
-        """اصلاح حروف عربی/فارسی."""
+        """اصلاح حروف عربی/فارسی + تبدیل ارقام فارسی/عربی به لاتین + حذف علائم نگارشی."""
         for wrong, correct in self.PERSIAN_CORRECTIONS.items():
             text = text.replace(wrong, correct)
+        text = text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+        # علائم نگارشی به فاصله — وگرنه به توکن می‌چسبند («داری؟» ≠ «داری») و مچ AND صفر می‌شود
+        text = text.translate(str.maketrans({c: " " for c in "؟?!.،؛:"}))
         return text.strip()
+
+    # اصطلاحات چندکلمه‌ای به املای فارسی — قبل از توکن‌بندی جایگزین می‌شوند
+    PHRASE_ALIASES = {"ای اچ دی": "AHD", "ای‌اچ‌دی": "AHD", "آی پی": "IP", "ای پی": "IP", "پی او ای": "POE"}
+
+    # گروه‌های مترادف دوزبانه — هر توکن با یکی از این فرم‌ها مچ شود کافی است
+    SYNONYMS = [
+        {"لنز", "lens"},
+        {"برد", "board", "pcb", "module", "ماژول"},
+        {"هولدر", "holder"},
+        {"سنسور", "sensor"},
+        {"دام", "dome"},
+        {"بولت", "bullet"},
+        {"استارلایت", "starlight"},
+        {"دوربین", "camera", "cctv"},
+        {"سونی", "sony"},
+        {"کیس", "case", "housing", "بدنه"},
+        {"میکروفون", "mic", "microphone"},
+        {"مودم", "modem", "router", "روتر"},
+        {"پلاک", "lpr", "anpr"},
+        {"ahd", "آنالوگ"},
+    ]
+
+    FA_NUM_WORDS = {
+        "یک": "1", "دو": "2", "سه": "3", "چهار": "4", "پنج": "5", "شش": "6",
+        "هفت": "7", "هشت": "8", "نه": "9", "ده": "10", "دوازده": "12",
+    }
+
+    # کلمات اضافهٔ سؤال‌های محاوره‌ای — مچ AND نباید به خاطر این‌ها صفر شود
+    STOPWORDS = {
+        "چی", "چه", "داری", "دارید", "دارم", "داره", "هست", "است", "هستش",
+        "پیشنهاد", "پشنهاد", "میدی", "میده", "میدین", "میخوام", "میخواهم", "میخوای",
+        "قیمت", "قیمتش", "چقدر", "چقدره", "خوبه", "خوب", "مناسب", "بهترین",
+        "برای", "لطفا", "لطفاً", "خرید", "بفرمایید", "و", "یا", "با", "از", "که", "رو", "را",
+    }
+
+    def _mp_alias(self, n):
+        """فرم‌های معادل یک توکن رزولوشن مثل 5MP برای مچ در فیلدهای مختلف."""
+        fa_digits = str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+        fa_word = next((k for k, v in self.FA_NUM_WORDS.items() if v == str(n)), "")
+        forms = {f"{n}mp", f"{n} مگاپیکسل", f"{fa_digits} مگاپیکسل"}
+        if fa_word:
+            forms.add(fa_word + " مگاپیکسل")
+            forms.add(fa_word + "مگاپیکسل")
+        return forms
+
+    def _token_aliases(self, token):
+        """مجموعه فرم‌های قابل مچ برای یک توکن (مترادف‌ها + رزولوشن)."""
+        import re
+        t = token.lower()
+        # رزولوشن: 5mp / 5 mp / ۵مگاپیکسل / پنج مگاپیکسل
+        m = re.match(r"^(\d+)\s*(mp|مگاپیکسل|مگا)?$", t)
+        if m and int(m.group(1)) in (1, 2, 3, 4, 5, 6, 8, 12):
+            return self._mp_alias(m.group(1))
+        # کلمه عدد فارسی تنها (پنج/دو) → همان فرم‌های رزولوشنی؛ فرم خام را برمی‌داریم
+        # چون «دو» داخل «دوربین» هم هست و مچ AND را بی‌اثر می‌کند
+        if t in self.FA_NUM_WORDS:
+            return self._mp_alias(self.FA_NUM_WORDS[t])
+        if t in ("مگاپیکسل", "مگا", "mp"):
+            return {"مگاپیکسل", "mp"}
+        m2 = re.match(r"^(یک|دو|سه|چهار|پنج|شش|هفت|هشت|نه|ده|دوازده)\s*مگا", t)
+        if m2:
+            return self._mp_alias(self.FA_NUM_WORDS[m2.group(1)])
+        for group in self.SYNONYMS:
+            if t in {g.lower() for g in group}:
+                return group
+        return {token}
 
     def get(self, request):
         query = request.query_params.get("q", "").strip()
@@ -189,20 +402,39 @@ class ProductSearchView(APIView):
 
         normalized = self._normalize(query)
         corrected = normalized != query
+        for fa, en in self.PHRASE_ALIASES.items():
+            normalized = normalized.replace(fa, en)
 
+        # توکن‌های دوزبانه — محصول باید با همه توکن‌ها (هرکدام با یکی از مترادف‌ها) مچ شود
+        tokens = [t for t in normalized.split() if t and t not in self.STOPWORDS]
+        if not tokens:
+            return Response({"results": [], "query": query, "corrected": corrected})
         from django.db.models import Q
+        # پرسنل با ?include_inactive=1 محصولات غیرفعال را هم در نتایج می‌بینند (مدیریت محصولات)
+        if request.user.is_staff and request.query_params.get("include_inactive"):
+            qs = Product.objects.all()
+        else:
+            qs = Product.objects.filter(is_active=True)
+        SEARCH_FIELDS = (
+            "name", "brand", "model_number", "board_name", "sensor_name",
+            "lens_name", "ai_processor", "keywords", "short_description",
+            "category__name", "variants__sku",
+        )
+        for token in tokens:
+            aliases = self._token_aliases(token)
+            token_q = Q()
+            for alias in aliases:
+                for field in SEARCH_FIELDS:
+                    token_q |= Q(**{f"{field}__icontains": alias})
+            qs = qs.filter(token_q)
+
         products = (
-            Product.objects.filter(is_active=True)
-            .filter(
-                Q(name__icontains=normalized)
-                | Q(brand__icontains=normalized)
-                | Q(model_number__icontains=normalized)
-                | Q(chipset__icontains=normalized)
-                | Q(short_description__icontains=normalized)
-            )
+            qs.distinct()
             .select_related("category")
             .prefetch_related(
-                Prefetch("images", queryset=ProductImage.objects.filter(is_primary=True)),
+                # همه تصاویر prefetch شوند تا fallback سریالایزر (اولین تصویر
+                # در صورت نبود تصویر اصلی) درست کار کند؛ ترتیب مدل primary را اول می‌آورد
+                Prefetch("images", queryset=ProductImage.objects.all()),
                 Prefetch("variants", queryset=ProductVariant.objects.filter(is_active=True)),
             )[:20]
         )
@@ -219,16 +451,26 @@ class ProductSearchView(APIView):
 
 # ─── Exchange Rate ─────────────────────────────────────────────────────────────
 
+def _has_staff_perm(user, code):
+    """چک دسترسی RBAC پرسنل — سوپریوزر همیشه True"""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    sp = getattr(user, 'staff_profile', None)
+    return bool(sp and sp.is_active and sp.has_perm(code))
+
+
 class ExchangeRateView(APIView):
     """
     GET  /api/catalog/exchange-rate/   → نرخ ارز جاری (عموم)
-    PUT  /api/catalog/exchange-rate/   → بروزرسانی (فقط ادمین)
+    PUT  /api/catalog/exchange-rate/   → بروزرسانی (فقط پرمیشن exchange_rate_edit — ادمین/حسابدار)
     """
 
     def get_permissions(self):
         if self.request.method == "GET":
             return [AllowAny()]
-        return [IsAdminUser()]
+        return [IsAuthenticated()]
 
     def get(self, request):
         instance = ExchangeRateSetting.get_instance()
@@ -236,6 +478,11 @@ class ExchangeRateView(APIView):
         return Response(serializer.data)
 
     def put(self, request):
+        if not _has_staff_perm(request.user, 'exchange_rate_edit'):
+            return Response(
+                {"error": "شما دسترسی لازم برای تغییر نرخ یوان را ندارید"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         instance = ExchangeRateSetting.get_instance()
         serializer = ExchangeRateUpdateSerializer(
             instance, data=request.data, context={"request": request}
@@ -347,16 +594,27 @@ class VariantListView(generics.ListAPIView):
         from apps.inventory.models import WarehouseStock
         from django.db.models import Sum
 
-        # موجودی واقعی از WarehouseStock
+        # موجودی واقعی از WarehouseStock — جمع + تفکیک به تفکیک انبار
         stock_map = {}
-        for ws in WarehouseStock.objects.filter(warehouse__is_active=True).values('variant_id').annotate(total=Sum('quantity')):
-            stock_map[ws['variant_id']] = ws['total']
+        stocks_map = {}
+        for ws in WarehouseStock.objects.filter(warehouse__is_active=True).select_related('warehouse'):
+            stock_map[ws.variant_id] = stock_map.get(ws.variant_id, 0) + ws.quantity
+            if ws.quantity > 0:
+                stocks_map.setdefault(ws.variant_id, []).append(
+                    {'warehouse': ws.warehouse.name, 'quantity': ws.quantity}
+                )
 
         data = []
+        # قیمت فرمول برای یک مشتری خاص (ستون قیمت بر اساس سطح همکاری او)
+        for_user = None
+        if request.query_params.get('for_user'):
+            from django.contrib.auth import get_user_model
+            for_user = get_user_model().objects.filter(pk=request.query_params['for_user']).first()
+        from .pricing import variant_pricing_payload
         for v in qs:
             # موجودی واقعی: اول از WarehouseStock، اگر نبود از stock_quantity
             real_stock = stock_map.get(v.id, v.stock_quantity)
-            data.append({
+            row = {
                 'id': v.id,
                 'sku': v.sku,
                 'name': v.product.name + (' - ' + v.name_suffix if v.name_suffix else ''),
@@ -364,7 +622,11 @@ class VariantListView(generics.ListAPIView):
                 'product_id': v.product.id,
                 'category': v.product.category.name if v.product.category else '',
                 'stock_quantity': real_stock,
-            })
+                'stocks': stocks_map.get(v.id, []),
+            }
+            if for_user:
+                row['pricing'] = variant_pricing_payload(v, for_user)
+            data.append(row)
         return Response(data)
 
 
@@ -441,6 +703,7 @@ class PackageListView(APIView):
 
     def get(self, request):
         from .models import Package
+        from .pricing import price_for_user
         packages = Package.objects.filter(is_active=True).prefetch_related(
             'package_items__product__images',
             'package_items__variant',
@@ -451,29 +714,37 @@ class PackageListView(APIView):
 
         result = []
         for pkg in packages:
+            original, final = pkg.prices_for(request.user)
             items = []
             for item in pkg.package_items.all():
                 img = item.product.images.first()
+                img_url = request.build_absolute_uri(img.image.url) if img and img.image else None
+                unit = price_for_user(item.variant, request.user)
                 items.append({
                     'product_id': item.product_id,
                     'product_name': item.product.name,
                     'product_slug': item.product.slug,
                     'variant_id': item.variant_id,
                     'quantity': item.quantity,
-                    'unit_price': item.variant.final_price,
-                    'image': img.image.url if img else None,
+                    'unit_price': unit,
+                    'image': img_url,
                 })
             result.append({
                 'id': pkg.id,
                 'name': pkg.name,
                 'slug': pkg.slug,
                 'description': pkg.description,
-                'image': pkg.image.url if pkg.image else None,
+                'image': request.build_absolute_uri(pkg.image.url) if pkg.image else None,
                 'discount_percent': float(pkg.discount_percent),
-                'original_price': pkg.original_price,
-                'final_price': pkg.final_price,
-                'savings': pkg.savings,
+                'min_quantity': pkg.min_quantity,
+                'original_price': original,
+                'final_price': final,
+                'savings': original - final,
                 'is_featured': pkg.is_featured,
+                'meta_title': pkg.meta_title,
+                'meta_description': pkg.meta_description,
+                'keywords': pkg.keywords,
+                'geo_tags': pkg.geo_tags,
                 'items': items,
             })
         return Response(result)
@@ -485,6 +756,7 @@ class PackageDetailView(APIView):
 
     def get(self, request, slug):
         from .models import Package
+        from .pricing import price_for_user
         try:
             pkg = Package.objects.prefetch_related(
                 'package_items__product__images',
@@ -494,18 +766,20 @@ class PackageDetailView(APIView):
             return Response({'error': 'یافت نشد'}, status=404)
 
         items = []
+        original, final = pkg.prices_for(request.user)
         for item in pkg.package_items.all():
             img = item.product.images.first()
+            img_url = request.build_absolute_uri(img.image.url) if img and img.image else None
+            unit = price_for_user(item.variant, request.user)
             items.append({
                 'product_id': item.product_id,
                 'product_name': item.product.name,
                 'product_slug': item.product.slug,
                 'variant_id': item.variant_id,
                 'quantity': item.quantity,
-                'unit_price': item.variant.final_price,
-                'subtotal': item.variant.final_price * item.quantity,
-                'image': img.image.url if img else None,
-                'stock': item.variant.stock_quantity,
+                'unit_price': unit,
+                'subtotal': unit * item.quantity,
+                'image': img_url,
             })
 
         return Response({
@@ -513,11 +787,16 @@ class PackageDetailView(APIView):
             'name': pkg.name,
             'slug': pkg.slug,
             'description': pkg.description,
-            'image': pkg.image.url if pkg.image else None,
+            'image': request.build_absolute_uri(pkg.image.url) if pkg.image else None,
             'discount_percent': float(pkg.discount_percent),
-            'original_price': pkg.original_price,
-            'final_price': pkg.final_price,
-            'savings': pkg.savings,
+            'min_quantity': pkg.min_quantity,
+            'original_price': original,
+            'final_price': final,
+            'savings': original - final,
+            'meta_title': pkg.meta_title,
+            'meta_description': pkg.meta_description,
+            'keywords': pkg.keywords,
+            'geo_tags': pkg.geo_tags,
             'items': items,
         })
 
@@ -555,3 +834,837 @@ class ProductPriceHistoryView(APIView):
             'date': str(h.date),
             'price': h.price_irr,
         } for h in history])
+
+
+# ═══════════════════════════════════════════════════════════════
+# AssistantAskView — ربات مشاور هوشمند (LLM + کانتکست کاتالوگ)
+# ═══════════════════════════════════════════════════════════════
+
+class AssistantAskView(APIView):
+    """
+    POST /api/catalog/assistant/ask/  {"question": "..."}
+    پاسخ با LLM سازگار با OpenAI (پیش‌فرض: Moonshot/Kimi) + کانتکست کاتالوگ.
+    اگر AI_API_KEY تنظیم نشده یا سرویس در دسترس نباشد، پاسخ جایگزین برمی‌گردد.
+    """
+    permission_classes = [AllowAny]
+
+    SYSTEM_PROMPT = (
+        "تو دستیار فروش فنی فروشگاه قطعات دوربین مداربسته «دوربینکار» هستی. "
+        "فقط درباره قطعات و تجهیزات دوربین مداربسته (لنز، سنسور، برد، هولدر، بدنه، مدم، پکیج و نصب و راه‌اندازی) جواب بده. "
+        "جواب‌ها فارسی، کوتاه (حداکثر ۴ جمله) و کاربردی باشد. "
+        "«فقط» بر اساس لیست «محصولات مرتبط» جواب بده؛ هرگز از خودت نام مدل یا محصول نساز. "
+        "اگر محصول مطابق سؤال در لیست نبود، صادقانه بگو و نزدیک‌ترین مورد لیست را پیشنهاد بده. "
+        "قیمت یا موجودی دقیق را حدس نزن؛ فقط همان چیزی را بگو که در لیست آمده. "
+        "اگر سوال نامرتبط بود، مؤدبانه بگو فقط در حوزه دوربین مداربسته می‌توانی کمک کنی."
+    )
+
+    def post(self, request):
+        from django.conf import settings
+        import logging
+        logger = logging.getLogger(__name__)
+
+        question = (request.data.get("question") or "").strip()
+        if len(question) < 3:
+            return Response({"error": "سوال خیلی کوتاه است"}, status=400)
+
+        if not settings.AI_API_KEY:
+            return Response({
+                "answer": "هوش مصنوعی فعلاً فعال نشده؛ لطفاً سوالت رو با نام قطعه (لنز، برد، سنسور...) بپرس یا از «راهنمای انتخاب قطعه» استفاده کن.",
+                "source": "fallback",
+            })
+
+        # کانتکست RAG — همان جستجوی چت‌بات تا پاسخ grounded باشد (قبلاً فقط خلاصه کلی
+        # کاتالوگ به مدل داده می‌شد و مدل مدل‌های غیرموجود مثل «D21» می‌ساخت)
+        from apps.assistant.views import _faq_context, _find_faqs, _find_products, _product_dict, _spec_summary
+        products, is_fallback = _find_products(question)
+        dicts = []
+        for p in products:
+            d = _product_dict(p)
+            d["specs"] = _spec_summary(p)
+            dicts.append(d)
+        if dicts:
+            ctx = "\n".join(
+                f"- {d['name']} | برند: {d['brand'] or '-'}"
+                + (f" | قیمت: {d['price_irt']:,} ریال" if d["price_irt"] else "")
+                + f" | موجودی: {'دارد' if d['in_stock'] else 'ندارد'}"
+                + (f" | مشخصات: {d['specs']}" if d["specs"] else "")
+                for d in dicts
+            )
+            if is_fallback:
+                ctx = "(محصول دقیقاً مطابق سؤال پیدا نشد؛ این‌ها چند محصول کلی فروشگاه‌اند:)\n" + ctx
+        else:
+            ctx = "(محصولی یافت نشد)"
+
+        messages = [
+            {"role": "system", "content": self.SYSTEM_PROMPT + "\n\nمحصولات مرتبط از کاتالوگ فروشگاه:\n" + ctx
+                                          + _faq_context(_find_faqs(question))},
+            {"role": "user", "content": question},
+        ]
+        try:
+            import requests as http
+            r = http.post(
+                f"{settings.AI_API_BASE.rstrip('/')}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.AI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.AI_API_MODEL,
+                    "messages": messages,
+                    "temperature": 0.4,
+                    "max_tokens": 350,
+                },
+                timeout=120,
+            )
+            r.raise_for_status()
+            answer = r.json()["choices"][0]["message"]["content"].strip()
+            return Response({"answer": answer, "source": "ai"})
+        except Exception as e:
+            logger.warning(f"[AI] assistant call failed: {e}")
+            return Response({
+                "answer": "الان نتوانستم به هوش مصنوعی وصل شوم؛ چند لحظه دیگر دوباره بپرس.",
+                "source": "fallback",
+            })
+
+
+# ═══════════════════════════════════════════════════════════════
+# ProductAdmin — ویرایش مشخصات محصول از پنل ادمین
+# ═══════════════════════════════════════════════════════════════
+
+class ProductAdminSerializer(serializers.ModelSerializer):
+    variants = ProductVariantAdminSerializer(many=True, read_only=True)
+    # فیلدهای دارای choice به‌صورت متن آزاد پذیرفته می‌شوند تا گزینه‌های سفارشی
+    # (field_overrides دسته) هم از ولیدیشن عبور کنند — ولیدیشن اصلی در فرم است.
+    board_system     = serializers.CharField(required=False, allow_blank=True)
+    board_resolution = serializers.CharField(required=False, allow_blank=True)
+    sensor_size      = serializers.CharField(required=False, allow_blank=True)
+    lens_resolution  = serializers.CharField(required=False, allow_blank=True)
+    lens_degree      = serializers.CharField(required=False, allow_blank=True)
+    lens_type        = serializers.CharField(required=False, allow_blank=True)
+    focal_ratio      = serializers.CharField(required=False, allow_blank=True)
+    housing_type     = serializers.CharField(required=False, allow_blank=True)
+    housing_material = serializers.CharField(required=False, allow_blank=True)
+    # فایل‌ها و ارتباطات — مدیریت از پنل ادمین
+    datasheet_pdf  = serializers.FileField(required=False, allow_null=True)
+    compatible_with = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=Product.objects.all(), required=False
+    )
+    compatible_products = serializers.SerializerMethodField()
+    images = ProductImageSerializer(many=True, read_only=True)
+    datasheet_pages = DatasheetPageSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Product
+        fields = [
+            "id", "name", "slug", "category", "brand", "model_number",
+            "short_description", "description",
+            "board_name", "board_system", "board_resolution", "board_dimensions", "ai_processor",
+            "board_tech_notes",
+            "sensor_name", "sensor_size",
+            "lens_name", "lens_resolution", "lens_degree", "lens_type", "focal_ratio",
+            "modem_model", "modem_type", "modem_size", "pin_count", "sim_card",
+            "housing_type", "housing_material", "housing_size",
+            "voltage", "ampere_output", "output_ports", "has_microphone",
+            "whatsapp_link", "bale_link",
+            "meta_title", "meta_description", "keywords", "geo_tags", "dynamic_specs",
+            "datasheet_pdf", "datasheet_pages", "compatible_with", "compatible_products", "images",
+            "is_active", "is_featured", "availability", "variants",
+        ]
+        read_only_fields = ["id", "slug"]
+
+    def get_compatible_products(self, obj):
+        return [{"id": p.id, "name": p.name} for p in obj.compatible_with.all()]
+
+    def update(self, instance, validated_data):
+        from .datasheet import clear_datasheet_pages, convert_datasheet
+        old_pdf = instance.datasheet_pdf.name if instance.datasheet_pdf else None
+        pdf_touched = "datasheet_pdf" in validated_data
+        new_file = validated_data.get("datasheet_pdf") if pdf_touched else None
+        instance = super().update(instance, validated_data)
+        if pdf_touched:
+            new_pdf = instance.datasheet_pdf.name if instance.datasheet_pdf else None
+            if not new_pdf:
+                # دیتاشیت پاک شد — صفحات تصویری هم حذف شوند
+                clear_datasheet_pages(instance)
+            elif new_file or new_pdf != old_pdf:
+                # فایل جدید آپلود شد — صفحات از نو ساخته می‌شوند
+                convert_datasheet(instance)
+        return instance
+
+
+class ProductAdminListCreateView(generics.ListCreateAPIView):
+    """
+    POST /api/catalog/products/admin/
+    ساخت محصول جدید از پنل ادمین — یک واریانت پیش‌فرض با SKU خودکار (P-<id>) هم
+    ساخته می‌شود تا محصول بلافاصله قابل ثبت موجودی و قیمت باشد.
+    """
+    queryset = Product.objects.all()
+    serializer_class = ProductAdminSerializer
+    permission_classes = [IsAdminUser]
+
+    def perform_create(self, serializer):
+        product = serializer.save()
+        ProductVariant.objects.create(
+            product=product, sku=f"P-{product.id}", purchase_price_cny=0,
+        )
+
+
+class ProductAdminDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET/PATCH/PUT/DELETE /api/catalog/products/admin/<pk>/
+    مشاهده، ویرایش و حذف محصول — فقط ادمین (is_staff).
+    حذف محصولی که در سفارش/فاکتور استفاده شده با خطای ۴۰۹ رد می‌شود.
+    """
+    queryset = Product.objects.all()
+    serializer_class = ProductAdminSerializer
+    permission_classes = [IsAdminUser]
+    lookup_field = "pk"
+
+    def destroy(self, request, *args, **kwargs):
+        from django.db.models.deletion import ProtectedError
+        product = self.get_object()
+        try:
+            product.delete()
+        except ProtectedError:
+            return Response(
+                {"error": "این محصول در سفارش یا فاکتور استفاده شده و قابل حذف نیست — می‌توانید آن را غیرفعال کنید"},
+                status=409,
+            )
+        return Response({"deleted": True})
+
+
+_FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+def _auto_alt_text(product) -> str:
+    """
+    تولید خودکار متن جایگزین (alt) حرفه‌ای برای تصویر محصول.
+    تصویر اول = نام محصول؛ تصاویر بعدی = نام محصول + شماره تصویر (یکتا، بدون تکرار).
+    """
+    existing = product.images.count()
+    if existing == 0:
+        return product.name
+    return f"{product.name} — تصویر {str(existing + 1).translate(_FA_DIGITS)}"
+
+
+class ProductImageUploadView(APIView):
+    """
+    POST /api/catalog/products/admin/<pk>/images/
+    آپلود تصویر محصول (multipart) — فیلد image الزامی؛ alt_text و is_primary (bool string) اختیاری.
+    اگر is_primary ارسال شود، تصویر اصلی قبلی همان محصول برداشته می‌شود.
+    """
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk):
+        product = Product.objects.filter(pk=pk).first()
+        if product is None:
+            return Response({"error": "محصول یافت نشد"}, status=404)
+        image = request.FILES.get("image")
+        if image is None:
+            return Response({"error": "فایل تصویر ارسال نشده است"}, status=400)
+        is_primary = str(request.data.get("is_primary", "")).strip().lower() in ("true", "1", "yes")
+        if is_primary:
+            product.images.filter(is_primary=True).update(is_primary=False)
+        elif not product.images.filter(is_primary=True).exists():
+            # اگر محصول تصویر اصلی ندارد، تصویر تازه آپلودشده خودکار اصلی شود
+            is_primary = True
+        img = ProductImage.objects.create(
+            product=product,
+            image=image,
+            alt_text=request.data.get("alt_text") or _auto_alt_text(product),
+            is_primary=is_primary,
+        )
+        return Response(
+            ProductImageSerializer(img, context={"request": request}).data,
+            status=201,
+        )
+
+
+class ProductImageAdminDetailView(APIView):
+    """
+    PATCH  /api/catalog/products/admin/images/<img_id>/  → ویرایش alt_text
+    DELETE /api/catalog/products/admin/images/<img_id>/  → حذف تصویر محصول — فقط ادمین (is_staff).
+    """
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, img_id):
+        img = ProductImage.objects.filter(pk=img_id).first()
+        if img is None:
+            return Response({"error": "تصویر یافت نشد"}, status=404)
+        if "alt_text" in request.data:
+            img.alt_text = str(request.data.get("alt_text") or "")[:255]
+            img.save(update_fields=["alt_text", "updated_at"])
+        return Response(ProductImageSerializer(img, context={"request": request}).data)
+
+    def delete(self, request, img_id):
+        img = ProductImage.objects.filter(pk=img_id).first()
+        if img is None:
+            return Response({"error": "تصویر یافت نشد"}, status=404)
+        img.delete()
+        return Response(status=204)
+
+
+class ProductImagePrimaryView(APIView):
+    """
+    POST /api/catalog/products/admin/images/<img_id>/primary/
+    تنظیم تصویر به‌عنوان تصویر اصلی محصول و برداشتن پرچم اصلی از بقیه.
+    """
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, img_id):
+        img = ProductImage.objects.filter(pk=img_id).first()
+        if img is None:
+            return Response({"error": "تصویر یافت نشد"}, status=404)
+        img.product.images.filter(is_primary=True).exclude(pk=img.pk).update(is_primary=False)
+        img.is_primary = True
+        img.save(update_fields=["is_primary"])
+        return Response(ProductImageSerializer(img, context={"request": request}).data)
+
+
+class ProductOpeningStockView(APIView):
+    """
+    POST /api/catalog/products/admin/<pk>/opening-stock/
+    ثبت موجودی اولیه یک واریانت از پنل محصولات — مثل الگوی فاکتور خرید،
+    هم stock_quantity واریانت زیاد می‌شود و هم حرکت opening در کاردکس ثبت می‌شود.
+    انبار مقصد با warehouse_id ارسال می‌شود (الزامی).
+    هزینه‌های تمام‌شده (قیمت خرید یوان + حمل یوان + ترخیص ریال) اختیاری است و
+    برای محاسبه بهای واحد (ریال) در کاردکس/حسابداری در unit_price ذخیره می‌شود.
+    """
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk):
+        from django.db import transaction
+        from decimal import Decimal, InvalidOperation
+        try:
+            quantity = int(request.data.get("quantity") or 0)
+        except (ValueError, TypeError):
+            return Response({"error": "مقدار نامعتبر است"}, status=400)
+        if quantity <= 0:
+            return Response({"error": "مقدار باید بزرگ‌تر از صفر باشد"}, status=400)
+        variant = ProductVariant.objects.filter(
+            pk=request.data.get("variant_id"), product_id=pk, is_active=True
+        ).first()
+        if variant is None:
+            return Response({"error": "واریانت یافت نشد"}, status=404)
+
+        # هزینه‌های تمام‌شده — خالی یعنی مقدار پیش‌فرض خود واریانت
+        def _dec(key, default):
+            raw = request.data.get(key)
+            if raw in (None, ""):
+                return Decimal(str(default))
+            try:
+                val = Decimal(str(raw))
+                if val < 0:
+                    raise ValueError
+                return val
+            except (InvalidOperation, ValueError):
+                raise ValueError(key)
+
+        try:
+            purchase_cny  = _dec("purchase_price_cny", variant.purchase_price_cny)
+            shipping_cny  = _dec("shipping_cost_cny", variant.shipping_cost_cny)
+            clearance_irr = _dec("clearance_cost_irr", 0)
+        except ValueError as e:
+            return Response({"error": f"مقدار {e} نامعتبر است"}, status=400)
+
+        rate = Decimal(ExchangeRateSetting.get_instance().rate_cny_to_irt)
+        unit_cost_irr = int((purchase_cny + shipping_cny) * rate + clearance_irr)
+
+        from apps.inventory.models import StockMovement, Warehouse
+        warehouse_id = request.data.get("warehouse_id")
+        if not warehouse_id:
+            return Response({"error": "انبار مقصد را انتخاب کنید"}, status=400)
+        warehouse = Warehouse.objects.filter(pk=warehouse_id, is_active=True).first()
+        if warehouse is None:
+            return Response({"error": "انبار یافت نشد"}, status=404)
+        with transaction.atomic():
+            variant.stock_quantity += quantity
+            variant.save(update_fields=["stock_quantity"])
+            StockMovement.record(
+                warehouse=warehouse,
+                variant=variant,
+                movement_type="opening",
+                quantity=quantity,
+                unit_price=unit_cost_irr,
+                note=f"موجودی اولیه از پنل مدیریت محصولات — انبار {warehouse.name}",
+                user=request.user,
+            )
+        return Response({
+            "success": True,
+            "variant_id": variant.id,
+            "stock_quantity": variant.stock_quantity,
+            "warehouse": warehouse.name,
+            "unit_cost_irr": unit_cost_irr,
+            "total_cost_irr": unit_cost_irr * quantity,
+        })
+
+
+# ─── فرمول قیمت ────────────────────────────────────────────────
+
+PROFIT_TYPES = [
+    ("profit_cash_percent",   "نقدی"),
+    ("profit_credit_percent", "تو حسابی"),
+    ("profit_month1_percent", "یکماهه"),
+    ("profit_month2_percent", "دوماهه"),
+    ("profit_retail_percent", "مشتری عمومی"),
+]
+
+
+class PricingOverviewView(APIView):
+    """
+    GET /api/catalog/pricing/
+    داده خام فرمول قیمت: نرخ یوان روز + هزینه حمل/ترخیص هر دسته +
+    قیمت خرید یوان و درصد سودهای نوع فروش هر واریانت.
+    محاسبه قیمت‌ها سمت کلاینت و به‌صورت زنده انجام می‌شود.
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        rate = ExchangeRateSetting.get_instance().rate_cny_to_irt
+        categories = [{
+            "id": c.id, "name": c.name, "parent": c.parent_id,
+            "shipping_cost_cny": float(c.shipping_cost_cny),
+            "clearance_cost_cny": float(c.clearance_cost_cny),
+            **{k: float(getattr(c, k)) for k, _ in PROFIT_TYPES},
+        } for c in Category.objects.filter(is_active=True).order_by("sort_order", "name")]
+
+        products = []
+        qs = (Product.objects.filter(is_active=True)
+              .select_related("category")
+              .prefetch_related("variants")
+              .order_by("category__sort_order", "name"))
+        for p in qs:
+            products.append({
+                "id": p.id, "name": p.name,
+                "category_id": p.category_id,
+                "category_name": str(p.category) if p.category else "",
+                "variants": [{
+                    "id": v.id, "sku": v.sku, "name_suffix": v.name_suffix,
+                    "purchase_price_cny": float(v.purchase_price_cny),
+                    "discount_percent": float(v.discount_percent),
+                    "available_stock": v.available_stock,
+                    "month2_unavailable": v.month2_unavailable,
+                } for v in p.variants.filter(is_active=True)],
+            })
+
+        return Response({
+            "rate_cny_to_irt": float(rate),
+            "profit_types": [{"key": k, "label": label} for k, label in PROFIT_TYPES],
+            "categories": categories,
+            "products": products,
+        })
+
+
+def _patch_decimal(instance, data, fields):
+    """مقادیر Decimal غیرمنفی را از request روی مدل اعمال می‌کند؛ در خطا ValueError."""
+    from decimal import Decimal, InvalidOperation
+    changed = False
+    for f in fields:
+        if f in data:
+            try:
+                val = Decimal(str(data[f] or 0))
+                if val < 0:
+                    raise ValueError
+            except (InvalidOperation, ValueError):
+                raise ValueError(f)
+            setattr(instance, f, val)
+            changed = True
+    return changed
+
+
+class PricingVariantView(APIView):
+    """PATCH /api/catalog/pricing/variants/<pk>/ — قیمت خرید یوان + درصد تخفیف + فروش دوماهه"""
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, pk):
+        v = ProductVariant.objects.filter(pk=pk).first()
+        if v is None:
+            return Response({"error": "واریانت یافت نشد"}, status=404)
+        if "month2_unavailable" in request.data:
+            v.month2_unavailable = bool(request.data["month2_unavailable"])
+        try:
+            _patch_decimal(v, request.data, ["purchase_price_cny", "discount_percent"])
+        except ValueError as e:
+            return Response({"error": f"مقدار {e} نامعتبر است"}, status=400)
+        if v.discount_percent > 100:
+            return Response({"error": "تخفیف نمی‌تواند بیشتر از ۱۰۰٪ باشد"}, status=400)
+        v.save()
+        return Response({"success": True})
+
+
+class PricingCategoryCostView(APIView):
+    """PATCH /api/catalog/pricing/categories/<pk>/ — هزینه حمل/ترخیص دسته (یوان)"""
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, pk):
+        if not _has_staff_perm(request.user, 'pricing_costs_view'):
+            return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
+        c = Category.objects.filter(pk=pk).first()
+        if c is None:
+            return Response({"error": "دسته یافت نشد"}, status=404)
+        try:
+            _patch_decimal(c, request.data,
+                           ["shipping_cost_cny", "clearance_cost_cny"] + [k for k, _ in PROFIT_TYPES])
+        except ValueError as e:
+            return Response({"error": f"مقدار {e} نامعتبر است"}, status=400)
+        c.save()
+        return Response({"success": True})
+
+
+# ═══════════════════════════════════════════════════════════════
+# CategoryAdmin — مدیریت دسته‌بندی و ویژگی‌های سفارشی (ادمین)
+# ═══════════════════════════════════════════════════════════════
+
+class CategorySpecFieldSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CategorySpecField
+        fields = ["id", "key", "label", "field_type", "choices", "sort_order", "is_active"]
+        extra_kwargs = {"key": {"required": False}}  # در save() از روی label ساخته می‌شود
+
+
+# نگاشت فیلدهای پایه هر نوع دسته — از introspection مدل Product خوانده می‌شود
+BUILTIN_SPEC_BY_TYPE = {
+    "board":   ["board_name", "board_system", "board_resolution", "board_dimensions", "ai_processor",
+                "board_tech_notes", "brand",
+                "sensor_name", "sensor_size", "voltage", "ampere_output", "output_ports", "has_microphone"],
+    "lens":    ["lens_name", "lens_resolution", "lens_degree", "lens_type", "focal_ratio"],
+    "modem":   ["modem_model", "modem_type", "modem_size", "pin_count", "sim_card",
+                "voltage", "ampere_output", "output_ports"],
+    "housing": ["housing_type", "housing_material", "housing_size", "has_microphone"],
+}
+
+
+def _builtin_fields(cat):
+    """فیلدهای پایه مرتبط با دسته — لیبل و گزینه‌ها از خود مدل."""
+    from django.db import models as dj_models
+    names = BUILTIN_SPEC_BY_TYPE.get(cat.category_type)
+    if names is None:  # other → همه گروه‌ها (مثل فرم ویرایش)
+        names = list(dict.fromkeys(n for group in BUILTIN_SPEC_BY_TYPE.values() for n in group))
+    out = []
+    for n in names:
+        f = Product._meta.get_field(n)
+        out.append({
+            "key": n,
+            "label": str(f.verbose_name),
+            "field_type": "checkbox" if isinstance(f, dj_models.BooleanField) else ("select" if f.choices else "text"),
+            "choices": ", ".join(str(c[0]) for c in f.choices) if f.choices else "",
+        })
+    return out
+
+
+class CategoryAdminSerializer(serializers.ModelSerializer):
+    spec_fields    = CategorySpecFieldSerializer(many=True, read_only=True)
+    builtin_fields = serializers.SerializerMethodField()
+    product_count  = serializers.SerializerMethodField()
+    brands         = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Category
+        fields = ["id", "name", "slug", "category_type", "parent",
+                  "is_active", "sort_order", "hidden_fields", "field_overrides",
+                  "description", "meta_title", "meta_description",
+                  "spec_fields", "builtin_fields", "product_count", "brands"]
+        extra_kwargs = {"slug": {"required": False}}  # در save() از روی نام ساخته می‌شود
+
+    def get_builtin_fields(self, obj):
+        return _builtin_fields(obj)
+
+    def get_product_count(self, obj):
+        return obj.get_active_product_count()
+
+    def get_brands(self, obj):
+        # برندهای تعریف‌شده برای دسته + برندهای در حال استفاده محصولات دسته و زیردسته‌ها
+        cat_ids = [obj.id, *obj.children.values_list("id", flat=True)]
+        used = (Product.objects.filter(category_id__in=cat_ids)
+                .exclude(brand__isnull=True).exclude(brand="")
+                .values_list("brand", flat=True).distinct())
+        defined = obj.brands.values_list("name", flat=True)
+        return sorted(set(used) | set(defined))
+
+    def validate(self, attrs):
+        # والد: از درخواست، یا والد فعلی (PATCH بدون تغییر والد)
+        parent = attrs.get("parent", serializers.empty)
+        if parent is serializers.empty:
+            parent = self.instance.parent if self.instance else None
+        # فقط دو سطح: والد باید دسته اصلی باشد (فیلتر محصول هم یک سطح فرزند را پوشش می‌دهد)
+        if parent and parent.parent_id:
+            raise serializers.ValidationError(
+                {"parent": "فقط دو سطح دسته‌بندی پشتیبانی می‌شود — والد باید دسته اصلی باشد"}
+            )
+        # جلوگیری از حلقه: دسته نمی‌تواند زیرمجموعه خودش یا زیردسته‌هایش شود
+        if self.instance and parent:
+            node = parent
+            while node:
+                if node.pk == self.instance.pk:
+                    raise serializers.ValidationError(
+                        {"parent": "دسته نمی‌تواند زیرمجموعه خودش یا زیردسته‌هایش باشد"}
+                    )
+                node = node.parent
+        # نوع زیردسته همیشه از والد به ارث می‌رسد (درخواست نادیده گرفته می‌شود)
+        if parent:
+            attrs["category_type"] = parent.category_type
+        return attrs
+
+
+class CategoryAdminListView(APIView):
+    """GET/POST /api/catalog/categories/admin/ — لیست با spec_fields + ساخت دسته"""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from django.db.models import Count
+        cats = Category.objects.annotate(product_count=Count("products"))\
+                               .prefetch_related("spec_fields")
+        return Response(CategoryAdminSerializer(cats, many=True).data)
+
+    def post(self, request):
+        s = CategoryAdminSerializer(data=request.data)
+        if s.is_valid():
+            s.save()
+            return Response(s.data, status=201)
+        return Response(s.errors, status=400)
+
+
+class CategoryAdminDetailView(APIView):
+    """PATCH/DELETE /api/catalog/categories/admin/<pk>/"""
+    permission_classes = [IsAdminUser]
+
+    def _get(self, pk):
+        from django.shortcuts import get_object_or_404
+        return get_object_or_404(Category, pk=pk)
+
+    def patch(self, request, pk):
+        cat = self._get(pk)
+        s = CategoryAdminSerializer(cat, data=request.data, partial=True)
+        if s.is_valid():
+            old_type = cat.category_type
+            s.save()
+            # تغییر نوع دسته اصلی به زیردسته‌هایش هم سرایت می‌کند
+            if cat.category_type != old_type:
+                cat.children.update(category_type=cat.category_type)
+            return Response(s.data)
+        return Response(s.errors, status=400)
+
+    def delete(self, request, pk):
+        from django.db.models import ProtectedError
+        cat = self._get(pk)
+        try:
+            cat.delete()
+            return Response({"deleted": True})
+        except ProtectedError:
+            return Response({"error": "این دسته محصول دارد و قابل حذف نیست — اول محصولاتش را جابه‌جا کنید"}, status=400)
+
+
+class CategorySpecFieldListView(APIView):
+    """POST /api/catalog/categories/admin/<pk>/fields/ — افزودن ویژگی به دسته"""
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk):
+        from django.shortcuts import get_object_or_404
+        cat = get_object_or_404(Category, pk=pk)
+        if cat.parent_id:
+            return Response(
+                {"error": f"زیردسته ویژگی مستقل ندارد — ویژگی‌ها را به دسته اصلی «{cat.parent.name}» اضافه کنید"},
+                status=400,
+            )
+        s = CategorySpecFieldSerializer(data=request.data)
+        if s.is_valid():
+            s.save(category=cat)
+            return Response(s.data, status=201)
+        return Response(s.errors, status=400)
+
+
+class CategoryBrandListView(APIView):
+    """POST /api/catalog/categories/admin/<pk>/brands/ — افزودن برند به دسته اصلی"""
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk):
+        from django.shortcuts import get_object_or_404
+        cat = get_object_or_404(Category, pk=pk)
+        if cat.parent_id:
+            return Response(
+                {"error": f"برندها روی دسته اصلی مدیریت می‌شوند — «{cat.parent.name}» را انتخاب کنید"},
+                status=400,
+            )
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            return Response({"error": "نام برند لازم است"}, status=400)
+        obj, created = CategoryBrand.objects.get_or_create(category=cat, name=name)
+        return Response({"id": obj.id, "name": obj.name, "created": created},
+                        status=201 if created else 200)
+
+
+class CategoryBrandRenameView(APIView):
+    """
+    POST /api/catalog/categories/admin/<pk>/brands/rename/ — بدنه: {"from": "...", "to": "..."}
+    تغییر نام برند در همه محصولات دسته و زیردسته‌هایش؛ اگر نام مقصد وجود داشته باشد، ادغام می‌شود
+    """
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk):
+        from django.shortcuts import get_object_or_404
+        cat = get_object_or_404(Category, pk=pk)
+        src = (request.data.get("from") or "").strip()
+        dst = (request.data.get("to") or "").strip()
+        if not src or not dst:
+            return Response({"error": "هر دو مقدار from و to لازم است"}, status=400)
+        if src == dst:
+            return Response({"error": "نام مبدأ و مقصد یکسان است"}, status=400)
+        cat_ids = [cat.id, *cat.children.values_list("id", flat=True)]
+        updated = Product.objects.filter(category_id__in=cat_ids, brand=src).update(brand=dst)
+        CategoryBrand.objects.filter(category=cat, name=src).delete()
+        CategoryBrand.objects.get_or_create(category=cat, name=dst)
+        return Response({"updated": updated, "from": src, "to": dst})
+
+
+class CategorySpecFieldDetailView(APIView):
+    """PATCH/DELETE /api/catalog/spec-fields/<pk>/"""
+    permission_classes = [IsAdminUser]
+
+    def _get(self, pk):
+        from django.shortcuts import get_object_or_404
+        return get_object_or_404(CategorySpecField, pk=pk)
+
+    def patch(self, request, pk):
+        f = self._get(pk)
+        s = CategorySpecFieldSerializer(f, data=request.data, partial=True)
+        if s.is_valid():
+            s.save()
+            return Response(s.data)
+        return Response(s.errors, status=400)
+
+    def delete(self, request, pk):
+        self._get(pk).delete()
+        return Response({"deleted": True})
+
+
+# ═══════════════════════════════════════════════════════════════
+# PackageAdmin — مدیریت پکیج‌ها از پنل ادمین
+# ═══════════════════════════════════════════════════════════════
+
+class PackageItemInputSerializer(serializers.Serializer):
+    """آیتم ورودی پکیج: variant_id + quantity (فقط نوشتنی)"""
+    variant_id = serializers.IntegerField()
+    quantity   = serializers.IntegerField(min_value=1, default=1)
+
+    def validate_variant_id(self, value):
+        if not ProductVariant.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("واریانت یافت نشد")
+        return value
+
+
+class PackageAdminSerializer(serializers.ModelSerializer):
+    """
+    سریالایزر مدیریت پکیج — آیتم‌های تو‌در‌تو + قیمت‌های محاسبه‌شده (خواندنی)
+    و نوشتن آیتم‌ها با items=[{variant_id, quantity}] (جایگزینی کامل در PATCH).
+    """
+    items          = PackageItemInputSerializer(many=True, write_only=True, required=False)
+    items_detail   = serializers.SerializerMethodField()
+    items_count    = serializers.SerializerMethodField()
+    image          = serializers.SerializerMethodField()
+    original_price = serializers.IntegerField(read_only=True)
+    final_price    = serializers.IntegerField(read_only=True)
+    savings        = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Package
+        fields = [
+            "id", "name", "slug", "description", "image",
+            "discount_percent", "min_quantity", "is_active", "is_featured",
+            "meta_title", "meta_description", "keywords", "geo_tags",
+            "items", "items_detail", "items_count",
+            "original_price", "final_price", "savings",
+        ]
+        read_only_fields = ["id", "slug"]
+
+    def get_image(self, obj):
+        if not obj.image:
+            return None
+        request = self.context.get("request")
+        url = obj.image.url
+        return request.build_absolute_uri(url) if request else url
+
+    def get_items_count(self, obj):
+        return obj.package_items.count()
+
+    def get_items_detail(self, obj):
+        return [{
+            "variant_id":   item.variant_id,
+            "product_id":   item.product_id,
+            "product_name": item.product.name,
+            "sku":          item.variant.sku,
+            "quantity":     item.quantity,
+            "unit_price":   item.variant.final_price,
+        } for item in obj.package_items.select_related("product", "variant").all()]
+
+    def _save_items(self, package, items):
+        """جایگزینی اتمیک آیتم‌های پکیج (حذف + ساخت مجدد)"""
+        from django.db import transaction
+        with transaction.atomic():
+            package.package_items.all().delete()
+            for it in items:
+                variant = ProductVariant.objects.select_related("product").get(pk=it["variant_id"])
+                PackageItem.objects.create(
+                    package=package,
+                    product=variant.product,
+                    variant=variant,
+                    quantity=it["quantity"],
+                )
+
+    def create(self, validated_data):
+        items = validated_data.pop("items", [])
+        validated_data["slug"] = generate_slug(validated_data["name"], Package)
+        package = Package.objects.create(**validated_data)
+        if items:
+            self._save_items(package, items)
+        return package
+
+    def update(self, instance, validated_data):
+        items = validated_data.pop("items", None)
+        instance = super().update(instance, validated_data)
+        if items is not None:
+            self._save_items(instance, items)
+        return instance
+
+
+class PackageAdminListCreateView(generics.ListCreateAPIView):
+    """GET/POST /api/catalog/packages/admin/ — لیست و ساخت پکیج (فقط ادمین)"""
+    queryset = Package.objects.prefetch_related("package_items__product", "package_items__variant")
+    serializer_class = PackageAdminSerializer
+    permission_classes = [IsAdminUser]
+
+
+class PackageAdminDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """GET/PATCH/DELETE /api/catalog/packages/admin/<pk>/ (فقط ادمین)"""
+    queryset = Package.objects.prefetch_related("package_items__product", "package_items__variant")
+    serializer_class = PackageAdminSerializer
+    permission_classes = [IsAdminUser]
+    lookup_field = "pk"
+
+
+class PackageImageUploadView(APIView):
+    """
+    POST/DELETE /api/catalog/packages/admin/<pk>/image/
+    آپلود (multipart، فیلد image) یا حذف تصویر پکیج — فقط ادمین.
+    """
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk):
+        package = Package.objects.filter(pk=pk).first()
+        if package is None:
+            return Response({"error": "پکیج یافت نشد"}, status=404)
+        image = request.FILES.get("image")
+        if image is None:
+            return Response({"error": "فایل تصویر ارسال نشده است"}, status=400)
+        if package.image:
+            package.image.delete(save=False)
+        package.image = image
+        package.save(update_fields=["image", "updated_at"])
+        return Response(PackageAdminSerializer(package, context={"request": request}).data)
+
+    def delete(self, request, pk):
+        package = Package.objects.filter(pk=pk).first()
+        if package is None:
+            return Response({"error": "پکیج یافت نشد"}, status=404)
+        if package.image:
+            package.image.delete(save=True)
+        return Response(status=204)

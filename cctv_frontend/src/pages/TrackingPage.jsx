@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import api from '../services/api'
+import { formatDate } from '../utils/date'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 
@@ -64,7 +65,7 @@ export default function TrackingPage() {
             <div className="flex items-center justify-between mb-4">
               <div>
                 <div className="font-mono text-brand font-bold">{data.order_number}</div>
-                <div className="text-xs text-gray-steel mt-0.5">{data.created_at}</div>
+                <div className="text-xs text-gray-steel mt-0.5">{formatDate(data.created_at)}</div>
               </div>
               <span className="text-xs px-3 py-1 rounded-full"
                 style={{
@@ -81,7 +82,7 @@ export default function TrackingPage() {
               </div>
               <div className="bg-white/5 rounded-lg p-3">
                 <div className="text-xs text-gray-steel mb-1">مبلغ کل</div>
-                <div className="font-bold text-white">{fmt(data.total)} ت</div>
+                <div className="font-bold text-white">{fmt(data.total)} ریال</div>
               </div>
               <div className="bg-white/5 rounded-lg p-3">
                 <div className="text-xs text-gray-steel mb-1">شرکت حمل</div>

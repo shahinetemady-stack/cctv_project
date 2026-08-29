@@ -2,19 +2,12 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import api from '../services/api'
-
-function imgUrl(url) {
-  if (!url) return null
-  if (url.startsWith('http')) return url
-  return `http://localhost:8000${url}`
-}
+import { mediaUrl as imgUrl } from '../utils/media'
 
 
 function getVideoThumbnail(video) {
   if (video.thumbnail) {
-    const url = video.thumbnail
-    if (url.startsWith('http')) return url
-    return `http://localhost:8000${url}`
+    return imgUrl(video.thumbnail)
   }
   // thumbnail خودکار از یوتیوب
   const url = video.video_url || video.embed_url || ''
@@ -65,7 +58,7 @@ export default function VideosPage() {
       {videos.length === 0 ? (
         <div className="text-center py-20 text-gray-steel">ویدیویی یافت نشد</div>
       ) : (
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {videos.map(v => (
             <Link key={v.id} to={`/videos/${v.slug}`}
               className="card hover:border-brand/30 transition-all group overflow-hidden">

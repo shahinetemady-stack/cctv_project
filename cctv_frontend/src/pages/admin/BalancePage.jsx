@@ -67,7 +67,7 @@ export default function BalancePage() {
                     }}>{c.status_irr}</span>
                   </td>
                   <td style={{ padding: '10px 12px', fontWeight: 700, color: c.balance_irr > 0 ? '#FF3B3B' : '#00C896' }}>
-                    {fmt(Math.abs(c.balance_irr))} ت
+                    {fmt(Math.abs(c.balance_irr))} ریال
                   </td>
                   <td style={{ padding: '10px 12px' }}>
                     {c.balance_cny !== 0 && (

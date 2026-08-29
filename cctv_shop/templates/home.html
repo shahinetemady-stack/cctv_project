@@ -1,0 +1,188 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>فروشگاه دوربین مداربسته — CCTV Shop</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
+    <style>
+        :root {
+            --bg: #0a0e1a;
+            --bg-2: #131a2e;
+            --accent: #3b82f6;
+            --accent-2: #8b5cf6;
+            --text: #e5e7eb;
+            --muted: #94a3b8;
+            --card: rgba(255, 255, 255, 0.04);
+            --border: rgba(255, 255, 255, 0.08);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Vazirmatn', system-ui, sans-serif;
+            background: radial-gradient(ellipse at top, var(--bg-2) 0%, var(--bg) 60%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        header {
+            padding: 1.5rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(10px);
+        }
+        .logo {
+            font-size: 1.4rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .logo span { color: var(--muted); font-weight: 400; font-size: 0.9rem; }
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            text-align: center;
+        }
+        h1 {
+            font-size: clamp(2rem, 5vw, 3.5rem);
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, #fff 0%, var(--accent) 50%, var(--accent-2) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .subtitle {
+            color: var(--muted);
+            font-size: 1.1rem;
+            max-width: 600px;
+            line-height: 1.7;
+            margin-bottom: 2.5rem;
+        }
+        .links {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1rem;
+            max-width: 900px;
+            width: 100%;
+        }
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 1.5rem;
+            text-align: right;
+            transition: all 0.25s ease;
+            text-decoration: none;
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+        .card:hover {
+            transform: translateY(-3px);
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, 0.08);
+            box-shadow: 0 10px 30px rgba(59, 130, 246, 0.15);
+        }
+        .card .title {
+            font-weight: 600;
+            font-size: 1.05rem;
+            color: var(--accent);
+        }
+        .card .desc { color: var(--muted); font-size: 0.85rem; line-height: 1.5; }
+        .card .url {
+            font-family: monospace;
+            font-size: 0.75rem;
+            color: var(--accent-2);
+            margin-top: 0.5rem;
+            direction: ltr;
+            text-align: left;
+        }
+        footer {
+            padding: 1.5rem;
+            text-align: center;
+            color: var(--muted);
+            font-size: 0.85rem;
+            border-top: 1px solid var(--border);
+        }
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            background: rgba(34, 197, 94, 0.15);
+            color: #22c55e;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">CCTV Shop <span>· فروشگاه دوربین مداربسته</span></div>
+        <a href="{% url 'admin:index' %}" style="color: var(--muted); text-decoration: none; font-size: 0.9rem;">پنل مدیریت ←</a>
+    </header>
+    <main>
+        <span class="badge">● سرویس آنلاین است</span>
+        <h1>به فروشگاه دوربین مداربسته خوش آمدید</h1>
+        <p class="subtitle">
+            این یک پلتفرم کامل برای فروش دوربین‌های مداربسته با مدیریت موجودی، سفارش‌ها،
+            حسابداری و گزارش‌گیری است. برای دسترسی به بخش‌های مختلف از لینک‌های زیر استفاده کنید.
+        </p>
+        <div class="links">
+            <a class="card" href="{% url 'admin:index' %}">
+                <div class="title">پنل مدیریت</div>
+                <div class="desc">مدیریت محصولات، سفارش‌ها، موجودی و گزارش‌ها</div>
+                <div class="url">/admin/</div>
+            </a>
+            <a class="card" href="/api/users/">
+                <div class="title">API کاربران</div>
+                <div class="desc">احراز هویت، ثبت‌نام و مدیریت کاربران</div>
+                <div class="url">/api/users/</div>
+            </a>
+            <a class="card" href="/api/catalog/">
+                <div class="title">API کاتالوگ</div>
+                <div class="desc">محصولات، دسته‌بندی‌ها و واریاسیون‌ها</div>
+                <div class="url">/api/catalog/</div>
+            </a>
+            <a class="card" href="/api/orders/">
+                <div class="title">API سفارشات</div>
+                <div class="desc">ایجاد و پیگیری سفارش‌ها</div>
+                <div class="url">/api/orders/</div>
+            </a>
+            <a class="card" href="/api/dashboard/">
+                <div class="title">API داشبورد</div>
+                <div class="desc">آمار و نمودارهای کلی</div>
+                <div class="url">/api/dashboard/</div>
+            </a>
+            <a class="card" href="/api/inventory/">
+                <div class="title">API انبار</div>
+                <div class="desc">مدیریت موجودی و انبارها</div>
+                <div class="url">/api/inventory/</div>
+            </a>
+            <a class="card" href="/api/accounting/">
+                <div class="title">API حسابداری</div>
+                <div class="desc">فاکتورها، پرداخت‌ها و تراز</div>
+                <div class="url">/api/accounting/</div>
+            </a>
+            <a class="card" href="/api/payment/">
+                <div class="title">API پرداخت</div>
+                <div class="desc">درگاه پرداخت و تراکنش‌ها</div>
+                <div class="url">/api/payment/</div>
+            </a>
+        </div>
+    </main>
+    <footer>
+        Django {{ django_version }} · CCTV Shop Backend · ساخته شده با ❤
+    </footer>
+</body>
+</html>

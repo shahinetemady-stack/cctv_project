@@ -1,11 +1,26 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import api from '../../services/api'
+import { mediaUrl } from '../../utils/media'
+import { formatDate } from '../../utils/date'
+import usePermissions from '../../hooks/usePermissions'
+import AmountInput from '../../components/ui/AmountInput'
+import SearchSelect, { advanceFlow } from '../../components/ui/SearchSelect'
+import AddContactModal from '../../components/accounting/AddContactModal'
+import JalaliDateInput from '../../components/ui/JalaliDateInput'
+import { jalaliText, jalaliHolidayInfo } from '../../utils/jalali'
+import { UserStamp } from '../../components/ui'
+
+// برچسب سطح مشتری برای نمایش در فرم فاکتور فروش
+const TIER_LABELS = { public: 'مشتری عمومی', partner: 'همکار (بدون سطح)', silver: 'همکار سیلور', gold: 'همکار گلد', platinum: 'همکار پلاتینیوم' }
+const SETTLEMENT_LABELS = { cash: 'نقدی', credit: 'تو حسابی', month1: 'یکماهه' }
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 
 const STATUS_COLORS = { draft:'#888', confirmed:'#555', paid:'#222', cancelled:'#999' }
-const STATUS_LABELS = { draft:'پیش‌نویس', confirmed:'تأیید شده', paid:'تسویه شده', cancelled:'لغو شده' }
+const STATUS_LABELS = { draft:'پیش‌نویس', confirmed:'تأیید شده', paid:'تسویه شده', cancelled:'باطل‌شده' }
 
 const SKINS = [
   { id:'skin1', label:'Yellow Strike', desc:'نوار مورب زرد-مشکی' },
@@ -35,7 +50,7 @@ function getCompanyInfo(settings) {
     phone: saved.phone || settings?.contact_phone || '',
     address: saved.address || settings?.contact_address || '',
     logoUrl: saved.logoUrl || (settings?.site_logo
-      ? (settings.site_logo.startsWith('http') ? settings.site_logo : 'http://localhost:8000' + settings.site_logo)
+      ? mediaUrl(settings.site_logo)
       : ''),
   }
 }
@@ -218,7 +233,7 @@ function buildInvoiceHTML(inv, skinId, company, texts) {
             <div class="inv-area">
               <div class="inv-word">INVOICE</div>
               <div class="inv-num">${inv.invoice_number || ''}</div>
-              <div class="inv-date">${inv.created_at || ''}</div>
+              <div class="inv-date">${inv.issue_date ? jalaliText(inv.issue_date) : formatDate(inv.created_at, { withTime: true })}</div>
               <div style="font-size:10px;color:#888;margin-top:4px">${inv.status_display || ''}</div>
             </div>
           </div>
@@ -235,11 +250,11 @@ function buildInvoiceHTML(inv, skinId, company, texts) {
             <tbody>${rows}</tbody>
           </table>
           <div class="amount-box">
-            <div><div class="amount-label">جمع کل فاکتور</div><div class="amount-cur">تومان</div></div>
+            <div><div class="amount-label">جمع کل فاکتور</div><div class="amount-cur">ریال</div></div>
             <div class="amount-val">${total.toLocaleString()}</div>
           </div>
-          ${paid > 0 ? `<div style="display:flex;justify-content:space-between;font-size:11px;color:#888;padding:6px 0;border-bottom:0.5px solid #eee;margin-top:6px"><span>پرداخت شده:</span><span>${paid.toLocaleString()} تومان</span></div>` : ''}
-          ${remaining > 0 ? `<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:#c41e3a;padding:6px 0;"><span>مانده بدهی:</span><span>${remaining.toLocaleString()} تومان</span></div>` : ''}
+          ${paid > 0 ? `<div style="display:flex;justify-content:space-between;font-size:11px;color:#888;padding:6px 0;border-bottom:0.5px solid #eee;margin-top:6px"><span>پرداخت شده:</span><span>${paid.toLocaleString()} ریال</span></div>` : ''}
+          ${remaining > 0 ? `<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:#c41e3a;padding:6px 0;"><span>مانده بدهی:</span><span>${remaining.toLocaleString()} ریال</span></div>` : ''}
           ${terms}
         </div>
         <div class="ftr"><span>${company.name} | ${company.phone}</span><div class="stamp">${thankYou || 'مهر<br>امضا'}</div><span>${footerNote}</span></div>
@@ -255,7 +270,7 @@ function buildInvoiceHTML(inv, skinId, company, texts) {
             </div>
             <div class="hdr-l"><div class="inv-word">INVOICE</div><div class="inv-num">${inv.invoice_number || ''}</div></div>
           </div>
-          <div class="meta-bar"><span>تاریخ: <span class="hl">${inv.created_at || ''}</span></span><span>وضعیت: <span class="hl">${inv.status_display || ''}</span></span></div>
+          <div class="meta-bar"><span>تاریخ: <span class="hl">${inv.issue_date ? jalaliText(inv.issue_date) : formatDate(inv.created_at, { withTime: true })}</span></span><span>وضعیت: <span class="hl">${inv.status_display || ''}</span></span></div>
         </div>
         <div class="body">
           <div class="info-grid">
@@ -266,9 +281,9 @@ function buildInvoiceHTML(inv, skinId, company, texts) {
             <thead><tr><th>#</th><th>شرح کالا / خدمات</th><th style="text-align:center">تعداد</th><th style="text-align:left">قیمت واحد</th><th style="text-align:left">جمع</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
-          ${paid > 0 ? `<div class="paid-bar"><span>پرداخت شده</span><span>${paid.toLocaleString()} تومان</span></div>` : ''}
-          <div class="total-bar"><span>جمع کل فاکتور</span><span class="hl">${total.toLocaleString()} تومان</span></div>
-          ${remaining > 0 ? `<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:700;color:#c41e3a;padding:8px 14px;border-radius:5px;background:#fff3f3;margin-top:6px"><span>مانده بدهی</span><span>${remaining.toLocaleString()} تومان</span></div>` : ''}
+          ${paid > 0 ? `<div class="paid-bar"><span>پرداخت شده</span><span>${paid.toLocaleString()} ریال</span></div>` : ''}
+          <div class="total-bar"><span>جمع کل فاکتور</span><span class="hl">${total.toLocaleString()} ریال</span></div>
+          ${remaining > 0 ? `<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:700;color:#c41e3a;padding:8px 14px;border-radius:5px;background:#fff3f3;margin-top:6px"><span>مانده بدهی</span><span>${remaining.toLocaleString()} ریال</span></div>` : ''}
           ${thankYou ? `<div class="thank-box">${thankYou}</div>` : ''}
           ${terms}
         </div>
@@ -286,7 +301,7 @@ function buildInvoiceHTML(inv, skinId, company, texts) {
             <div class="inv-box-right">
               <div class="inv-word">INVOICE</div>
               <div class="inv-num">${inv.invoice_number || ''}</div>
-              <div class="inv-meta">${inv.created_at || ''} | ${inv.status_display || ''}</div>
+              <div class="inv-meta">${inv.issue_date ? jalaliText(inv.issue_date) : formatDate(inv.created_at, { withTime: true })} | ${inv.status_display || ''}</div>
             </div>
           </div>
           <div class="bar-gradient"></div>
@@ -311,7 +326,7 @@ function buildInvoiceHTML(inv, skinId, company, texts) {
             <div class="main-tot">
               <div class="main-label">جمع کل</div>
               <div class="main-val">${total.toLocaleString()}</div>
-              <div class="main-cur">تومان</div>
+              <div class="main-cur">ریال</div>
             </div>
           </div>
         </div>
@@ -329,7 +344,7 @@ function buildInvoiceHTML(inv, skinId, company, texts) {
             <div class="inv-panel">
               <div class="inv-word">INVOICE</div>
               <div class="inv-num">${inv.invoice_number || ''}</div>
-              <div class="inv-date">${inv.created_at || ''} | ${inv.status_display || ''}</div>
+              <div class="inv-date">${inv.issue_date ? jalaliText(inv.issue_date) : formatDate(inv.created_at, { withTime: true })} | ${inv.status_display || ''}</div>
             </div>
           </div>
         </div>
@@ -539,7 +554,7 @@ function PrintModal({ inv, onClose, isAdmin }) {
               {company.logoUrl && <img src={company.logoUrl} alt="logo" className="w-10 h-10 object-contain rounded border border-white/20" onError={e => e.target.style.display = 'none'} />}
             </div>
             {settings?.site_logo && (
-              <button onClick={() => setCompany(c => ({ ...c, logoUrl: settings.site_logo.startsWith('http') ? settings.site_logo : 'http://localhost:8000' + settings.site_logo }))}
+              <button onClick={() => setCompany(c => ({ ...c, logoUrl: mediaUrl(settings.site_logo) }))}
                 className="text-xs text-brand mt-1 hover:text-brand/80">← استفاده از لوگوی سایت</button>
             )}
           </div>
@@ -569,9 +584,155 @@ function PrintModal({ inv, onClose, isAdmin }) {
   )
 }
 
+// ─── EditPaymentModal ─────────────────────────────────────────
+function EditPaymentModal({ payment, accounts, onClose, onSaved }) {
+  const { data: full } = useQuery({
+    queryKey: ['sale-payment', payment.id],
+    queryFn: () => api.get(`/accounting/sale-payments/${payment.id}/`).then(r => r.data),
+  })
+  const [form, setForm] = useState({
+    method: payment.method || 'transfer',
+    amount: String(payment.amount ?? ''),
+    date: payment.date || '',
+    reference: payment.reference || '',
+    note: '',
+    to_account_id: '',
+  })
+  const [initialized, setInitialized] = useState(false)
+  const [err, setErr] = useState('')
+
+  if (full && !initialized) {
+    setInitialized(true)
+    setForm({
+      method: full.method || 'transfer',
+      amount: String(full.amount ?? ''),
+      date: full.date || '',
+      reference: full.reference || '',
+      note: full.note || '',
+      to_account_id: full.to_account_id || '',
+    })
+  }
+
+  const saveMut = useMutation({
+    mutationFn: d => api.patch(`/accounting/sale-payments/${payment.id}/`, d).then(r => r.data),
+    onSuccess: () => onSaved?.(),
+    onError: e => setErr(e.response?.data?.error || 'خطا در ویرایش پرداخت'),
+  })
+
+  function save() {
+    if (!form.amount) { setErr('مبلغ الزامی است'); return }
+    saveMut.mutate({
+      to_account_id: form.to_account_id || null,
+      method: form.method,
+      amount: Number(form.amount),
+      date: form.date,
+      reference: form.reference,
+      note: form.note,
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 p-4">
+      <div className="card p-6 w-full max-w-md">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-white">ویرایش پرداخت</h3>
+          <button onClick={onClose} className="text-gray-steel hover:text-white text-2xl">×</button>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label text-xs mb-1 block">روش</label>
+            <select value={form.method} onChange={e => setForm(f => ({ ...f, method: e.target.value }))} className="input text-xs">
+              <option value="cash">نقد</option><option value="transfer">حواله</option><option value="card">کارت</option><option value="online">آنلاین</option><option value="credit">نسیه</option>
+            </select>
+          </div>
+          <div>
+            <label className="label text-xs mb-1 block">مبلغ</label>
+            <AmountInput value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} className="input text-xs" />
+          </div>
+          <div>
+            <label className="label text-xs mb-1 block">حساب</label>
+            <select value={form.to_account_id} onChange={e => setForm(f => ({ ...f, to_account_id: e.target.value }))} className="input text-xs">
+              <option value="">انتخاب...</option>
+              {accounts.filter(a => a.currency === 'IRR').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label text-xs mb-1 block">تاریخ</label>
+            <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} className="input text-xs" />
+          </div>
+          <div className="col-span-2">
+            <label className="label text-xs mb-1 block">پیگیری</label>
+            <input value={form.reference} onChange={e => setForm(f => ({ ...f, reference: e.target.value }))} className="input text-xs" />
+          </div>
+          <div className="col-span-2">
+            <label className="label text-xs mb-1 block">یادداشت</label>
+            <input value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} className="input text-xs" />
+          </div>
+        </div>
+        {err && <div className="text-red-400 text-xs mt-3 bg-red-500/10 rounded-lg px-3 py-2">{err}</div>}
+        <div className="flex gap-3 mt-5">
+          <button onClick={save} disabled={saveMut.isPending} className="btn-primary flex-1 py-2.5 text-sm font-semibold disabled:opacity-50">
+            {saveMut.isPending ? 'در حال ذخیره...' : 'ذخیره تغییرات'}
+          </button>
+          <button onClick={onClose} className="btn-secondary px-6 py-2.5 text-sm">انصراف</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── AccountSmsPicker — ورود دستی یک یا چند حساب برای پیامک اطلاعات حساب ───
+function AccountSmsPicker({ customerName, phone, pending, onSend, onClose }) {
+  const [rows, setRows] = useState([{ account_number: '', holder: '' }])
+  const setRow = (i, k, v) => setRows(rs => rs.map((r, idx) => idx === i ? { ...r, [k]: v } : r))
+  const filled = rows.filter(r => r.account_number.trim())
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="card p-5 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-bold text-white">ارسال پیامک اطلاعات حساب</h3>
+          <button onClick={onClose} className="text-gray-steel hover:text-white text-2xl">×</button>
+        </div>
+        <div className="text-xs text-gray-steel mb-3">
+          گیرنده: <span className="text-white">{customerName || '—'}</span> <span dir="ltr">({phone || 'بدون شماره'})</span>
+        </div>
+        <div className="space-y-2 mb-3 max-h-64 overflow-y-auto">
+          {rows.map((r, i) => (
+            <div key={i} className="bg-white/5 rounded-lg p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <input value={r.account_number} onChange={e => setRow(i, 'account_number', e.target.value)}
+                  placeholder="شماره حساب / کارت" dir="ltr"
+                  className="input-field flex-1 text-sm text-left" />
+                {rows.length > 1 && (
+                  <button onClick={() => setRows(rs => rs.filter((_, idx) => idx !== i))}
+                    className="text-red-400 hover:text-red-300 text-lg px-1" title="حذف">×</button>
+                )}
+              </div>
+              <input value={r.holder} onChange={e => setRow(i, 'holder', e.target.value)}
+                placeholder="نام صاحب حساب"
+                className="input-field w-full text-sm" />
+            </div>
+          ))}
+        </div>
+        <button onClick={() => setRows(rs => [...rs, { account_number: '', holder: '' }])}
+          className="text-xs text-brand hover:text-brand/80 font-semibold mb-4">+ افزودن حساب دیگر</button>
+        <div className="flex gap-2">
+          <button onClick={() => onSend(filled)} disabled={pending || filled.length === 0}
+            className="btn-primary flex-1 py-2.5 text-sm font-semibold disabled:opacity-50">
+            {pending ? 'در حال ارسال...' : `ارسال (${filled.length} پیامک)`}
+          </button>
+          <button onClick={onClose} className="btn-secondary px-6 py-2.5 text-sm">انصراف</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── InvoiceDetail ────────────────────────────────────────────
-function InvoiceDetail({ id, onClose, isAdmin }) {
+function InvoiceDetail({ id, onClose, isAdmin, onEdit }) {
   const qc = useQueryClient()
+  const { can } = usePermissions()
   const [showPrint, setShowPrint] = useState(false)
   const { data: inv, isLoading } = useQuery({
     queryKey: ['sale-invoice', id],
@@ -582,6 +743,7 @@ function InvoiceDetail({ id, onClose, isAdmin }) {
     queryFn: () => api.get('/accounting/accounts/').then(r => r.data),
   })
   const [payForm, setPayForm] = useState({ show: false, method: 'transfer', amount: '', to_account_id: '', date: new Date().toISOString().split('T')[0], reference: '' })
+  const [editPay, setEditPay] = useState(null)
   const [msg, setMsg] = useState(null)
 
   const payMut = useMutation({
@@ -589,10 +751,46 @@ function InvoiceDetail({ id, onClose, isAdmin }) {
     onSuccess: () => { qc.invalidateQueries(['sale-invoice', id]); qc.invalidateQueries(['sale-invoices']); setPayForm(f => ({ ...f, show: false })); setMsg({ type: 'success', text: 'پرداخت ثبت شد' }); setTimeout(() => setMsg(null), 2000) },
     onError: e => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا' }),
   })
+  const delPayMut = useMutation({
+    mutationFn: pid => api.delete(`/accounting/sale-payments/${pid}/`),
+    onSuccess: () => { qc.invalidateQueries(['sale-invoice', id]); qc.invalidateQueries(['sale-invoices']); setMsg({ type: 'success', text: 'پرداخت حذف شد' }); setTimeout(() => setMsg(null), 2000) },
+    onError: e => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا' }),
+  })
   const statusMut = useMutation({
     mutationFn: s => api.patch(`/accounting/sale-invoices/${id}/`, { status: s }).then(r => r.data),
     onSuccess: () => { qc.invalidateQueries(['sale-invoice', id]); qc.invalidateQueries(['sale-invoices']) },
   })
+  // حذف فاکتور — فقط پیش‌نویس (تأییدشده/تسویه‌شده باید ابطال شود)
+  const deleteMut = useMutation({
+    mutationFn: () => api.delete(`/accounting/sale-invoices/${id}/`).then(r => r.data),
+    onSuccess: () => { qc.invalidateQueries(['sale-invoices']); onClose() },
+    onError: e => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا در حذف فاکتور' }),
+  })
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  // ابطال فاکتور تأییدشده/تسویه‌شده — رکورد باقی می‌ماند، موجودی برمی‌گردد
+  const voidMut = useMutation({
+    mutationFn: () => api.post(`/accounting/sale-invoices/${id}/void/`).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries(['sale-invoice', id])
+      qc.invalidateQueries(['sale-invoices'])
+      toast.success('فاکتور باطل شد')
+    },
+    onError: e => toast.error(e.response?.data?.error || 'خطا در ابطال فاکتور'),
+  })
+
+  // ارسال دستی پیامک اطلاعات حساب پرداخت به مشتری (ورود دستی، هر حساب یک پیامک جدا)
+  const [showSmsPicker, setShowSmsPicker] = useState(false)
+  const smsMut = useMutation({
+    mutationFn: accounts => api.post(`/accounting/sale-invoices/${id}/send-account-info/`, { accounts }).then(r => r.data),
+    onSuccess: d => { setShowSmsPicker(false); toast.success(`${d.sent || ''} پیامک اطلاعات حساب ارسال شد`) },
+    onError: e => toast.error(e.response?.data?.error || 'خطا در ارسال پیامک'),
+  })
+
+  function handleVoid() {
+    if (window.confirm(`فاکتور ${inv.invoice_number} باطل شود؟\nموجودی اقلام برگردانده می‌شود و این عمل قابل بازگشت نیست.`)) {
+      voidMut.mutate()
+    }
+  }
 
   if (isLoading) return <div className="text-center py-8 text-gray-steel">در حال بارگذاری...</div>
   if (!inv) return null
@@ -600,22 +798,81 @@ function InvoiceDetail({ id, onClose, isAdmin }) {
   return (
     <div className="space-y-4">
       {showPrint && <PrintModal inv={inv} onClose={() => setShowPrint(false)} isAdmin={isAdmin} />}
+      {showSmsPicker && (
+        <AccountSmsPicker
+          customerName={inv.customer_name}
+          phone={inv.customer_phone}
+          pending={smsMut.isPending}
+          onSend={accs => smsMut.mutate(accs)}
+          onClose={() => setShowSmsPicker(false)}
+        />
+      )}
+      {editPay && (
+        <EditPaymentModal
+          payment={editPay}
+          accounts={accounts}
+          onClose={() => setEditPay(null)}
+          onSaved={() => {
+            qc.invalidateQueries(['sale-invoice', id])
+            qc.invalidateQueries(['sale-invoices'])
+            setEditPay(null)
+            setMsg({ type: 'success', text: 'پرداخت به‌روز شد' })
+            setTimeout(() => setMsg(null), 2000)
+          }}
+        />
+      )}
       <div className="card p-5">
         <div className="flex items-start justify-between mb-4">
           <div>
             <h2 className="font-bold text-white text-xl">{inv.invoice_number}</h2>
-            <div className="text-xs text-gray-steel mt-1">{inv.source_display} | {inv.created_by} | {inv.created_at}</div>
+            <div className="text-xs text-gray-steel mt-1">
+              {inv.source_display} | تاریخ فاکتور: <b className="text-white">{inv.issue_date ? jalaliText(inv.issue_date) : '—'}</b> | ثبت شده توسط {inv.created_by || '—'} در {formatDate(inv.created_at, { withTime: true })}
+              {inv.updated_by && <> | ✏️ ویرایش شده توسط {inv.updated_by} در {formatDate(inv.updated_at, { withTime: true })}</>}
+            </div>
             <div className="text-sm text-white mt-1">{inv.customer_name} | {inv.customer_phone}</div>
             {inv.order_number && <div className="text-xs text-blue-400 mt-0.5">سفارش: {inv.order_number}</div>}
           </div>
           <div className="flex items-center gap-3">
+            {['draft', 'confirmed'].includes(inv.status) && can('sale_edit') && (
+              <button onClick={onEdit} className="btn-secondary text-xs px-4 py-2 font-semibold">✏️ ویرایش فاکتور</button>
+            )}
+            {can('sale_edit') && inv.status === 'draft' && (
+              confirmDelete ? (
+                <span className="flex items-center gap-2">
+                  <span className="text-[10px] text-red-400">فاکتور پیش‌نویس حذف شود؟</span>
+                  <button onClick={() => deleteMut.mutate()} disabled={deleteMut.isPending}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-red-500/20 text-red-400 border border-red-500/40 disabled:opacity-50">
+                    {deleteMut.isPending ? '...' : 'بله، حذف'}
+                  </button>
+                  <button onClick={() => setConfirmDelete(false)} className="text-xs text-gray-steel hover:text-white">خیر</button>
+                </span>
+              ) : (
+                <button onClick={() => setConfirmDelete(true)}
+                  className="text-xs px-3 py-2 rounded-lg text-red-400 border border-red-500/30 hover:bg-red-500/10 transition-colors font-semibold">
+                  🗑 حذف
+                </button>
+              )
+            )}
+            {can('sale_edit') && ['confirmed', 'paid'].includes(inv.status) && (
+              <button onClick={handleVoid} disabled={voidMut.isPending}
+                className="text-xs px-3 py-2 rounded-lg text-red-400 border border-red-500/30 hover:bg-red-500/10 transition-colors font-semibold disabled:opacity-50">
+                {voidMut.isPending ? '...' : '⛔ ابطال فاکتور'}
+              </button>
+            )}
             <button onClick={() => setShowPrint(true)} className="btn-primary text-xs px-4 py-2 font-semibold">🖨️ چاپ / PDF</button>
+            {can('sale_view') && ['confirmed', 'paid'].includes(inv.status) && (
+              <button onClick={() => setShowSmsPicker(true)}
+                title="ارسال پیامک مبلغ + شماره حساب به مشتری"
+                className="text-xs px-3 py-2 rounded-lg text-brand border border-brand/40 hover:bg-brand/10 transition-colors font-semibold">
+                💬 پیامک حساب
+              </button>
+            )}
             <span style={{ color: STATUS_COLORS[inv.status], background: STATUS_COLORS[inv.status] + '20', padding: '4px 12px', borderRadius: 20, fontSize: 12 }}>{inv.status_display}</span>
             <button onClick={onClose} className="text-gray-steel hover:text-white">✕</button>
           </div>
         </div>
         <div className="grid grid-cols-5 gap-3">
-          {[{ label:'جمع کل', value:fmt(inv.subtotal)+' ت', color:'#fff' },{ label:'تخفیف', value:fmt(inv.discount_amount)+' ت', color:'#FF9500' },{ label:'مبلغ نهایی', value:fmt(inv.total_amount)+' ت', color:'#0066FF' },{ label:'پرداخت شده', value:fmt(inv.paid_amount)+' ت', color:'#00C896' },{ label:'مانده', value:fmt(inv.remaining_amount)+' ت', color:inv.remaining_amount>0?'#FF3B3B':'#00C896' }].map(item => (
+          {[{ label:'جمع کل', value:fmt(inv.subtotal)+' ریال', color:'var(--color-text-primary)' },{ label:'تخفیف', value:fmt(inv.discount_amount)+' ریال', color:'#FF9500' },{ label:'مبلغ نهایی', value:fmt(inv.total_amount)+' ریال', color:'#0066FF' },{ label:'پرداخت شده', value:fmt(inv.paid_amount)+' ریال', color:'#00C896' },{ label:'مانده', value:fmt(inv.remaining_amount)+' ریال', color:inv.remaining_amount>0?'#FF3B3B':'#00C896' }].map(item => (
             <div key={item.label} className="bg-white/5 rounded-lg p-3 text-center">
               <div className="text-[10px] text-gray-steel mb-1">{item.label}</div>
               <div className="text-sm font-bold" style={{ color: item.color }}>{item.value}</div>
@@ -623,18 +880,20 @@ function InvoiceDetail({ id, onClose, isAdmin }) {
           ))}
         </div>
         <div className="mt-3 flex gap-4 text-xs">
-          <span className="text-gray-steel">بهای تمام شده: <span className="text-white">{fmt(inv.total_cost)} ت</span></span>
-          <span className="text-gray-steel">سود: <span className={inv.gross_profit >= 0 ? 'text-green-400' : 'text-red-400'}>{fmt(inv.gross_profit)} ت</span></span>
+          <span className="text-gray-steel">بهای تمام شده: <span className="text-white">{fmt(inv.total_cost)} ریال</span></span>
+          <span className="text-gray-steel">سود: <span className={inv.gross_profit >= 0 ? 'text-green-400' : 'text-red-400'}>{fmt(inv.gross_profit)} ریال</span></span>
         </div>
-        <div className="flex gap-2 mt-4">
-          {['draft','confirmed','paid','cancelled'].map(s => (
-            <button key={s} onClick={() => statusMut.mutate(s)} disabled={inv.status === s}
-              style={{ borderColor: inv.status===s ? STATUS_COLORS[s] : 'transparent', color: STATUS_COLORS[s] }}
-              className="text-xs px-3 py-1.5 rounded-lg border-2 bg-white/5 disabled:opacity-100 hover:bg-white/10 transition-all">
-              {STATUS_LABELS[s]}
-            </button>
-          ))}
-        </div>
+        {can('sale_edit') && (
+          <div className="flex gap-2 mt-4">
+            {['draft','confirmed','paid','cancelled'].map(s => (
+              <button key={s} onClick={() => statusMut.mutate(s)} disabled={inv.status === s}
+                style={{ borderColor: inv.status===s ? STATUS_COLORS[s] : 'transparent', color: STATUS_COLORS[s] }}
+                className="text-xs px-3 py-1.5 rounded-lg border-2 bg-white/5 disabled:opacity-100 hover:bg-white/10 transition-all">
+                {STATUS_LABELS[s]}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="card p-5">
@@ -669,7 +928,7 @@ function InvoiceDetail({ id, onClose, isAdmin }) {
       <div className="card p-5">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-white">پرداخت‌ها</h3>
-          {inv.remaining_amount > 0 && <button onClick={() => setPayForm(f => ({ ...f, show: true }))} className="text-xs text-brand hover:text-brand/80">+ ثبت پرداخت</button>}
+          {inv.remaining_amount > 0 && can('sale_payment') && <button onClick={() => setPayForm(f => ({ ...f, show: true }))} className="text-xs text-brand hover:text-brand/80">+ ثبت پرداخت</button>}
         </div>
         {payForm.show && (
           <div className="bg-white/5 rounded-xl p-4 mb-4 space-y-3">
@@ -678,7 +937,7 @@ function InvoiceDetail({ id, onClose, isAdmin }) {
                 <select value={payForm.method} onChange={e => setPayForm(f => ({ ...f, method: e.target.value }))} className="input text-xs">
                   <option value="cash">نقد</option><option value="transfer">حواله</option><option value="card">کارت</option><option value="online">آنلاین</option><option value="credit">نسیه</option>
                 </select></div>
-              <div><label className="label text-xs mb-1 block">مبلغ</label><input type="number" value={payForm.amount} onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))} className="input text-xs" /></div>
+              <div><label className="label text-xs mb-1 block">مبلغ</label><AmountInput value={payForm.amount} onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))} className="input text-xs" /></div>
               <div><label className="label text-xs mb-1 block">حساب</label>
                 <select value={payForm.to_account_id} onChange={e => setPayForm(f => ({ ...f, to_account_id: e.target.value }))} className="input text-xs">
                   <option value="">انتخاب...</option>{accounts.filter(a => a.currency === 'IRR').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
@@ -693,12 +952,23 @@ function InvoiceDetail({ id, onClose, isAdmin }) {
             </div>
           </div>
         )}
+        {msg && !payForm.show && <div className={`mb-3 text-xs rounded-lg px-3 py-2 ${msg.type==='success'?'bg-green-500/20 text-green-400':'bg-red-500/20 text-red-400'}`}>{msg.text}</div>}
         {(inv.payments||[]).length === 0 ? <div className="text-center py-4 text-gray-steel text-xs">پرداختی ثبت نشده</div> : (
           <div className="space-y-2">
             {inv.payments.map(p => (
               <div key={p.id} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
-                <div><div className="text-xs text-white">{p.method_display}{p.to_account?' → '+p.to_account:''}</div><div className="text-[10px] text-gray-steel">{p.date}{p.reference?' | '+p.reference:''} | {p.created_by}</div></div>
-                <div className="text-sm font-bold text-green-400">{fmt(p.amount)} ت</div>
+                <div><div className="text-xs text-white">{p.method_display}{p.to_account?' → '+p.to_account:''}</div><div className="text-[10px] text-gray-steel">{formatDate(p.date)}{p.reference?' | '+p.reference:''} | {p.created_by}</div></div>
+                <div className="flex items-center gap-3">
+                  <div className="text-sm font-bold text-green-400">{fmt(p.amount)} ریال</div>
+                  {can('sale_edit') && (
+                    <>
+                      <button onClick={() => setEditPay(p)} className="text-[11px] text-brand hover:text-brand/80">ویرایش</button>
+                      <button onClick={() => { if (window.confirm('این پرداخت حذف شود؟')) delPayMut.mutate(p.id) }}
+                        disabled={delPayMut.isPending}
+                        className="text-[11px] text-red-400 hover:text-red-300 disabled:opacity-50">حذف</button>
+                    </>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -708,201 +978,485 @@ function InvoiceDetail({ id, onClose, isAdmin }) {
   )
 }
 
-// ─── QuickAddCustomer ─────────────────────────────────────────
-function QuickAddCustomer({ onClose, onCreated }) {
-  const [form, setForm] = useState({
-    name: '', phone: '', email: '', address: '',
-    company_name: '', national_id: '', contact_type: 'customer', notes: ''
+// ─── فیلد قیمت فروش با راهنمای آخرین فروش (قیمت + نحوه تسویه + تاریخ) ──
+function SalePriceField({ value, onChange, onEnter, customerId, variantId, disabled, className = 'input text-xs' }) {
+  const { data: last } = useQuery({
+    queryKey: ['sale-last-price', customerId, variantId],
+    queryFn: () => api.get('/accounting/sale-invoices/last-price/', {
+      params: { customer_id: customerId, variant_id: variantId },
+    }).then(r => r.data),
+    enabled: !!customerId && !!variantId,
   })
-  const [loading, setLoading] = useState(false)
-  const [err, setErr] = useState('')
-  const qc = useQueryClient()
-
-  async function save() {
-    if (!form.name.trim()) { setErr('نام الزامی است'); return }
-    setLoading(true)
-    try {
-      const res = await api.post('/accounting/contacts/', form)
-      qc.invalidateQueries(['customer-search', ''])
-      onCreated({ id: res.data.id, name: res.data.name, phone: res.data.phone || '' })
-    } catch(e) { setErr(e.response?.data?.error || 'خطا در ثبت') }
-    setLoading(false)
-  }
-
-  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
-
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 p-4">
-      <div className="card p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-5">
-          <div>
-            <h3 className="font-bold text-white">مشتری جدید</h3>
-            <p className="text-xs text-gray-steel mt-0.5">اطلاعات مشتری را وارد کنید</p>
-          </div>
-          <button onClick={onClose} className="text-gray-steel hover:text-white text-2xl">×</button>
+    <div>
+      <AmountInput value={value} onChange={onChange} disabled={disabled}
+        placeholder={last?.found ? String(last.unit_price) : '0'}
+        className={className} data-flow="si"
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onEnter ? onEnter(e) : advanceFlow('si', e.target) } }} />
+      {last?.found && (
+        <div className="text-[10px] text-gold mt-1 font-bold">
+          آخرین فروش: {Number(last.unit_price).toLocaleString('fa-IR')} ریال — {last.settlement_display} — {formatDate(last.date)}
         </div>
-
-        <div className="space-y-3">
-          {/* نوع */}
-          <div>
-            <label className="label text-xs mb-1 block">نوع طرف حساب</label>
-            <div className="grid grid-cols-3 gap-2">
-              {[['customer','مشتری'],['supplier','تامین‌کننده'],['other','سایر']].map(([val, lbl]) => (
-                <button key={val} type="button"
-                  onClick={() => setForm(f => ({ ...f, contact_type: val }))}
-                  className={`py-2 rounded-lg text-xs font-semibold transition-all ${form.contact_type === val ? 'bg-brand text-white' : 'bg-white/5 text-gray-steel hover:bg-white/10'}`}>
-                  {lbl}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* نام */}
-          <div>
-            <label className="label text-xs mb-1 block">نام و نام خانوادگی *</label>
-            <input value={form.name} onChange={set('name')}
-              className="input text-sm" placeholder="نام کامل" autoFocus />
-          </div>
-
-          {/* شرکت */}
-          <div>
-            <label className="label text-xs mb-1 block">نام شرکت / مجموعه</label>
-            <input value={form.company_name} onChange={set('company_name')}
-              className="input text-sm" placeholder="اختیاری" />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            {/* تلفن */}
-            <div>
-              <label className="label text-xs mb-1 block">تلفن / موبایل</label>
-              <input value={form.phone} onChange={set('phone')}
-                className="input text-sm" dir="ltr" placeholder="09..." />
-            </div>
-            {/* ایمیل */}
-            <div>
-              <label className="label text-xs mb-1 block">ایمیل</label>
-              <input value={form.email} onChange={set('email')}
-                className="input text-sm" dir="ltr" placeholder="example@mail.com" />
-            </div>
-          </div>
-
-          {/* کد ملی / شناسه */}
-          <div>
-            <label className="label text-xs mb-1 block">کد ملی / شناسه ملی</label>
-            <input value={form.national_id} onChange={set('national_id')}
-              className="input text-sm" dir="ltr" placeholder="اختیاری" />
-          </div>
-
-          {/* آدرس */}
-          <div>
-            <label className="label text-xs mb-1 block">آدرس</label>
-            <textarea value={form.address} onChange={set('address')}
-              className="input text-sm" rows={2} placeholder="آدرس کامل (اختیاری)" />
-          </div>
-
-          {/* یادداشت */}
-          <div>
-            <label className="label text-xs mb-1 block">یادداشت</label>
-            <input value={form.notes} onChange={set('notes')}
-              className="input text-sm" placeholder="توضیحات اضافه (اختیاری)" />
-          </div>
-        </div>
-
-        {err && <div className="text-red-400 text-xs mt-3 bg-red-500/10 rounded-lg px-3 py-2">{err}</div>}
-
-        <div className="flex gap-3 mt-5">
-          <button onClick={save} disabled={loading}
-            className="btn-primary flex-1 py-2.5 text-sm font-semibold disabled:opacity-50">
-            {loading ? 'در حال ثبت...' : '✓ ثبت مشتری'}
-          </button>
-          <button onClick={onClose} className="btn-secondary px-6 py-2.5 text-sm">انصراف</button>
-        </div>
-      </div>
+      )}
     </div>
   )
 }
 
-
-function NewInvoiceForm({ onClose, onSuccess, prefillOrder }) {
+function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
+  const { creatableContactTypes } = usePermissions()
+  const canCreateContact = creatableContactTypes === null || creatableContactTypes.length > 0
   const { data: variants = [] } = useQuery({ queryKey:['variants-list'], queryFn:()=>api.get('/catalog/variants/').then(r=>r.data) })
   const qc = useQueryClient()
+  const { data: editInv, isLoading: editLoading } = useQuery({ queryKey:['sale-invoice',editing], queryFn:()=>api.get(`/accounting/sale-invoices/${editing}/`).then(r=>r.data), enabled:!!editing })
   const [customerSearch, setCustomerSearch] = useState('')
+  const [custIdx, setCustIdx] = useState(-1)   // ناوبری کیبوردی دراپ‌داون مشتری
   const [customer, setCustomer] = useState(prefillOrder?{id:prefillOrder.customer_id,name:prefillOrder.customer_name,phone:prefillOrder.customer_phone}:null)
+  const [custHdr, setCustHdr] = useState({ customer_name:'', customer_phone:'' })
   const [showCustomerDrop, setShowCustomerDrop] = useState(false)
   const [showQuickAdd, setShowQuickAdd] = useState(false)
-  const { data: customers = [] } = useQuery({ queryKey:['customer-search',customerSearch], queryFn:()=>api.get('/accounting/customers/search/',{params:{q:customerSearch}}).then(r=>r.data), enabled:customerSearch.length>=2 })
+  const [pendingContact, setPendingContact] = useState(null)  // طرف حساب بدون موبایل معتبر — فرم تکمیلی
+  const [pendingPhone, setPendingPhone] = useState('')
+  const { data: customers = [] } = useQuery({ queryKey:['customer-search',customerSearch], queryFn:()=>api.get('/accounting/customer-search/',{params:{q:customerSearch}}).then(r=>r.data), enabled:!editing&&customerSearch.length>=2 })
   const [items, setItems] = useState(prefillOrder?.items?.map(i=>({variant_id:String(i.variant_id),quantity:String(i.quantity),unit_price:String(i.unit_price),discount_percent:'0'}))||[{variant_id:'',quantity:'',unit_price:'',discount_percent:'0'}])
   const [hdr, setHdr] = useState({discount_amount:'0',shipping_cost:'0',tax_amount:'0',note:'',status:'confirmed',order_id:prefillOrder?.id||'',source:prefillOrder?'order':'manual'})
+  const [initialized, setInitialized] = useState(false)
   const [msg, setMsg] = useState(null)
+  // فروش داخلی/خارجی + نحوه تسویه + موعد
+  const [settlement, setSettlement] = useState('cash')
+  const [dueDate, setDueDate] = useState('')
+  const [issueDate, setIssueDate] = useState('')  // تاریخ صدور فاکتور — خالی یعنی امروز
+  const [dueDays, setDueDays] = useState('')
+
+  // نرخ یوان مرجع روز — تبدیل قیمت فروش خارجی به یوان
+  const { data: rateData } = useQuery({
+    queryKey: ['exchange-rate'],
+    queryFn: () => api.get('/catalog/exchange-rate/').then(r => r.data),
+    staleTime: 60000,
+  })
+  const dayRate = Number(rateData?.rate_cny_to_irt || 0)
+
+  // موعد تسویه با «چند روز» — تاریخ = تاریخ صدور فاکتور + N روز (بدون تاریخ صدور = امروز)
+  useEffect(() => {
+    const n = Number(dueDays)
+    if (n > 0) {
+      const d = issueDate ? new Date(issueDate + 'T00:00:00') : new Date()
+      d.setDate(d.getDate() + n)
+      setDueDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
+    }
+  }, [dueDays, issueDate])
+
+  // سطح مشتری و کلید ستون قیمت — قیمت کالا بر اساس همین انتخاب می‌شود
+  const tier = customer?.tier || 'public'
+  const priceKey = tier === 'platinum' ? settlement
+    : tier === 'silver' ? 'month1'
+    : tier === 'gold' ? 'credit'
+    : 'retail'
+
+  // با انتخاب مشتری، نحوه تسویه پیش‌فرض بر اساس سطحش (فروش خارجی همیشه انتخابی است)
+  useEffect(() => {
+    if (!customer) return
+    setSettlement(
+      tier === 'silver' ? 'month1'
+      : tier === 'gold' ? 'credit'
+      : tier === 'platinum' ? 'credit'
+      : 'cash'
+    )
+  }, [customer?.id])
+
+  // قیمت فرمول واریانت‌ها برای همین مشتری
+  const { data: variantsPricing = [] } = useQuery({
+    queryKey: ['variants-pricing', customer?.id],
+    queryFn: () => api.get('/catalog/variants/', { params: { for_user: customer.id } }).then(r => r.data),
+    enabled: !!customer && !editing,
+  })
+  const variantById = Object.fromEntries(variantsPricing.map(v => [String(v.id), v]))
+  const priceDefault = (v) => {
+    const p = v?.pricing
+    if (!p) return ''
+    if (p.tier === 'platinum' && p.options) return p.options[priceKey] ?? p.price
+    return p.price
+  }
+
+  // پیش‌پر کردن فرم در حالت ویرایش
+  if (editing && editInv && !initialized) {
+    setInitialized(true)
+    setCustHdr({ customer_name: editInv.customer_name || '', customer_phone: editInv.customer_phone || '' })
+    setIssueDate(editInv.issue_date || '')
+    setItems(editInv.items?.length ? editInv.items.map(i => ({
+      variant_id: String(i.variant_id),
+      quantity: String(i.quantity),
+      unit_price: String(i.unit_price),
+      discount_percent: String(i.discount_percent ?? '0'),
+    })) : [{ variant_id:'', quantity:'', unit_price:'', discount_percent:'0' }])
+    setHdr(h => ({
+      ...h,
+      discount_amount: String(editInv.discount_amount ?? '0'),
+      shipping_cost: String(editInv.shipping_cost ?? '0'),
+      tax_amount: String(editInv.tax_amount ?? '0'),
+      note: editInv.note || '',
+    }))
+  }
+
+  // آیتم‌ها فقط برای فاکتورهای دستی قابل ویرایش‌اند
+  const itemsEditable = !editing || editInv?.source === 'manual'
+
   const createMut = useMutation({
     mutationFn:d=>api.post('/accounting/sale-invoices/',d).then(r=>r.data),
     onSuccess:data=>{setMsg({type:'success',text:`فاکتور ${data.invoice_number} صادر شد`});qc.invalidateQueries(['sale-invoices']);qc.invalidateQueries(['pending-orders']);setTimeout(()=>onSuccess?.(data.id),1500)},
     onError:e=>setMsg({type:'error',text:e.response?.data?.error||'خطا'}),
   })
+  const editMut = useMutation({
+    mutationFn:d=>api.patch(`/accounting/sale-invoices/${editing}/`,d).then(r=>r.data),
+    onSuccess:()=>{setMsg({type:'success',text:'تغییرات فاکتور ذخیره شد'});qc.invalidateQueries(['sale-invoices']);qc.invalidateQueries(['sale-invoice',editing]);setTimeout(()=>onSuccess?.(),800)},
+    onError:e=>setMsg({type:'error',text:e.response?.data?.error||'خطا'}),
+  })
   const calcSubtotal=()=>items.reduce((s,it)=>s+Math.round((Number(it.quantity)||0)*(Number(it.unit_price)||0)*(1-(Number(it.discount_percent)||0)/100)),0)
   const total=calcSubtotal()-Number(hdr.discount_amount||0)+Number(hdr.shipping_cost||0)+Number(hdr.tax_amount||0)
   function handleSubmit(){
+    if (editing) {
+      if(!custHdr.customer_name)return setMsg({type:'error',text:'نام مشتری الزامی است'})
+      const payload = {
+        customer_name: custHdr.customer_name,
+        customer_phone: custHdr.customer_phone,
+        discount_amount: Number(hdr.discount_amount||0),
+        shipping_cost: Number(hdr.shipping_cost||0),
+        tax_amount: Number(hdr.tax_amount||0),
+        note: hdr.note,
+        issue_date: issueDate || null,
+      }
+      if (itemsEditable) {
+        if(items.some(it=>!it.variant_id||!it.quantity||!it.unit_price))return setMsg({type:'error',text:'اطلاعات اقلام را کامل کنید'})
+        payload.items = items.map(it=>({variant_id:it.variant_id,quantity:Number(it.quantity),unit_price:Number(it.unit_price),discount_percent:Number(it.discount_percent||0)}))
+      }
+      editMut.mutate(payload)
+      return
+    }
     if(!customer)return setMsg({type:'error',text:'مشتری را انتخاب کنید'})
-    if(items.some(it=>!it.variant_id||!it.quantity||!it.unit_price))return setMsg({type:'error',text:'اطلاعات اقلام را کامل کنید'})
-    createMut.mutate({customer_id:customer.id,customer_name:customer.name,customer_phone:customer.phone||'',...hdr,items:items.map(it=>({...it,quantity:Number(it.quantity),unit_price:Number(it.unit_price),discount_percent:Number(it.discount_percent)}))})
+    if(settlement==='credit'&&!dueDate)return setMsg({type:'error',text:'موعد تسویه را برای فاکتور تو حسابی وارد کنید'})
+    // ردیف‌های کاملاً خالی (مثل ردیف خودکار Enter) نادیده گرفته می‌شوند
+    const filled = items.filter(it=>it.variant_id||it.quantity||it.unit_price)
+    if(!filled.length)return setMsg({type:'error',text:'حداقل یک قلم کالا وارد کنید'})
+    if(filled.some(it=>!it.variant_id||!it.quantity||!it.unit_price))return setMsg({type:'error',text:'اطلاعات اقلام را کامل کنید'})
+    createMut.mutate({customer_id:customer.id,customer_name:customer.name,customer_phone:customer.phone||'',...hdr,
+      sale_type:'domestic',currency:'IRR',settlement,due_date:dueDate||null,issue_date:issueDate||null,
+      items:filled.map(it=>({...it,quantity:Number(it.quantity),unit_price:Number(it.unit_price),discount_percent:Number(it.discount_percent)}))})
   }
+  if (editing && editLoading) return <div className="text-center py-8 text-gray-steel">در حال بارگذاری...</div>
   return (
     <div className="space-y-4">
-      {showQuickAdd&&<QuickAddCustomer onClose={()=>setShowQuickAdd(false)} onCreated={c=>{setCustomer(c);setCustomerSearch(c.name);setShowQuickAdd(false)}} />}
+      {showQuickAdd&&<AddContactModal forInvoice creatableTypes={creatableContactTypes} onClose={()=>setShowQuickAdd(false)} onCreated={c=>{setCustomer(c);setCustomerSearch(c.name);setShowQuickAdd(false)}} />}
       <div className="card p-5">
-        <h3 className="text-sm font-semibold text-white mb-4">اطلاعات مشتری</h3>
+        <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+          <h3 className="text-sm font-semibold text-white">اطلاعات مشتری</h3>
+          {/* تاریخ صدور فاکتور — سمت چپ کارت؛ خالی یعنی امروز */}
+          <div className="w-full sm:w-72">
+            <label className="label text-xs mb-1 block">📅 تاریخ فاکتور <span className="text-gray-steel font-normal">(خالی = امروز)</span></label>
+            <JalaliDateInput value={issueDate} onChange={setIssueDate} />
+          </div>
+        </div>
+        {editing ? (
+          <div className="grid grid-cols-2 gap-3 max-w-lg">
+            <div>
+              <label className="label text-xs mb-1 block">نام مشتری *</label>
+              <input value={custHdr.customer_name} onChange={e=>setCustHdr(c=>({...c,customer_name:e.target.value}))} className="input text-sm" />
+            </div>
+            <div>
+              <label className="label text-xs mb-1 block">تلفن</label>
+              <input value={custHdr.customer_phone} onChange={e=>setCustHdr(c=>({...c,customer_phone:e.target.value}))} className="input text-sm" dir="ltr" />
+            </div>
+          </div>
+        ) : (
         <div className="relative max-w-sm">
           <div className="flex items-center justify-between mb-1">
             <label className="label text-xs">جستجوی مشتری *</label>
-            <button type="button" onClick={()=>setShowQuickAdd(true)} className="text-xs text-brand hover:text-brand/80 font-semibold">+ مشتری جدید</button>
+            {canCreateContact && <button type="button" onClick={()=>setShowQuickAdd(true)} className="text-xs text-brand hover:text-brand/80 font-semibold">+ طرف حساب جدید</button>}
           </div>
-          <input value={customerSearch} onChange={e=>{setCustomerSearch(e.target.value);setShowCustomerDrop(true)}} onFocus={()=>setShowCustomerDrop(true)} placeholder="نام یا شماره موبایل..." className="input text-sm" />
+          <div className="relative">
+            <input value={customerSearch}
+              onChange={e=>{
+                setCustomerSearch(e.target.value)
+                setShowCustomerDrop(true)
+                setCustIdx(0)
+                // وقتی کاربر شروع به تایپ می‌کند یعنی می‌خواهد مشتری دیگری — انتخاب قبلی پاک می‌شود
+                if (customer) setCustomer(null)
+              }}
+              onFocus={e=>{ setShowCustomerDrop(true); if (customer) e.target.select() }}
+              placeholder="نام یا شماره موبایل (فارسی/انگلیسی)..." className="input text-sm"
+              style={customer ? { paddingLeft: '2rem' } : undefined}
+              data-flow="si"
+              onKeyDown={e=>{
+                if(e.key==='ArrowDown'){e.preventDefault();setCustIdx(i=>Math.min(i+1,customers.length-1))}
+                else if(e.key==='ArrowUp'){e.preventDefault();setCustIdx(i=>Math.max(i-1,0))}
+                else if(e.key==='Enter'){
+                  e.preventDefault()
+                  const c = custIdx>=0 && customers[custIdx] ? customers[custIdx] : customers[0]
+                  if (c) document.getElementById(`cust-opt-${c.id}`)?.click()
+                  else advanceFlow('si', e.target)
+                }
+                else if(e.key==='Escape'){setShowCustomerDrop(false)}
+              }} />
+            {/* پاک کردن سریع انتخاب — داخل خود باکس */}
+            {customer && (
+              <button type="button" title="پاک کردن انتخاب"
+                onClick={()=>{
+                  setCustomer(null); setCustomerSearch(''); setDueDate(''); setDueDays('')
+                  setTimeout(() => document.querySelector('input[data-flow="si"]')?.focus(), 0)
+                }}
+                className="absolute left-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-red-500/20 text-red-400 hover:bg-red-500/40 text-xs flex items-center justify-center">
+                ✕
+              </button>
+            )}
+          </div>
           {showCustomerDrop&&customers.length>0&&(
             <div className="absolute z-50 top-full right-0 left-0 mt-1 bg-navy border border-white/10 rounded-xl shadow-xl overflow-hidden">
-              {customers.map(c=>(<button key={c.id} className="w-full text-right px-4 py-3 hover:bg-white/5 border-b border-white/5 last:border-0" onClick={()=>{setCustomer(c);setCustomerSearch(c.name);setShowCustomerDrop(false)}}><div className="text-sm text-white">{c.name}</div><div className="text-xs text-gray-steel">{c.phone}</div></button>))}
+              {customers.map((c, ci)=>(<button key={c.id} id={`cust-opt-${c.id}`}
+                className={`w-full text-right px-4 py-3 border-b border-white/5 last:border-0 ${ci===custIdx?'bg-brand/20':'hover:bg-white/5'}`}
+                onMouseEnter={()=>setCustIdx(ci)}
+                onClick={async ()=>{
+                  if (c.is_contact) {
+                    // طرف حساب دستی — اگر موبایل معتبر ندارد، اول موبایل می‌پرسیم
+                    if (!/^09\d{9}$/.test(c.phone || '')) {
+                      setPendingContact(c)
+                      setPendingPhone('')
+                      setShowCustomerDrop(false)
+                      return
+                    }
+                    try {
+                      const r = await api.post('/accounting/customers/', { name: c.name, phone: c.phone, contact_id: c.id }).then(r => r.data)
+                      setCustomer({ id: r.id, name: r.name, phone: r.phone, tier: r.tier || 'public' })
+                    } catch (e) {
+                      setMsg({ type: 'error', text: e.response?.data?.error || 'خطا در ثبت مشتری' })
+                      setShowCustomerDrop(false)
+                      return
+                    }
+                  } else setCustomer(c)
+                  setCustomerSearch(c.name)
+                  setShowCustomerDrop(false)
+                }}>
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-white">{c.name}{c.is_contact && <span className="text-[9px] text-gray-steel mr-1">(طرف حساب)</span>}</div>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.tier==='public'?'bg-white/10 text-gray-steel':'bg-brand/20 text-brand'}`}>{TIER_LABELS[c.tier]||c.tier}</span>
+                </div>
+                <div className="text-xs text-gray-steel" dir="ltr">{c.phone}</div></button>))}
             </div>
           )}
           {showCustomerDrop&&<div className="fixed inset-0 z-40" onClick={()=>setShowCustomerDrop(false)} />}
-          {customer&&<div className="text-xs text-green-400 mt-1">✓ {customer.name} | {customer.phone}</div>}
+          {/* فرم تکمیلی — طرف حساب بدون موبایل: اول موبایل گرفته می‌شود بعد مشتری ثبت می‌شود */}
+          {pendingContact && !customer && (
+            <div className="mt-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3">
+              <div className="text-xs text-yellow-400 font-bold mb-2">📱 برای ثبت «{pendingContact.name}» موبایل لازم است</div>
+              <div className="flex gap-2">
+                <input value={pendingPhone} onChange={e=>setPendingPhone(e.target.value.replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))}
+                  placeholder="09123456789" dir="ltr" className="input text-sm flex-1" maxLength={11} />
+                <button type="button"
+                  onClick={async ()=>{
+                    if (!/^09\d{9}$/.test(pendingPhone)) return setMsg({type:'error',text:'شماره موبایل معتبر نیست (مثال: 09123456789)'})
+                    try {
+                      const r = await api.post('/accounting/customers/', { name: pendingContact.name, phone: pendingPhone, contact_id: pendingContact.id }).then(r => r.data)
+                      setCustomer({ id: r.id, name: r.name, phone: r.phone, tier: r.tier || 'public' })
+                      setCustomerSearch(pendingContact.name)
+                      setPendingContact(null)
+                    } catch (e) { setMsg({ type: 'error', text: e.response?.data?.error || 'خطا در ثبت مشتری' }) }
+                  }}
+                  className="btn-primary text-xs px-4">ثبت و انتخاب</button>
+                <button type="button" onClick={()=>setPendingContact(null)} className="btn-secondary text-xs px-3">انصراف</button>
+              </div>
+            </div>
+          )}
+          {customer&&(
+            <div className="flex items-center gap-2 mt-1">
+              <div className="text-xs text-green-400">✓ {customer.name} | {customer.phone} — <b>{TIER_LABELS[tier]}</b></div>
+              <button type="button"
+                onClick={()=>{ setCustomer(null); setCustomerSearch(''); setDueDate(''); setDueDays('') }}
+                className="text-[10px] text-gray-steel hover:text-red-400 transition-colors">
+                ✕ تغییر مشتری
+              </button>
+            </div>
+          )}
         </div>
+        )}
+
+        {/* نحوه تسویه — فقط پلاتینیوم انتخاب می‌کند؛ برای بقیه سطوح خودکار تعیین می‌شود
+            و نمایش داده نمی‌شود (ستون قیمتِ سطح مشتری لو نمی‌رود). موعد تسویه فقط برای credit لازم است. */}
+        {customer && !editing && (tier === 'platinum' || settlement === 'credit') && (
+          <div className="mt-4 pt-4 border-t border-white/10">
+            {tier === 'platinum' && (
+              <>
+                <label className="label text-xs mb-2 block">نحوه تسویه *</label>
+                <div className="flex gap-2 flex-wrap">
+                  {['credit','cash','month1'].map(k => (
+                    <button key={k} type="button" onClick={()=>setSettlement(k)}
+                      className={`text-xs px-4 py-2 rounded-xl border transition-all ${settlement===k?'border-brand bg-brand/10 text-brand':'border-white/10 text-gray-steel hover:border-brand/50'}`}>
+                      {SETTLEMENT_LABELS[k]}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            {/* موعد تسویه — فقط تو حسابی */}
+            {settlement==='credit' && (
+              <div className="mt-3 max-w-md">
+                <div className="grid grid-cols-2 gap-3 items-end mb-3">
+                  <div>
+                    <label className="label text-xs mb-1 block">تسویه چند روزه؟</label>
+                    <AmountInput value={dueDays} onChange={e=>setDueDays(e.target.value)} className="input text-sm" placeholder="مثلاً ۳۰"
+                      id="due-days-input"
+                      data-flow="si"
+                      onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();advanceFlow('si',e.target)}}} />
+                  </div>
+                  {dueDate && (
+                    <div className="text-xs pb-2">
+                      📅 موعد: <b className="text-white">{jalaliText(dueDate)}</b>
+                      {jalaliHolidayInfo(dueDate) && (
+                        <div className="text-red-400 font-bold mt-0.5">⚠️ این روز {jalaliHolidayInfo(dueDate)} است!</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <label className="label text-xs mb-1 block">📅 یا انتخاب مستقیم از تقویم:</label>
+                <JalaliDateInput value={dueDate} onChange={(iso) => {
+                  setDueDate(iso)
+                  // بعد از انتخاب تاریخ ← پرش به باکس کالا
+                  if (iso) advanceFlow('si', document.getElementById('due-days-input')
+                    || document.querySelector('input[data-flow="si"]'))
+                }} />
+              </div>
+            )}
+          </div>
+        )}
       </div>
+      {/* گیت مراحل — تا مشتری مشخص نشود اقلام نمایش داده نمی‌شود (ستون قیمت به نوع مشتری بستگی دارد) */}
+      {!customer && !editing ? (
+        <div className="card p-8 text-center">
+          <div className="text-3xl mb-2">👤</div>
+          <div className="text-sm text-gray-steel">اول مشتری را انتخاب کنید تا اقلام فاکتور فعال شوند</div>
+        </div>
+      ) : (
       <div className="card p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-white">اقلام فاکتور</h3>
-          <button onClick={()=>setItems(i=>[...i,{variant_id:'',quantity:'',unit_price:'',discount_percent:'0'}])} className="text-xs text-brand">+ افزودن کالا</button>
+          {itemsEditable&&<button onClick={()=>setItems(i=>[...i,{variant_id:'',quantity:'',unit_price:'',discount_percent:'0'}])} className="text-xs text-brand">+ افزودن کالا</button>}
         </div>
+        {!itemsEditable&&(
+          <div className="text-[11px] text-yellow-400 bg-yellow-500/10 rounded-lg px-3 py-2 mb-3">
+            آیتم‌ها فقط برای فاکتورهای دستی قابل ویرایش هستند
+          </div>
+        )}
         <div className="space-y-3">
           {items.map((item,idx)=>(
             <div key={idx} className="bg-white/5 rounded-xl p-3">
               <div className="grid grid-cols-5 gap-3">
-                <div className="col-span-2"><label className="label text-[10px] mb-1 block">کالا *</label><select value={item.variant_id} onChange={e=>setItems(i=>i.map((it,j)=>j===idx?{...it,variant_id:e.target.value}:it))} className="input text-xs"><option value="">انتخاب...</option>{variants.map(v=><option key={v.id} value={v.id}>{v.product_name} [{v.sku}]</option>)}</select></div>
-                <div><label className="label text-[10px] mb-1 block">تعداد *</label><input type="number" value={item.quantity} onChange={e=>setItems(i=>i.map((it,j)=>j===idx?{...it,quantity:e.target.value}:it))} className="input text-xs" /></div>
-                <div><label className="label text-[10px] mb-1 block">قیمت واحد *</label><input type="number" value={item.unit_price} onChange={e=>setItems(i=>i.map((it,j)=>j===idx?{...it,unit_price:e.target.value}:it))} className="input text-xs" /></div>
-                <div><label className="label text-[10px] mb-1 block">تخفیف %</label><input type="number" min="0" max="100" value={item.discount_percent} onChange={e=>setItems(i=>i.map((it,j)=>j===idx?{...it,discount_percent:e.target.value}:it))} className="input text-xs" /></div>
+                <div className="col-span-2"><label className="label text-[10px] mb-1 block">کالا *</label>{itemsEditable?(
+                  <SearchSelect
+                    options={(editing ? variants : variantsPricing).map(v => ({ value: v.id, label: v.product_name,
+                      sub: (
+                        <span dir="rtl" className="inline-flex flex-wrap items-center gap-1.5">
+                          <span dir="ltr" className="text-gray-steel">{v.sku}</span>
+                          <span className={`font-bold ${Number(v.stock_quantity || 0) > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            موجودی: {Number(v.stock_quantity || 0).toLocaleString('fa-IR')}
+                          </span>
+                          {(v.stocks || []).map(s => (
+                            <span key={s.warehouse} className="bg-white/10 rounded px-1.5 py-0.5 text-[9px]">
+                              {s.warehouse}: <b>{Number(s.quantity).toLocaleString('fa-IR')}</b>
+                            </span>
+                          ))}
+                        </span>
+                      ),
+                    }))}
+                    value={item.variant_id}
+                    onChange={val => setItems(i => i.map((it,j) => j===idx
+                      ? { ...it, variant_id: val, unit_price: String(priceDefault(variantById[String(val)]) || it.unit_price) }
+                      : it))}
+                    placeholder="جستجوی کالا (نام یا کد)..."
+                    className="input text-xs" flow="si"
+                  />
+                ):(<div className="text-xs text-white py-2">{variants.find(v=>String(v.id)===String(item.variant_id))?.product_name||`#${item.variant_id}`}<span className="text-gray-steel"> [{variants.find(v=>String(v.id)===String(item.variant_id))?.sku||''}]</span></div>)}</div>
+                <div><label className="label text-[10px] mb-1 block">تعداد *</label><AmountInput value={item.quantity} data-flow="si"
+                  onChange={e=>setItems(i=>i.map((it,j)=>j===idx?{...it,quantity:e.target.value}:it))}
+                  onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();advanceFlow('si',e.target)}}}
+                  className="input text-xs" disabled={!itemsEditable} /></div>
+                <div><label className="label text-[10px] mb-1 block">قیمت واحد *</label>
+                  {itemsEditable ? (
+                    <SalePriceField value={item.unit_price}
+                      onChange={e=>setItems(i=>i.map((it,j)=>j===idx?{...it,unit_price:e.target.value}:it))}
+                      onEnter={(e)=>{
+                        if (idx === items.length - 1) {
+                          setItems(i=>[...i,{variant_id:'',quantity:'',unit_price:'',discount_percent:'0'}])
+                          setTimeout(()=>advanceFlow('si',e.target),60)
+                        } else advanceFlow('si',e.target)
+                      }}
+                      customerId={customer?.id} variantId={item.variant_id} />
+                  ) : (
+                    <AmountInput value={item.unit_price} className="input text-xs" disabled />
+                  )}
+                </div>
+                <div><label className="label text-[10px] mb-1 block">تخفیف %</label><AmountInput value={item.discount_percent} onChange={e=>setItems(i=>i.map((it,j)=>j===idx?{...it,discount_percent:e.target.value}:it))} className="input text-xs" disabled={!itemsEditable} /></div>
               </div>
               <div className="flex items-center justify-between mt-2">
-                <div className="text-xs text-gray-steel">جمع: <span className="text-white font-bold">{fmt(Math.round((Number(item.quantity)||0)*(Number(item.unit_price)||0)*(1-(Number(item.discount_percent)||0)/100)))}</span> ت</div>
-                {items.length>1&&<button onClick={()=>setItems(i=>i.filter((_,j)=>j!==idx))} className="text-xs text-red-400">× حذف</button>}
+                <div className="text-xs text-gray-steel">جمع: <span className="text-white font-bold">{fmt(Math.round((Number(item.quantity)||0)*(Number(item.unit_price)||0)*(1-(Number(item.discount_percent)||0)/100)))}</span> ریال</div>
+                {itemsEditable&&items.length>1&&<button onClick={()=>setItems(i=>i.filter((_,j)=>j!==idx))} className="text-xs text-red-400">× حذف</button>}
               </div>
             </div>
           ))}
         </div>
       </div>
+      )}
       <div className="card p-5">
         <h3 className="text-sm font-semibold text-white mb-4">تخفیف و هزینه‌های اضافی</h3>
         <div className="grid grid-cols-4 gap-4">
-          <div><label className="label text-xs mb-1 block">تخفیف کل</label><input type="number" value={hdr.discount_amount} onChange={e=>setHdr(h=>({...h,discount_amount:e.target.value}))} className="input text-sm" /></div>
-          <div><label className="label text-xs mb-1 block">هزینه ارسال</label><input type="number" value={hdr.shipping_cost} onChange={e=>setHdr(h=>({...h,shipping_cost:e.target.value}))} className="input text-sm" /></div>
-          <div><label className="label text-xs mb-1 block">مالیات</label><input type="number" value={hdr.tax_amount} onChange={e=>setHdr(h=>({...h,tax_amount:e.target.value}))} className="input text-sm" /></div>
-          <div><label className="label text-xs mb-1 block">وضعیت</label><select value={hdr.status} onChange={e=>setHdr(h=>({...h,status:e.target.value}))} className="input text-sm"><option value="draft">پیش‌نویس</option><option value="confirmed">تأیید شده</option></select></div>
+          <div><label className="label text-xs mb-1 block">تخفیف کل</label><AmountInput value={hdr.discount_amount} onChange={e=>setHdr(h=>({...h,discount_amount:e.target.value}))} className="input text-sm" /></div>
+          <div><label className="label text-xs mb-1 block">هزینه ارسال</label><AmountInput value={hdr.shipping_cost} onChange={e=>setHdr(h=>({...h,shipping_cost:e.target.value}))} className="input text-sm" /></div>
+          <div><label className="label text-xs mb-1 block">مالیات</label><AmountInput value={hdr.tax_amount} onChange={e=>setHdr(h=>({...h,tax_amount:e.target.value}))} className="input text-sm" /></div>
+          {!editing&&<div><label className="label text-xs mb-1 block">وضعیت</label><select value={hdr.status} onChange={e=>setHdr(h=>({...h,status:e.target.value}))} className="input text-sm"><option value="draft">پیش‌نویس</option><option value="confirmed">تأیید شده</option></select></div>}
         </div>
         <div className="mt-3"><label className="label text-xs mb-1 block">توضیحات</label><input value={hdr.note} onChange={e=>setHdr(h=>({...h,note:e.target.value}))} className="input text-sm" /></div>
         <div className="mt-4 text-left"><div className="text-xs text-gray-steel">مبلغ نهایی:</div><div className="text-2xl font-bold text-brand">{fmt(total)} ریال</div></div>
       </div>
       {msg&&<div className={`rounded-lg px-4 py-3 text-sm ${msg.type==='success'?'bg-green-500/20 text-green-400':'bg-red-500/20 text-red-400'}`}>{msg.text}</div>}
       <div className="flex gap-3">
-        <button onClick={handleSubmit} disabled={createMut.isPending} className="btn-primary flex-1 py-3 disabled:opacity-50">{createMut.isPending?'در حال صدور...':'صدور فاکتور'}</button>
+        <button onClick={handleSubmit} disabled={createMut.isPending||editMut.isPending} className="btn-primary flex-1 py-3 disabled:opacity-50">{createMut.isPending||editMut.isPending?(editing?'در حال ذخیره...':'در حال صدور...'):editing?'ذخیره تغییرات فاکتور':'صدور فاکتور'}</button>
         <button onClick={onClose} className="btn-secondary px-6 py-3">انصراف</button>
+      </div>
+    </div>
+  )
+}
+
+// ─── کارت گزارش کانال فروش — سهم فروش حضوری در برابر سایت ─────
+function SalesChannelCard() {
+  const { data } = useQuery({
+    queryKey: ['sales-channels'],
+    queryFn: () => api.get('/accounting/reports/sales-channels/').then(r => r.data),
+    staleTime: 60000,
+  })
+  if (!data || !data.total_count) return null
+  const manual = data.channels.find(c => c.key === 'manual') || {}
+  const online = data.channels.find(c => c.key === 'order') || {}
+  return (
+    <div className="card p-4 mb-4">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-xs font-bold text-white">کانال فروش</span>
+        <span className="text-[10px] text-gray-steel">{Number(data.total_count).toLocaleString('fa-IR')} فاکتور تأییدشده</span>
+      </div>
+      {/* نوار دوتکه — سهم مبلغی هر کانال */}
+      <div className="flex h-2 rounded-full overflow-hidden bg-white/5 mb-3">
+        <div style={{ width: `${manual.amount_percent || 0}%`, background: '#FBC02D' }} />
+        <div style={{ width: `${online.amount_percent || 0}%`, background: '#0066FF' }} />
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: '#FBC02D' }} />
+          <div>
+            <div className="text-gray-steel">فروش حضوری</div>
+            <div className="text-white font-bold">{fmt(manual.total_irr)} ریال <span className="text-brand">({Number(manual.amount_percent || 0).toLocaleString('fa-IR')}٪)</span></div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: '#0066FF' }} />
+          <div>
+            <div className="text-gray-steel">فروش سایت</div>
+            <div className="text-white font-bold">{fmt(online.total_irr)} ریال <span className="text-brand">({Number(online.amount_percent || 0).toLocaleString('fa-IR')}٪)</span></div>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -914,11 +1468,21 @@ export default function SaleInvoicePage() {
   const [selectedId, setSelectedId] = useState(null)
   const [prefillOrder, setPrefillOrder] = useState(null)
   const [tab, setTab] = useState('invoices')
+  const { can } = usePermissions()
 
   const { data: me } = useQuery({ queryKey:['me'], queryFn:()=>api.get('/users/me/').then(r=>r.data), staleTime:60000 })
   const isAdmin = me?.is_staff || false
 
-  const { data: invoices=[], isLoading } = useQuery({ queryKey:['sale-invoices'], queryFn:()=>api.get('/accounting/sale-invoices/').then(r=>r.data), enabled:view==='list' })
+  // فیلتر سررسید تسویه — لینک از بج منو با ?due=1
+  const [searchParams] = useSearchParams()
+  const [dueOnly, setDueOnly] = useState(searchParams.get('due') === '1')
+  const { data: badges } = useQuery({ queryKey:['admin-badges'], queryFn:()=>api.get('/users/admin-badges/').then(r=>r.data), staleTime:15000, refetchInterval:30000 })
+
+  const { data: invoices=[], isLoading } = useQuery({
+    queryKey:['sale-invoices', dueOnly],
+    queryFn:()=>api.get('/accounting/sale-invoices/', { params: dueOnly ? { due: '1' } : {} }).then(r=>r.data),
+    enabled:view==='list',
+  })
   const { data: pendingOrders=[] } = useQuery({ queryKey:['pending-orders'], queryFn:()=>api.get('/accounting/pending-orders/').then(r=>r.data), enabled:view==='list' })
 
   return (
@@ -926,13 +1490,22 @@ export default function SaleInvoicePage() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           {view!=='list'&&<button onClick={()=>{setView('list');setPrefillOrder(null)}} className="text-gray-steel hover:text-white text-sm">← برگشت</button>}
-          <h1 className="font-display font-bold text-2xl text-white">{view==='list'?'فاکتورهای فروش':view==='new'?'فاکتور جدید':'جزئیات فاکتور'}</h1>
+          <h1 className="font-display font-bold text-2xl text-white">{view==='list'?'فاکتورهای فروش':view==='new'?'فاکتور جدید':view==='edit'?'ویرایش فاکتور':'جزئیات فاکتور'}</h1>
         </div>
-        {view==='list'&&<button onClick={()=>setView('new')} className="btn-primary text-sm px-4 py-2">+ فاکتور جدید</button>}
+        {view==='list'&&can('sale_create')&&<button onClick={()=>setView('new')} className="btn-primary text-sm px-4 py-2">+ فاکتور جدید</button>}
       </div>
 
       {view==='list'&&(
         <>
+          <SalesChannelCard />
+          {/* هشدار سررسید تسویه فاکتورهای تو حسابی */}
+          {badges?.sales_due > 0 && (
+            <button onClick={()=>setDueOnly(d=>!d)}
+              className={`w-full text-right rounded-xl border p-3 mb-4 text-xs transition-all ${dueOnly ? 'border-red-400 bg-red-500/20 text-red-300' : 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20'}`}>
+              ⚠️ <b>{Number(badges.sales_due).toLocaleString('fa-IR')}</b> فاکتور تو حسابی به موعد تسویه رسیده است
+              {dueOnly ? ' — نمایش فیلترشده ✓ (برای نمایش همه کلیک کنید)' : ' — برای رسیدگی کلیک کنید'}
+            </button>
+          )}
           <div className="flex gap-2 mb-4 border-b border-white/10">
             {[['invoices',`فاکتورها (${invoices.length})`],['pending',`سفارشات در انتظار (${pendingOrders.filter(o=>!o.has_invoice).length})`]].map(([k,v])=>(
               <button key={k} onClick={()=>setTab(k)} className={`text-sm px-5 py-2.5 rounded-t-lg border-b-2 transition-all ${tab===k?'border-brand text-white bg-brand/10':'border-transparent text-gray-steel hover:text-white'}`}>{v}</button>
@@ -941,21 +1514,24 @@ export default function SaleInvoicePage() {
           {tab==='invoices'&&(
             <div className="card p-5">
               {isLoading?<div className="text-center py-8 text-gray-steel">در حال بارگذاری...</div>:invoices.length===0?(
-                <div className="text-center py-12"><div className="text-4xl mb-3">🧾</div><div className="text-gray-steel text-sm mb-4">هنوز فاکتوری صادر نشده</div><button onClick={()=>setView('new')} className="btn-primary text-sm px-6 py-2">+ صدور اولین فاکتور</button></div>
+                <div className="text-center py-12"><div className="text-4xl mb-3">🧾</div><div className="text-gray-steel text-sm mb-4">هنوز فاکتوری صادر نشده</div>{can('sale_create')&&<button onClick={()=>setView('new')} className="btn-primary text-sm px-6 py-2">+ صدور اولین فاکتور</button>}</div>
               ):(
                 <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
-                  <thead><tr style={{borderBottom:'0.5px solid rgba(255,255,255,0.1)'}}>{['شماره فاکتور','مشتری','تاریخ','وضعیت','مبلغ نهایی','پرداخت شده','مانده','سود',''].map(h=><th key={h} style={{padding:'8px 12px',textAlign:'right',color:'var(--color-text-secondary)',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>)}</tr></thead>
+                  <thead><tr style={{borderBottom:'0.5px solid rgba(255,255,255,0.1)'}}>{['شماره فاکتور','مشتری','تاریخ','وضعیت','مبلغ نهایی','پرداخت شده','مانده','سود','ثبت‌کننده',''].map(h=><th key={h} style={{padding:'8px 12px',textAlign:'right',color:'var(--color-text-secondary)',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>)}</tr></thead>
                   <tbody>
                     {invoices.map((inv,i)=>(
                       <tr key={inv.id} style={{borderBottom:'0.5px solid rgba(255,255,255,0.05)',background:i%2?'rgba(255,255,255,0.02)':'transparent'}}>
                         <td style={{padding:'10px 12px',fontWeight:600,color:'#0066FF'}}>{inv.invoice_number}</td>
                         <td style={{padding:'10px 12px'}}><div>{inv.customer_name}</div><div style={{fontSize:11,color:'var(--color-text-secondary)'}}>{inv.customer_phone}</div></td>
-                        <td style={{padding:'10px 12px',color:'var(--color-text-secondary)',fontSize:11}}>{inv.created_at}</td>
+                        <td style={{padding:'10px 12px',color:'var(--color-text-secondary)',fontSize:11}}>{inv.issue_date ? jalaliText(inv.issue_date) : formatDate(inv.created_at, { withTime: true })}</td>
                         <td style={{padding:'10px 12px'}}><span style={{color:STATUS_COLORS[inv.status],background:STATUS_COLORS[inv.status]+'20',padding:'2px 8px',borderRadius:20,fontSize:11}}>{inv.status_display}</span></td>
-                        <td style={{padding:'10px 12px',fontWeight:600}}>{fmt(inv.total_amount)} ت</td>
-                        <td style={{padding:'10px 12px',color:'#00C896'}}>{fmt(inv.paid_amount)} ت</td>
-                        <td style={{padding:'10px 12px',color:inv.remaining_amount>0?'#FF3B3B':'#00C896',fontWeight:inv.remaining_amount>0?700:400}}>{inv.remaining_amount>0?fmt(inv.remaining_amount)+' ت':'✓ تسویه'}</td>
-                        <td style={{padding:'10px 12px',color:inv.gross_profit>=0?'#00C896':'#FF3B3B'}}>{fmt(inv.gross_profit)} ت</td>
+                        <td style={{padding:'10px 12px',fontWeight:600}}>{fmt(inv.total_amount)} ریال</td>
+                        <td style={{padding:'10px 12px',color:'#00C896'}}>{fmt(inv.paid_amount)} ریال</td>
+                        <td style={{padding:'10px 12px',color:inv.remaining_amount>0?'#FF3B3B':'#00C896',fontWeight:inv.remaining_amount>0?700:400}}>{inv.remaining_amount>0?fmt(inv.remaining_amount)+' ریال':'✓ تسویه'}</td>
+                        <td style={{padding:'10px 12px',color:inv.gross_profit>=0?'#00C896':'#FF3B3B'}}>{fmt(inv.gross_profit)} ریال</td>
+                        <td style={{padding:'10px 12px',whiteSpace:'nowrap'}}>
+                          <UserStamp createdBy={inv.created_by} updatedBy={inv.updated_by} createdAt={inv.created_at} updatedAt={inv.updated_at} />
+                        </td>
                         <td style={{padding:'10px 12px'}}><button onClick={()=>{setSelectedId(inv.id);setView('detail')}} className="text-xs text-brand hover:text-brand/80">مشاهده</button></td>
                       </tr>
                     ))}
@@ -971,7 +1547,7 @@ export default function SaleInvoicePage() {
                 <div key={order.id} className="card p-4">
                   <div className="flex items-start justify-between">
                     <div><div className="flex items-center gap-3"><span className="font-bold text-white text-sm">{order.order_number}</span><span style={{color:'#FF9500',background:'#FF950020',padding:'2px 8px',borderRadius:20,fontSize:11}}>{order.status_display}</span></div><div className="text-xs text-gray-steel mt-1">{order.customer_name} | {order.customer_phone}</div></div>
-                    <div className="text-left"><div className="text-sm font-bold text-white">{fmt(order.total_amount)} ت</div><button onClick={()=>{setPrefillOrder(order);setView('new')}} className="btn-primary text-xs px-4 py-2 mt-2">صدور فاکتور</button></div>
+                    <div className="text-left"><div className="text-sm font-bold text-white">{fmt(order.total_amount)} ریال</div>{can('sale_create')&&<button onClick={()=>{setPrefillOrder(order);setView('new')}} className="btn-primary text-xs px-4 py-2 mt-2">صدور فاکتور</button>}</div>
                   </div>
                 </div>
               ))}
@@ -981,7 +1557,8 @@ export default function SaleInvoicePage() {
       )}
 
       {view==='new'&&<NewInvoiceForm onClose={()=>{setView('list');setPrefillOrder(null)}} onSuccess={newId=>{setPrefillOrder(null);if(newId){setSelectedId(newId);setView('detail')}else setView('list')}} prefillOrder={prefillOrder} />}
-      {view==='detail'&&selectedId&&<InvoiceDetail id={selectedId} onClose={()=>setView('list')} isAdmin={isAdmin} />}
+      {view==='edit'&&selectedId&&<NewInvoiceForm editing={selectedId} onClose={()=>setView('detail')} onSuccess={()=>setView('detail')} />}
+      {view==='detail'&&selectedId&&<InvoiceDetail id={selectedId} onClose={()=>setView('list')} isAdmin={isAdmin} onEdit={()=>setView('edit')} />}
     </div>
   )
 }

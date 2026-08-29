@@ -25,7 +25,7 @@ class VideoAdmin(admin.ModelAdmin):
 
 @admin.register(Article)
 class ArticleAdmin(admin.ModelAdmin):
-    list_display   = ['title', 'category', 'author', 'views_count', 'is_published', 'created_at']
+    list_display   = ['title', 'category', 'author', 'views_count', 'is_published', 'publish_at', 'created_at']
     list_filter    = ['category', 'is_published']
     list_editable  = ['is_published']
     search_fields  = ['title', 'description', 'content']
@@ -34,5 +34,5 @@ class ArticleAdmin(admin.ModelAdmin):
     fieldsets = (
         ('اطلاعات اصلی', {'fields': ('title', 'slug', 'description', 'category', 'author')}),
         ('محتوا', {'fields': ('content', 'thumbnail')}),
-        ('متادیتا', {'fields': ('tags', 'is_published', 'related_products')}),
+        ('انتشار', {'fields': ('tags', 'is_published', 'publish_at', 'related_products')}),
     )

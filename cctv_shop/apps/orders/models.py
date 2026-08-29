@@ -23,14 +23,45 @@ from django.db import models
 from django.utils import timezone
 from datetime import timedelta
 
-from apps.core.models import TimeStampedModel
+from apps.core.models import TimeStampedModel, AuditMixin
 
 
 def generate_order_number():
-    """ORD-YYYYMMDD-XXXX  (human-readable, near-unique)."""
-    today = timezone.now().strftime("%Y%m%d")
-    short = uuid.uuid4().hex[:6].upper()
-    return f"ORD-{today}-{short}"
+    """OR-1000، OR-1001، ... — شماره ساده و ترتیبی."""
+    last = (
+        Order.objects.filter(order_number__regex=r"^OR-\d+$")
+        .order_by("-id")
+        .values_list("order_number", flat=True)
+        .first()
+    )
+    try:
+        n = int(last.split("-")[1]) + 1 if last else 1000
+    except (ValueError, IndexError, AttributeError):
+        n = 1000
+    return f"OR-{n}"
+
+
+class Settlement(models.TextChoices):
+    """نحوه تسویه — مشترک بین سفارش و تک‌تک اقلام آن."""
+    CASH   = "cash",   "نقدی"
+    CREDIT = "credit", "تو حسابی"
+    MONTH1 = "month1", "یکماهه"
+    MONTH2 = "month2", "دوماهه"
+
+
+# فاصله موعد تسویه (روز) از تاریخ ثبت برای هر نوع
+SETTLEMENT_DUE_DAYS = {
+    Settlement.CASH: 0,
+    Settlement.CREDIT: 18,
+    Settlement.MONTH1: 30,
+    Settlement.MONTH2: 60,
+}
+
+
+def settlement_due_for(settlement_type, from_date=None):
+    """موعد تسویه پیش‌فرض برای یک نوع تسویه از تاریخ مشخص (پیش‌فرض: امروز)."""
+    base = from_date or timezone.now().date()
+    return base + timedelta(days=SETTLEMENT_DUE_DAYS.get(settlement_type, 0))
 
 
 # ─── Cart (سبد خرید عمومی) ────────────────────────────────────────────────────
@@ -77,21 +108,43 @@ class CartItem(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="cart_items",
         verbose_name="نسخه محصول",
+        null=True, blank=True,
+    )
+    package = models.ForeignKey(
+        "catalog.Package",
+        on_delete=models.CASCADE,
+        related_name="cart_items",
+        null=True, blank=True,
+        verbose_name="پکیج",
+        help_text="اگر پر باشد این آیتم یک پکیج است و variant خالی می‌ماند",
     )
     quantity = models.PositiveSmallIntegerField(default=1, verbose_name="تعداد")
+    settlement_type = models.CharField(
+        max_length=10, choices=Settlement.choices,
+        default=Settlement.CASH, verbose_name="نحوه تسویه",
+    )
 
     class Meta:
         db_table = "orders_cart_item"
         verbose_name = "آیتم سبد خرید"
         verbose_name_plural = "آیتم‌های سبد خرید"
-        unique_together = [["cart", "variant"]]
+        unique_together = [["cart", "variant", "settlement_type"]]
 
     def __str__(self):
         return f"{self.quantity}× {self.variant}"
 
     @property
+    def unit_price(self) -> int:
+        # آیتم پکیج: قیمت بسته برای همین کاربر (ریال، تخفیف‌دار) — یکسان با قیمت نمایشی صفحه پکیج
+        if self.package_id:
+            _, final = self.package.prices_for(self.cart.user)
+            return final
+        from apps.catalog.pricing import price_for_settlement
+        return price_for_settlement(self.variant, self.cart.user, self.settlement_type)
+
+    @property
     def subtotal(self) -> int:
-        return self.variant.final_price * self.quantity
+        return self.unit_price * self.quantity
 
 
 # ─── InquiryCart (سبد استعلام همکار) ─────────────────────────────────────────
@@ -125,12 +178,16 @@ class InquiryCartItem(TimeStampedModel):
         verbose_name="نسخه محصول",
     )
     quantity = models.PositiveSmallIntegerField(default=1, verbose_name="تعداد")
+    settlement_type = models.CharField(
+        max_length=10, choices=Settlement.choices,
+        default=Settlement.CASH, verbose_name="نحوه تسویه",
+    )
 
     class Meta:
         db_table = "orders_inquiry_cart_item"
         verbose_name = "آیتم سبد استعلام"
         verbose_name_plural = "آیتم‌های سبد استعلام"
-        unique_together = [["cart", "variant"]]
+        unique_together = [["cart", "variant", "settlement_type"]]
 
     def __str__(self):
         return f"{self.quantity}× {self.variant}"
@@ -138,7 +195,7 @@ class InquiryCartItem(TimeStampedModel):
 
 # ─── Order ────────────────────────────────────────────────────────────────────
 
-class Order(TimeStampedModel):
+class Order(TimeStampedModel, AuditMixin):
     """
     One order per checkout.
 
@@ -159,9 +216,11 @@ class Order(TimeStampedModel):
         PENDING = "pending", "در انتظار بررسی"
         CONFIRMED = "confirmed", "تأیید شده توسط ادمین"
         AWAITING_PAYMENT = "awaiting_payment", "در انتظار پرداخت"
+        READY_TO_SHIP = "ready_to_ship", "منتظر ارسال"
         PAID = "paid", "پرداخت شده"
         CANCELLED = "cancelled", "لغو شده"
         REFUNDED = "refunded", "مسترد شده"
+        REJECTED = "rejected", "رد شده"
 
     # ── Identity ─────────────────────────────────────────────────────
     order_number = models.CharField(
@@ -175,6 +234,13 @@ class Order(TimeStampedModel):
         on_delete=models.PROTECT,
         related_name="orders",
         verbose_name="کاربر",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="created_orders",
+        verbose_name="ثبت‌کننده",
     )
 
     # ── Type & Status ─────────────────────────────────────────────────
@@ -205,6 +271,16 @@ class Order(TimeStampedModel):
     )
 
     # ── Payment ───────────────────────────────────────────────────────
+    Settlement = Settlement  # دسترسی سازگار: Order.Settlement
+
+    settlement_type = models.CharField(
+        max_length=10, choices=Settlement.choices,
+        default=Settlement.CASH, verbose_name="نحوه تسویه",
+    )
+    settlement_due_date = models.DateField(
+        null=True, blank=True, verbose_name="موعد تسویه",
+        help_text="سررسید تسویه — در این تاریخ به مشتری و کاربران هشدار داده می‌شود",
+    )
     payment_link = models.URLField(
         blank=True,
         verbose_name="لینک پرداخت",
@@ -236,6 +312,12 @@ class Order(TimeStampedModel):
         max_length=50, blank=True, default="",
         verbose_name="روش پرداخت",
         choices=[("cash","نقد"),("transfer","کارت به کارت"),("online","آنلاین"),("check","چک")],
+    )
+    sarraf_account_number = models.CharField(
+        max_length=50, blank=True, default="", verbose_name="شماره حساب/کارت صراف"
+    )
+    sarraf_account_holder = models.CharField(
+        max_length=200, blank=True, default="", verbose_name="نام صراف / صاحب حساب"
     )
     customer_notes = models.TextField(blank=True, verbose_name="یادداشت مشتری")
     admin_notes = models.TextField(blank=True, verbose_name="یادداشت ادمین")
@@ -275,6 +357,10 @@ class Order(TimeStampedModel):
     )
     status_updated_at = models.DateTimeField(null=True, blank=True, verbose_name='تاریخ آخرین تغییر وضعیت')
 
+    # ── رد پیش‌فاکتور ─────────────────────────────────────────────
+    reject_reason = models.TextField(blank=True, verbose_name="دلیل رد")
+    rejected_at = models.DateTimeField(null=True, blank=True, verbose_name="تاریخ رد")
+
     class Meta:
         db_table = "orders_order"
         verbose_name = "سفارش"
@@ -307,6 +393,16 @@ class Order(TimeStampedModel):
         if self.payment_deadline is None:
             return False
         return timezone.now() > self.payment_deadline and self.status == self.Status.AWAITING_PAYMENT
+
+    @property
+    def is_settlement_due(self) -> bool:
+        """موعد تسویه رسیده (سطح سفارش یا هر یک از اقلام) و سفارش هنوز تسویه/لغو نشده."""
+        if self.status in (self.Status.PAID, self.Status.CANCELLED, self.Status.REFUNDED, self.Status.REJECTED):
+            return False
+        today = timezone.now().date()
+        if self.settlement_due_date and self.settlement_due_date <= today:
+            return True
+        return self.items.filter(settlement_due_date__lte=today).exists()
 
     @property
     def effective_amount(self) -> int:
@@ -349,6 +445,15 @@ class OrderItem(TimeStampedModel):
         verbose_name="رزرو تا",
     )
 
+    # تسویه per-item — هر قلم می‌تواند نحوه تسویه و موعد خودش را داشته باشد
+    settlement_type = models.CharField(
+        max_length=10, choices=Settlement.choices,
+        default=Settlement.CASH, verbose_name="نحوه تسویه",
+    )
+    settlement_due_date = models.DateField(
+        null=True, blank=True, verbose_name="موعد تسویه",
+    )
+
     class Meta:
         db_table = "orders_order_item"
         verbose_name = "آیتم سفارش"
@@ -361,6 +466,14 @@ class OrderItem(TimeStampedModel):
     def subtotal(self) -> int:
         price = self.confirmed_unit_price or self.unit_price
         return price * self.quantity
+
+    @property
+    def is_settlement_due(self) -> bool:
+        if not self.settlement_due_date:
+            return False
+        if self.order.status in (Order.Status.PAID, Order.Status.CANCELLED, Order.Status.REFUNDED, Order.Status.REJECTED):
+            return False
+        return self.settlement_due_date <= timezone.now().date()
 
 
 # ─── StockReservation ─────────────────────────────────────────────────────────
@@ -527,3 +640,69 @@ class ChinaOrderRequest(models.Model):
 
     def __str__(self):
         return f"{self.name} | {self.product_name} × {self.quantity}"
+
+
+# ─── StockShortage ────────────────────────────────────────────────────────────
+
+class StockShortage(TimeStampedModel, AuditMixin):
+    """
+    مازاد تقاضا — وقتی مشتری تعدادی می‌خواهد اما موجودی کافی تأیید نمی‌شود.
+    shortage_qty = requested_qty - approved_qty
+    """
+
+    class Reason(models.TextChoices):
+        STOCK = "stock", "عدم موجودی"
+        OTHER = "other", "سایر"
+
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="stock_shortages",
+        verbose_name="سفارش",
+    )
+    variant = models.ForeignKey(
+        "catalog.ProductVariant",
+        on_delete=models.PROTECT,
+        related_name="stock_shortages",
+        verbose_name="نسخه محصول",
+    )
+    requested_qty = models.PositiveIntegerField(verbose_name="تعداد درخواستی")
+    approved_qty = models.PositiveIntegerField(verbose_name="تعداد تأییدشده")
+    shortage_qty = models.PositiveIntegerField(verbose_name="مازاد تقاضا")
+    reason = models.CharField(
+        max_length=20,
+        choices=Reason.choices,
+        default=Reason.STOCK,
+        verbose_name="دلیل",
+    )
+    created_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recorded_stock_shortages",
+        verbose_name="ثبت‌کننده",
+    )
+    updated_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="edited_stock_shortages",
+        verbose_name="آخرین ویرایش‌کننده",
+    )
+
+    class Meta:
+        db_table = "orders_stock_shortage"
+        verbose_name = "مازاد تقاضا"
+        verbose_name_plural = "مازادهای تقاضا"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["variant", "created_at"], name="idx_shortage_variant_created"),
+        ]
+
+    def __str__(self):
+        order_no = self.order.order_number if self.order else "بدون سفارش"
+        return f"مازاد تقاضا {self.shortage_qty}× {self.variant} — {order_no}"

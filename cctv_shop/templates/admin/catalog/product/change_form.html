@@ -11,6 +11,47 @@
     };
     var specTitles = Object.values(map);
 
+    // ── پیش‌فرض قسمت ثابت نام محصول بر اساس دسته‌بندی (قابل ویرایش است) ──
+    var NAME_PREFIX = {
+        '1':  'برد دوربین مداربسته ',
+        '10': 'برد دوربین مداربسته AHD پنج مگاپیکسل ',
+        '11': 'برد دوربین مداربسته IP پنج مگاپیکسل ',
+        '9':  'برد دستگاه ضبط تصاویر ',
+        '12': 'برد دستگاه DVR مدل ',
+        '13': 'برد دستگاه NVR مدل ',
+        '2':  'لنز دوربین مداربسته ',
+        '19': 'لنز و هولدر پنج مگاپیکسل دوربین مداربسته مدل ',
+        '25': 'لنز موتورایز پنج مگاپیکسل دوربین مداربسته مدل ',
+        '26': 'لنز و آی‌آر کات وری‌فوکال پنج مگاپیکسل دوربین مداربسته ',
+        '3':  'کیس دوربین مداربسته مدل ',
+        '14': 'کیس بولت فلزی دوربین مداربسته مدل ',
+        '15': 'کیس دام دوربین مداربسته مدل ',
+        '16': 'کابل دوربین مداربسته ',
+        '17': 'مودم سیم‌کارتی 4G ',
+        '23': 'ال‌ای‌دی وارم‌لایت دوربین مداربسته مدل ',
+    };
+
+    function isPrefixOnly(value) {
+        var v = value.trim();
+        if (!v) return true;
+        return Object.keys(NAME_PREFIX).some(function(k) {
+            return NAME_PREFIX[k].trim() === v;
+        });
+    }
+
+    function applyNamePrefix(catId, focus) {
+        var nameField = document.getElementById('id_name');
+        if (!nameField) return;
+        var prefix = NAME_PREFIX[String(catId)];
+        if (!prefix) return;
+        if (!isPrefixOnly(nameField.value)) return;  // متن دستی کاربر را خراب نکن
+        nameField.value = prefix;
+        if (focus) {
+            nameField.focus();
+            nameField.setSelectionRange(prefix.length, prefix.length);
+        }
+    }
+
     function applyFilter(catType) {
         document.querySelectorAll('fieldset').forEach(function(fs) {
             var h2 = fs.querySelector('h2');
@@ -28,8 +69,9 @@
         });
     }
 
-    function getCatType(catId) {
+    function getCatType(catId, focusName) {
         if (!catId) { applyFilter(''); return; }
+        applyNamePrefix(catId, focusName);
         fetch('/api/catalog/categories/')
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -41,8 +83,8 @@
 
     var catField = document.getElementById('id_category');
     if (catField) {
-        getCatType(catField.value);
-        catField.addEventListener('change', function() { getCatType(this.value); });
+        getCatType(catField.value, false);
+        catField.addEventListener('change', function() { getCatType(this.value, true); });
     }
 })();
 </script>

@@ -1,8 +1,10 @@
 from django.db import models
 from django.conf import settings
 
+from apps.core.models import AuditMixin, AuditableModel
 
-class Warehouse(models.Model):
+
+class Warehouse(AuditableModel):
     class Type(models.TextChoices):
         AIR_TRANSIT = "air_transit", "در راه هوایی"
         SEA_TRANSIT = "sea_transit", "در راه دریایی"
@@ -55,7 +57,7 @@ class WarehouseStock(models.Model):
         return self.quantity == 0
 
 
-class StockTransfer(models.Model):
+class StockTransfer(AuditMixin):
     class Status(models.TextChoices):
         PENDING   = "pending",   "در انتظار"
         DONE      = "done",      "انجام شده"
@@ -71,6 +73,9 @@ class StockTransfer(models.Model):
                         null=True, blank=True, verbose_name="انتقال دهنده")
     created_at      = models.DateTimeField(auto_now_add=True)
     updated_at      = models.DateTimeField(auto_now=True)
+    updated_by      = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                        null=True, blank=True, related_name="edited_stock_transfers",
+                        verbose_name="آخرین ویرایش‌کننده")
 
     class Meta:
         db_table = "inventory_stock_transfer"
@@ -99,9 +104,22 @@ class StockTransfer(models.Model):
             self.save()
 
 
-class StockMovement(models.Model):
+def get_variant_cost_irr(variant):
+    """بهای تمام‌شده ریالی یک کالا برای ارزش‌گذاری موجودی:
+    آخرین فاکتور خرید؛ اگر خریدی ثبت نشده بود، قیمتِ آخرین حرکت «موجودی اول دوره»."""
+    pi = variant.purchase_items.order_by('-invoice__date').first()
+    if pi:
+        return pi.unit_cost_irr
+    opening = StockMovement.objects.filter(
+        variant=variant, movement_type='opening', unit_price__gt=0
+    ).order_by('-created_at').first()
+    return opening.unit_price if opening else 0
+
+
+class StockMovement(AuditMixin):
     """کاردکس — هر ورود/خروج کالا یک رکورد"""
     class MovementType(models.TextChoices):
+        OPENING   = "opening",   "موجودی اول دوره"
         PURCHASE  = "purchase",  "خرید"
         SALE      = "sale",      "فروش"
         TRANSFER_IN  = "transfer_in",  "انتقال ورودی"
@@ -115,7 +133,7 @@ class StockMovement(models.Model):
                     related_name="movements", verbose_name="محصول")
     movement_type = models.CharField(max_length=20, choices=MovementType.choices, verbose_name="نوع حرکت")
     quantity    = models.IntegerField(verbose_name="تعداد", help_text="مثبت=ورود، منفی=خروج")
-    unit_price  = models.PositiveBigIntegerField(default=0, verbose_name="قیمت واحد (تومان)")
+    unit_price  = models.PositiveBigIntegerField(default=0, verbose_name="قیمت واحد (ریال)")
     balance_after = models.PositiveIntegerField(default=0, verbose_name="موجودی بعد از حرکت")
     reference   = models.CharField(max_length=100, blank=True, verbose_name="مرجع (شماره سفارش/فاکتور)")
     note        = models.TextField(blank=True, verbose_name="توضیحات")

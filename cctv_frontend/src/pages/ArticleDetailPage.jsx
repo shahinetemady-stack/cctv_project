@@ -1,12 +1,10 @@
+import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import api from '../services/api'
-
-function imgUrl(url) {
-  if (!url) return null
-  if (url.startsWith('http')) return url
-  return `http://localhost:8000${url}`
-}
+import Seo, { absoluteUrl } from '../components/Seo'
+import { mediaUrl as imgUrl } from '../utils/media'
+import { formatDate } from '../utils/date'
 
 export default function ArticleDetailPage() {
   const { slug } = useParams()
@@ -15,16 +13,44 @@ export default function ArticleDetailPage() {
     queryFn: () => api.get(`/education/articles/${slug}/`).then(r => r.data),
   })
 
+  // اگر API به‌خاطر اسلاگ قدیمی ۳۰۱ شده، آدرس مرورگر را با اسلاگ جدید جایگزین کن
+  const navigate = useNavigate()
+  useEffect(() => {
+    if (article?.slug && article.slug !== slug) {
+      navigate(`/blog/${article.slug}`, { replace: true })
+    }
+  }, [article?.slug, slug])
+
   if (isLoading) return <div className="container-main py-20 text-center text-gray-steel">در حال بارگذاری...</div>
   if (!article) return <div className="container-main py-20 text-center text-gray-steel">مقاله یافت نشد</div>
 
+  // ─── SEO/GEO ─────────────────────────────────────────────────
+  const canonical = `/blog/${article.slug}`
+  const articleLd = {
+    '@context': 'https://schema.org',
+    '@type': 'Article',
+    headline: article.title,
+    ...(article.author && { author: { '@type': 'Person', name: article.author } }),
+    ...(article.created_at && { datePublished: article.created_at }),
+    ...(article.updated_at && { dateModified: article.updated_at }),
+    ...(article.thumbnail && { image: absoluteUrl(imgUrl(article.thumbnail)) }),
+  }
+
   return (
     <div className="container-main py-12 max-w-4xl">
+      <Seo
+        title={`${article.title} | دوربینکار`}
+        description={article.description}
+        keywords={article.tags}
+        canonical={canonical}
+        image={imgUrl(article.thumbnail)}
+        jsonLd={articleLd}
+      />
       <Link to="/blog" className="text-sm text-gray-steel hover:text-white mb-6 block">← بازگشت به مقالات</Link>
 
       {article.thumbnail && (
         <img src={imgUrl(article.thumbnail)} alt={article.title}
-          className="w-full h-64 object-cover rounded-2xl mb-8" />
+          className="w-full aspect-video object-cover rounded-2xl mb-8" />
       )}
 
       <div className="flex items-center gap-3 mb-4">
@@ -34,14 +60,14 @@ export default function ArticleDetailPage() {
             {article.category}
           </Link>
         )}
-        <span className="text-xs text-gray-steel">{article.created_at}</span>
+        <span className="text-xs text-gray-steel">{formatDate(article.created_at)}</span>
         {article.author && <span className="text-xs text-gray-steel">✍️ {article.author}</span>}
       </div>
 
       <h1 className="font-display font-bold text-3xl text-white mb-6">{article.title}</h1>
 
       {/* محتوا */}
-      <div className="card p-8 prose prose-invert max-w-none"
+      <div className="card p-8 article-content"
         dangerouslySetInnerHTML={{ __html: article.content || `<p>${article.description}</p>` }} />
 
       {/* تگ‌ها */}

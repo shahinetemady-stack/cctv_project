@@ -1,0 +1,41 @@
+# {{ site_name }} | فروشگاه آنلاین قطعات دوربین مداربسته
+
+> فروشگاه تخصصی قطعات دوربین مداربسته — برد، لنز، سنسور، مودم و بدنه با قیمت همکار؛ جستجوی هوشمند و ربات مشاور برای انتخاب قطعه سازگار، ارسال به سراسر ایران.
+
+## صفحات اصلی
+
+- [صفحه اصلی]({{ base }}/): معرفی فروشگاه و دسترسی سریع به بخش‌ها
+- [محصولات]({{ base }}/products): فهرست کامل قطعات دوربین مداربسته
+- [پکیج‌ها]({{ base }}/packages): پکیج‌های آماده سیستم نظارتی
+- [مقایسه محصولات]({{ base }}/compare): مقایسه مشخصات قطعات
+- [سفارش از چین]({{ base }}/china-order): ثبت سفارش و استعلام قیمت از چین
+- [پیگیری سفارش]({{ base }}/track): رهگیری مرسوله با شماره سفارش
+
+## دسته‌بندی محصولات
+{% for c in categories %}
+- [{{ c.name }}]({{ base }}/categories/{{ c.slug }}/){% if c.description %}: {{ c.description|truncatewords:20 }}{% endif %}{% endfor %}
+
+## محصولات
+{% for p in products %}
+- [{{ p.name }}]({{ base }}/products/{{ p.slug }}/){% if p.short_description %}: {{ p.short_description|truncatewords:15 }}{% endif %}{% endfor %}
+
+## پکیج‌ها
+{% for p in packages %}
+- [{{ p.name }}]({{ base }}/packages/{{ p.slug }}/){% if p.description %}: {{ p.description|truncatewords:15 }}{% endif %}{% endfor %}
+
+## مقالات آموزشی
+{% for a in articles %}
+- [{{ a.title }}]({{ base }}/blog/{{ a.slug }}/){% if a.description %}: {{ a.description|truncatewords:15 }}{% endif %}{% endfor %}
+
+## ویدیوها
+{% for v in videos %}
+- [{{ v.title }}]({{ base }}/videos/{{ v.slug }}/){% if v.description %}: {{ v.description|truncatewords:15 }}{% endif %}{% endfor %}
+
+## قوانین
+
+- [قوانین و مقررات]({{ base }}/terms)
+- [حریم خصوصی]({{ base }}/privacy)
+
+## نقشه سایت
+
+- [sitemap.xml]({{ base }}/sitemap.xml): فهرست کامل صفحات برای خزنده‌ها

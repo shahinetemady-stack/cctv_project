@@ -9,6 +9,10 @@ class ProductFilter(django_filters.FilterSet):
         label="دسته‌بندی",
         method="filter_category",
     )
+    category_slug = django_filters.CharFilter(
+        method="filter_category_slug",
+        label="اسلاگ دسته",
+    )
     category_type = django_filters.CharFilter(
         field_name="category__category_type",
         label="نوع دسته",
@@ -21,6 +25,9 @@ class ProductFilter(django_filters.FilterSet):
     )
     is_featured = django_filters.BooleanFilter(
         field_name="is_featured", label="فقط ویژه",
+    )
+    discounted = django_filters.BooleanFilter(
+        method="filter_discounted", label="فقط تخفیف‌دار",
     )
     search = django_filters.CharFilter(
         method="filter_search", label="جستجو",
@@ -36,6 +43,25 @@ class ProductFilter(django_filters.FilterSet):
         ids = list(value.children.filter(is_active=True).values_list("id", flat=True))
         ids.append(value.id)
         return queryset.filter(category_id__in=ids)
+
+    def filter_category_slug(self, queryset, name, value):
+        if not value:
+            return queryset
+        try:
+            cat = Category.objects.get(slug=value, is_active=True)
+        except Category.DoesNotExist:
+            return queryset.none()
+        ids = list(cat.children.filter(is_active=True).values_list("id", flat=True))
+        ids.append(cat.id)
+        return queryset.filter(category_id__in=ids)
+
+    def filter_discounted(self, queryset, name, value):
+        if value is None:
+            return queryset
+        qs = queryset.filter(variants__is_active=True, variants__discount_percent__gt=0).distinct()
+        if value:
+            return qs
+        return queryset.exclude(pk__in=qs.values("pk"))
 
     def filter_in_stock(self, queryset, name, value):
         if value is None:
@@ -53,6 +79,9 @@ class ProductFilter(django_filters.FilterSet):
     def filter_search(self, queryset, name, value):
         if not value:
             return queryset
+        # نرمال‌سازی ارقام فارسی/عربی به لاتین تا «۸۰۰» هم مثل «800» جستجو شود
+        value = value.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+        value = value.replace("ك", "ک").replace("ي", "ی")
         return queryset.filter(
             Q(name__icontains=value)
             | Q(brand__icontains=value)

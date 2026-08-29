@@ -34,10 +34,55 @@ class DashboardStatsView(APIView):
                 created_at__gte=m_start, created_at__lt=m_end
             ).aggregate(total=Sum("total_amount"), count=Count("id"))
             monthly.append({
-                "month": f"{m_start.month}/{m_start.year}",
+                "month": str(m_start.date()),
                 "total": int(r["total"] or 0),
                 "count": r["count"] or 0,
             })
+
+        # ─── آمار گسترده برای داشبورد مدیریت ─────────────────────
+        from django.db.models import F
+        from apps.orders.models import OrderItem
+
+        # فروش روزانه ۳۰ روز اخیر
+        daily = []
+        for i in range(29, -1, -1):
+            d0 = today_start - timedelta(days=i)
+            d1 = d0 + timedelta(days=1)
+            r = Order.objects.filter(
+                status__in=paid_statuses, created_at__gte=d0, created_at__lt=d1
+            ).aggregate(total=Sum("total_amount"), count=Count("id"))
+            daily.append({"day": str(d0.date()), "total": int(r["total"] or 0), "count": r["count"]})
+
+        # ماه قبل (برای درصد تغییر)
+        prev_m_start = (month_start - timedelta(days=1)).replace(day=1)
+        prev_month_total = int(Order.objects.filter(
+            status__in=paid_statuses, created_at__gte=prev_m_start, created_at__lt=month_start
+        ).aggregate(t=Sum("total_amount"))["t"] or 0)
+
+        # توزیع وضعیت سفارش‌ها
+        orders_by_status = [
+            {"status": s["status"], "count": s["c"]}
+            for s in Order.objects.values("status").annotate(c=Count("id")).order_by("-c")
+        ]
+
+        # محصولات برتر بر اساس درآمد
+        top_products = [{
+            "name": t["variant__product__name"],
+            "revenue": int(t["revenue"] or 0),
+            "qty": t["qty"] or 0,
+        } for t in (OrderItem.objects.filter(order__status__in=paid_statuses)
+                    .values("variant__product__name")
+                    .annotate(revenue=Sum(F("quantity") * F("unit_price")), qty=Sum("quantity"))
+                    .order_by("-revenue")[:5])]
+
+        # فروش بر اساس دسته‌بندی
+        sales_by_category = [{
+            "name": c["variant__product__category__name"] or "بدون دسته",
+            "total": int(c["total"] or 0),
+        } for c in (OrderItem.objects.filter(order__status__in=paid_statuses)
+                    .values("variant__product__category__name")
+                    .annotate(total=Sum(F("quantity") * F("unit_price")))
+                    .order_by("-total"))]
 
         last_orders = []
         for o in Order.objects.select_related("user").order_by("-created_at")[:8]:
@@ -66,4 +111,9 @@ class DashboardStatsView(APIView):
             },
             "monthly_sales": monthly,
             "last_orders": last_orders,
+            "daily_sales": daily,
+            "prev_month_sales": prev_month_total,
+            "orders_by_status": orders_by_status,
+            "top_products": top_products,
+            "sales_by_category": sales_by_category,
         })

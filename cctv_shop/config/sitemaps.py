@@ -20,7 +20,7 @@ class ProductSitemap(Sitemap):
         return Product.objects.filter(is_active=True)
 
     def location(self, obj):
-        return f"/products/{obj.slug}"
+        return f"/products/{obj.slug}/"
 
     def lastmod(self, obj):
         return obj.updated_at
@@ -34,7 +34,7 @@ class CategorySitemap(Sitemap):
         return Category.objects.filter(is_active=True)
 
     def location(self, obj):
-        return f"/categories/{obj.slug}"
+        return f"/categories/{obj.slug}/"
 
     def lastmod(self, obj):
         return obj.updated_at
@@ -48,7 +48,7 @@ class PackageSitemap(Sitemap):
         return Package.objects.filter(is_active=True)
 
     def location(self, obj):
-        return f"/packages/{obj.slug}"
+        return f"/packages/{obj.slug}/"
 
     def lastmod(self, obj):
         return obj.updated_at
@@ -62,7 +62,7 @@ class ArticleSitemap(Sitemap):
         return Article.objects.filter(is_published=True)
 
     def location(self, obj):
-        return f"/blog/{obj.slug}"
+        return f"/blog/{obj.slug}/"
 
     def lastmod(self, obj):
         return obj.updated_at
@@ -76,7 +76,7 @@ class VideoSitemap(Sitemap):
         return Video.objects.filter(is_published=True)
 
     def location(self, obj):
-        return f"/videos/{obj.slug}"
+        return f"/videos/{obj.slug}/"
 
     def lastmod(self, obj):
         return obj.updated_at

@@ -1,12 +1,17 @@
-import { useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { catalogService } from '../services/catalog'
+import api from '../services/api'
 import { orderService } from '../services/orders'
 import useAuthStore from '../store/useAuthStore'
 import useCartStore from '../store/useCartStore'
+import useCompareStore from '../store/useCompareStore'
 import { ProductPackages } from '../components/PackageComponents'
 import { PageLoader, ErrorMessage } from '../components/ui'
+import Seo, { absoluteUrl } from '../components/Seo'
+import { formatDate } from '../utils/date'
+import { mediaUrl } from '../utils/media'
 
 function SpecsTable({ specs }) {
   if (!specs || specs.length === 0) return null
@@ -42,9 +47,9 @@ function VariantSelector({ variants, selected, onSelect }) {
                 : 'border-gray-200 dark:border-white/10 hover:border-brand/50'}`}>
             <div className="font-mono text-xs text-gray-steel">{v.sku}</div>
             {v.name_suffix && <div className="mt-1 font-medium">{v.name_suffix}</div>}
-            <div className={`mt-1.5 font-bold font-mono text-sm
+            <div className={`mt-1.5 font-bold text-sm
               ${v.is_in_stock ? 'text-brand dark:text-cyan' : 'text-gray-400 line-through'}`}>
-              {v.is_in_stock ? Number(v.final_price).toLocaleString('fa-IR') + ' تومان' : 'ناموجود'}
+              {v.is_in_stock ? Number(v.pricing?.price ?? v.final_price).toLocaleString('fa-IR') + ' ریال' : 'ناموجود'}
             </div>
           </button>
         ))}
@@ -66,7 +71,7 @@ function PriceChart({ slug }) {
   if (history.length < 2) return null
 
   const prices = history.map(h => h.price)
-  const dates = history.map(h => h.date.slice(5))
+  const dates = history.map(h => formatDate(h.date, { short: true }))
   const min = Math.min(...prices)
   const max = Math.max(...prices)
   const range = max - min || 1
@@ -100,7 +105,7 @@ function PriceChart({ slug }) {
               x1={PL} x2={W-PR}
               y1={PT + t*(H-PT-PB)}
               y2={PT + t*(H-PT-PB)}
-              stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+              stroke="var(--color-border)" strokeWidth="1" />
           ))}
           {/* نمودار */}
           <polyline points={polyline}
@@ -122,17 +127,46 @@ function PriceChart({ slug }) {
           {/* برچسب‌های تاریخ */}
           {[0, Math.floor(dates.length/2), dates.length-1].map(i => (
             <text key={i} x={points[i][0]} y={H-5}
-              textAnchor="middle" fill="rgba(255,255,255,0.4)" fontSize="9">
+              textAnchor="middle" fill="var(--color-text-secondary)" fontSize="9">
               {dates[i]}
             </text>
           ))}
         </svg>
         <div className="flex justify-between text-xs text-gray-steel mt-1">
-          <span>کمترین: {min.toLocaleString('fa-IR')} ت</span>
-          <span>بیشترین: {max.toLocaleString('fa-IR')} ت</span>
+          <span>کمترین: {min.toLocaleString('fa-IR')} ریال</span>
+          <span>بیشترین: {max.toLocaleString('fa-IR')} ریال</span>
         </div>
       </div>
     </section>
+  )
+}
+
+// ─── ناوبری محصول قبلی/بعدی + بازگشت به لیست ──────────────────
+function ProductNav({ slug }) {
+  const navigate = useNavigate()
+  const { data } = useQuery({
+    queryKey: ['product-neighbors', slug],
+    queryFn: () => api.get(`/catalog/products/${slug}/neighbors/`).then(r => r.data),
+    staleTime: 60000,
+  })
+  const btnCls = "text-xs px-3 py-1.5 rounded-lg border border-white/10 text-gray-steel hover:text-white hover:border-brand/40 transition-colors max-w-[160px] truncate"
+  const backCls = "text-xs px-3 py-1.5 rounded-lg border border-white/10 text-gray-steel hover:text-white hover:border-brand/40 transition-colors whitespace-nowrap"
+  return (
+    <div className="flex items-center gap-2 shrink-0">
+      <button onClick={() => navigate(-1)} className={backCls} title="بازگشت به لیست محصولات">
+        → بازگشت به لیست محصولات
+      </button>
+      {data?.prev && (
+        <Link to={`/products/${data.prev.slug}`} className={btnCls} title={data.prev.name}>
+          → قبلی
+        </Link>
+      )}
+      {data?.next && (
+        <Link to={`/products/${data.next.slug}`} className={btnCls} title={data.next.name}>
+          بعدی ←
+        </Link>
+      )}
+    </div>
   )
 }
 
@@ -140,9 +174,7 @@ function PriceChart({ slug }) {
 function SimilarProducts({ slug }) {
   const { data } = useQuery({
     queryKey: ['similar-products', slug],
-    queryFn: () => fetch(`/api/catalog/products/${slug}/similar/`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` }
-    }).then(r => r.json()),
+    queryFn: () => api.get(`/catalog/products/${slug}/similar/`).then(r => r.data),
     staleTime: 60000,
   })
 
@@ -195,17 +227,35 @@ export default function ProductDetailPage() {
   const { slug } = useParams()
   const { isAuthenticated, isPartner } = useAuthStore()
   const { increment } = useCartStore()
+  const { add: addToCompare, remove: removeFromCompare, has: inCompare } = useCompareStore()
   const [selectedVariant, setSelectedVariant] = useState(null)
   const [qty, setQty] = useState(1)
   const [adding, setAdding] = useState(false)
   const [added, setAdded] = useState(false)
   const [activeImage, setActiveImage] = useState(0)
+  const [payOption, setPayOption] = useState('credit') // گزینه پرداخت همکار پلاتینیوم
+  const [qtyText, setQtyText] = useState(null) // متن خام اینپوت تعداد هنگام تایپ (null = نمایش qty)
 
   const { data: product, isLoading, isError } = useQuery({
     queryKey: ['product', slug],
     queryFn: () => catalogService.getProduct(slug),
     onSuccess: (p) => { if (p.variants?.[0]) setSelectedVariant(p.variants[0]) },
   })
+
+  // لیست دسته‌ها برای resolve کردن نام والد دسته‌ی محصول در breadcrumb
+  const { data: categoriesData } = useQuery({
+    queryKey: ['seo-categories'],
+    queryFn: catalogService.getCategories,
+    staleTime: 600000,
+  })
+
+  // اگر API به‌خاطر اسلاگ قدیمی ۳۰۱ شده، آدرس مرورگر را با اسلاگ جدید جایگزین کن
+  const navigate = useNavigate()
+  useEffect(() => {
+    if (product?.slug && product.slug !== slug) {
+      navigate(`/products/${product.slug}`, { replace: true })
+    }
+  }, [product?.slug, slug])
 
   if (isLoading) return <PageLoader />
   if (isError || !product) return (
@@ -216,20 +266,41 @@ export default function ProductDetailPage() {
 
   const variant = selectedVariant || product.variants?.[0]
   const inStock = variant?.is_in_stock && variant?.available_stock > 0
-  const isUserPartner = isAuthenticated() && isPartner()
+  // وضعیت دستی موجودی: به‌زودی (در راه) یا توقف تولید (ناموجود دائمی) — پیش‌فرض auto یعنی بر اساس انبار
+  const availability = product.availability || 'auto'
 
-  const displayPrice = isUserPartner && variant?.partner_price
-    ? variant.partner_price
-    : variant?.final_price
+  // قیمت فرمول بر اساس سطح همکاری — عمومی: مشتری عمومی | سیلور: یکماهه | گلد: تو حسابی | پلاتینیوم: تو حسابی + گزینه‌ها
+  const pricing = variant?.pricing
+  const isPlatinum = pricing?.tier === 'platinum' && !!pricing?.options
+  const PRICE_LABELS = { retail: 'قیمت فروش', cash: 'قیمت نقدی', credit: 'قیمت تو حسابی', month1: 'قیمت یکماهه', month2: 'قیمت دوماهه' }
+  const PAY_OPTION_LABELS = { credit: 'تو حسابی', cash: 'پرداخت در لحظه', month1: 'پرداخت یکماهه', month2: 'پرداخت دوماهه' }
+  // برای پلاتینیوم قاب مثبت: اعتباری = «قیمت ویژه همکار» (نه گران‌تر)، نقدی = «تخفیف ویژه نقدی»
+  // پلاتینیوم خودش روش پرداخت را انتخاب می‌کند (لیبل همان گزینه)؛ برای سطوح دیگر
+  // نام ستون قیمت (یکماهه/تو حسابی) نمایش داده نمی‌شود تا ساختار قیمت‌گذاری لو نرود
+  const priceLabel = isPlatinum
+    ? (payOption === 'credit' ? 'قیمت ویژه همکار' : payOption === 'cash' ? 'قیمت نقدی شما' : (PRICE_LABELS[payOption] || 'قیمت فروش'))
+    : (pricing?.tier ? 'قیمت همکار' : 'قیمت فروش')
+  const displayPrice = isPlatinum
+    ? (pricing.options[payOption] ?? Object.values(pricing.options)[0])
+    : (pricing?.price ?? variant?.final_price)
+  // سود انتخاب نقدی/یکماهه نسبت به اعتباری (برای بج خوشحالی)
+  const platinumSaving = isPlatinum && payOption !== 'credit'
+    ? Math.max(0, pricing.options.credit - pricing.options[payOption])
+    : 0
 
   const handleAdd = async () => {
     if (!variant || !inStock) return
     setAdding(true)
     try {
+      // نحوه تسویه این قلم — پلاتینیوم همان گزینه انتخابی روی صفحه، بقیه بر اساس سطح
+      const tier = pricing?.tier
+      const settlement = tier === 'platinum' ? payOption
+        : tier === 'gold' ? 'credit'
+        : tier === 'silver' ? 'month1' : 'cash'
       if (isPartner()) {
-        await orderService.addToInquiryCart(variant.id, qty)
+        await orderService.addToInquiryCart(variant.id, qty, settlement)
       } else {
-        await orderService.addToCart(variant.id, qty)
+        await orderService.addToCart(variant.id, qty, settlement)
       }
       increment()
       setAdded(true)
@@ -241,31 +312,106 @@ export default function ProductDetailPage() {
     }
   }
 
+  const compared = inCompare(product.slug)
+  const handleCompare = () => {
+    if (compared) {
+      removeFromCompare(product.slug)
+    } else {
+      addToCompare({
+        slug: product.slug,
+        name: product.name,
+        category_id: product.category?.id,
+        image: images.find(i => i.is_primary)?.image || images[0]?.image || null,
+        min_price: displayPrice || null,
+      })
+    }
+  }
+
   const images = product.images || []
   const specs  = product.specs || []
 
+  // ─── SEO/GEO ─────────────────────────────────────────────────
+  const canonical = `/products/${product.slug}`
+  const mainImage = images.find(i => i.is_primary)?.image || images[0]?.image
+  const seoTitle = product.meta_title || `${product.name} | دوربینکار`
+  const seoDescription = product.meta_description || product.short_description || product.description?.slice(0, 160)
+  // breadcrumb: خانه > (والد >) دسته > محصول
+  const categories = Array.isArray(categoriesData) ? categoriesData : (categoriesData?.results || [])
+  const parentCategory = product.category?.parent
+    ? categories.find(c => c.id === product.category.parent)
+    : null
+  const breadcrumbItems = [
+    { name: 'خانه', url: '/' },
+    ...(parentCategory ? [{ name: parentCategory.name, url: `/categories/${parentCategory.slug}` }] : []),
+    ...(product.category ? [{ name: product.category.name, url: `/categories/${product.category.slug}` }] : []),
+    { name: product.name, url: canonical },
+  ]
+  const productLd = {
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    name: product.name,
+    ...(mainImage && { image: absoluteUrl(mainImage) }),
+    ...(seoDescription && { description: seoDescription }),
+    ...(product.brand && { brand: { '@type': 'Brand', name: product.brand } }),
+    ...(variant?.sku && { sku: variant.sku }),
+    ...(variant?.final_price != null && {
+      offers: {
+        '@type': 'Offer',
+        url: absoluteUrl(canonical),
+        // قیمت فرمول (ریال) — یکسان با قیمت نمایشی صفحه
+        price: variant.pricing?.price ?? variant.final_price,
+        priceCurrency: 'IRR',
+        availability: inStock
+          ? 'https://schema.org/InStock'
+          : 'https://schema.org/OutOfStock',
+      },
+    }),
+  }
+  const breadcrumbLd = {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: breadcrumbItems.map((item, i) => ({
+      '@type': 'ListItem',
+      position: i + 1,
+      name: item.name,
+      item: absoluteUrl(item.url),
+    })),
+  }
+
   return (
     <div className="container-main py-8">
-      {/* Breadcrumb */}
-      <nav className="flex items-center gap-2 text-xs text-gray-steel mb-8">
-        <Link to="/" className="hover:text-brand transition-colors">خانه</Link>
-        <span>/</span>
-        <Link to="/products" className="hover:text-brand transition-colors">محصولات</Link>
-        {product.category && (
-          <>
-            <span>/</span>
-            <Link to={`/products?category=${product.category.id}`}
-              className="hover:text-brand transition-colors">{product.category.name}</Link>
-          </>
-        )}
-        <span>/</span>
-        <span className="text-gray-900 dark:text-white truncate max-w-[200px]">{product.name}</span>
-      </nav>
+      <Seo
+        title={seoTitle}
+        description={seoDescription}
+        keywords={product.keywords}
+        canonical={canonical}
+        image={mainImage}
+        geoTags={product.geo_tags}
+        jsonLd={[productLd, breadcrumbLd]}
+      />
+      {/* Breadcrumb + ناوبری محصول قبلی/بعدی */}
+      <div className="flex items-center justify-between gap-3 mb-8 flex-wrap">
+        <nav className="flex items-center gap-2 text-xs text-gray-steel min-w-0">
+          <Link to="/" className="hover:text-brand transition-colors">خانه</Link>
+          <span>/</span>
+          <Link to="/products" className="hover:text-brand transition-colors">محصولات</Link>
+          {product.category && (
+            <>
+              <span>/</span>
+              <Link to={`/products?category=${product.category.id}`}
+                className="hover:text-brand transition-colors">{product.category.name}</Link>
+            </>
+          )}
+          <span>/</span>
+          <span className="text-gray-900 dark:text-white truncate max-w-[200px]">{product.name}</span>
+        </nav>
+        <ProductNav slug={product.slug} />
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
         {/* تصاویر */}
         <div className="space-y-3">
-          <div className="card overflow-hidden aspect-square bg-gradient-to-br from-navy to-steel">
+          <div className="card overflow-hidden aspect-square product-media-stage">
             {images[activeImage] ? (
               <img src={images[activeImage].image} alt={product.name}
                 className="w-full h-full object-contain p-8" />
@@ -277,7 +423,7 @@ export default function ProductDetailPage() {
             <div className="flex gap-2 overflow-x-auto">
               {images.map((img, i) => (
                 <button key={i} onClick={() => setActiveImage(i)}
-                  className={`flex-shrink-0 w-16 h-16 rounded-lg border-2 overflow-hidden transition-all
+                  className={`flex-shrink-0 w-16 h-16 rounded-lg border-2 overflow-hidden transition-all product-media-stage
                     ${activeImage === i ? 'border-brand' : 'border-transparent opacity-60 hover:opacity-100'}`}>
                   <img src={img.image} alt="" className="w-full h-full object-contain p-1" />
                 </button>
@@ -312,33 +458,57 @@ export default function ProductDetailPage() {
             <div className="card p-4 bg-gradient-to-l from-brand/5 to-transparent">
               {variant.is_in_stock ? (
                 <div>
-                  {isUserPartner && variant.partner_price && variant.partner_discount_percent > 0 ? (
-                    <>
-                      <div className="text-xs text-gray-steel mb-1">قیمت همکار</div>
-                      <div className="text-2xl font-display font-bold text-cyan">
-                        {Number(variant.partner_price).toLocaleString('fa-IR')}
-                        <span className="text-sm font-normal text-gray-steel mr-1">تومان</span>
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="text-xs text-gray-steel line-through">
-                          {Number(variant.final_price).toLocaleString('fa-IR')} تومان
-                        </span>
-                        <span className="text-xs bg-alert-green/10 text-alert-green px-2 py-0.5 rounded-full">
-                          {variant.partner_discount_percent}٪ تخفیف
-                        </span>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="text-xs text-gray-steel mb-1">
-                        {isUserPartner ? 'قیمت همکار' : 'قیمت فروش'}
-                      </div>
-                      <div className="text-2xl font-display font-bold text-brand dark:text-cyan">
+                  <>
+                      <div className="text-xs text-gray-steel mb-1">{priceLabel}</div>
+                      <div className="text-2xl font-bold text-brand dark:text-cyan">
                         {Number(displayPrice).toLocaleString('fa-IR')}
-                        <span className="text-sm font-normal text-gray-steel mr-1">تومان</span>
+                        <span className="text-sm font-normal text-gray-steel mr-1">ریال</span>
                       </div>
+                      {/* قیمت اصلی خط‌خورده وقتی واریانت تخفیف دارد */}
+                      {pricing?.original_price && !isPlatinum && (
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          <span className="text-xs text-gray-steel line-through">
+                            {Number(pricing.original_price).toLocaleString('fa-IR')} ریال
+                          </span>
+                          <span className="text-xs bg-alert-red/10 text-alert-red px-2 py-0.5 rounded-full">
+                            ٪{Number(pricing.discount_percent).toLocaleString('fa-IR')} تخفیف
+                          </span>
+                        </div>
+                      )}
+                      {/* پلاتینیوم با پرداخت در لحظه — قیمت تو حسابی خط می‌خورد + مبلغ سود */}
+                      {isPlatinum && payOption === 'cash' && (
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          <span className="text-xs text-gray-steel line-through">
+                            {Number(pricing.options.credit).toLocaleString('fa-IR')} ریال
+                          </span>
+                          <span className="text-xs bg-alert-green/10 text-alert-green px-2 py-0.5 rounded-full">
+                            🎉 تخفیف ویژه نقدی{platinumSaving > 0 ? ` — ${platinumSaving.toLocaleString('fa-IR')} ریال سود` : ''}
+                          </span>
+                        </div>
+                      )}
+                      {/* قاب مثبت برای خرید اعتباری */}
+                      {isPlatinum && payOption === 'credit' && (
+                        <div className="text-[11px] text-alert-green mt-1">
+                          🤝 خرید اعتباری بدون هزینه اضافه — الان ببر، در سررسید پرداخت کن
+                        </div>
+                      )}
+                      {/* قاب مثبت برای گزینه‌های ماهانه (یکماهه/دوماهه) */}
+                      {isPlatinum && payOption.startsWith('month') && platinumSaving > 0 && (
+                        <div className="text-[11px] text-alert-green mt-1">
+                          📅 {platinumSaving.toLocaleString('fa-IR')} ریال ارزان‌تر از خرید اعتباری
+                        </div>
+                      )}
                     </>
-                  )}
+                </div>
+              ) : availability === 'coming_soon' ? (
+                <div>
+                  <div className="font-medium text-blue-500 dark:text-cyan">🔜 به‌زودی</div>
+                  <div className="text-xs text-gray-steel mt-1">این محصول در راه است — برای اطلاع از موجود شدن با ما در تماس باشید.</div>
+                </div>
+              ) : availability === 'discontinued' ? (
+                <div>
+                  <div className="text-alert-red font-medium">توقف تولید</div>
+                  <div className="text-xs text-gray-steel mt-1">این محصول دیگر تولید و موجود نمی‌شود.</div>
                 </div>
               ) : (
                 <div className="text-alert-red font-medium">ناموجود</div>
@@ -348,44 +518,133 @@ export default function ProductDetailPage() {
 
           <VariantSelector variants={product.variants} selected={selectedVariant} onSelect={setSelectedVariant} />
 
+          {/* گزینه‌های پرداخت همکار پلاتینیوم */}
+          {isPlatinum && inStock && (
+            <div className="mb-4">
+              <div className="text-xs text-gray-steel mb-2">روش پرداخت:</div>
+              <div className="flex gap-2 flex-wrap">
+                {/* گزینه‌ها از کلیدهای pricing.options رندر می‌شوند — month2 خودکار ظاهر می‌شود */}
+                {Object.keys(pricing.options).map(k => (
+                  <button key={k} onClick={() => setPayOption(k)}
+                    className={`text-xs px-4 py-2 rounded-xl border transition-all text-center
+                      ${payOption === k
+                        ? 'border-brand bg-brand/10 text-brand dark:text-cyan'
+                        : 'border-gray-200 dark:border-white/10 text-gray-steel hover:border-brand/50'}`}>
+                    <div>{PAY_OPTION_LABELS[k] || PRICE_LABELS[k] || k}</div>
+                    {/* قیمت نقدی فقط بعد از انتخاب تیک نمایش داده می‌شود (تخفیف ویژه نقدی) */}
+                    {k !== 'cash' && (
+                      <div className="mt-0.5 font-bold">{Number(pricing.options[k]).toLocaleString('fa-IR')} ریال</div>
+                    )}
+                    {k === 'cash' && payOption !== 'cash' && (
+                      <div className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">با تخفیف ویژه</div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* تعداد + افزودن */}
           {isAuthenticated() && (
-            <div className="flex items-center gap-3">
-              <div className="flex items-center border border-gray-200 dark:border-white/10 rounded-xl overflow-hidden">
-                <button onClick={() => setQty(q => Math.max(1, q - 1))}
-                  className="px-3 py-2 hover:bg-brand/10 transition-colors text-lg leading-none">−</button>
-                <input
-                  type="number" min="1" max={variant?.available_stock || 9999}
-                  value={qty}
-                  onChange={e => {
-                    const v = parseInt(e.target.value) || 1
-                    setQty(Math.min(Math.max(1, v), variant?.available_stock || 9999))
-                  }}
-                  className="w-20 py-2 text-sm font-mono text-center bg-transparent border-x border-gray-200 dark:border-white/10 focus:outline-none"
-                  dir="ltr"
-                />
-                <button onClick={() => setQty(q => Math.min(variant?.available_stock || 9999, q + 1))}
-                  className="px-3 py-2 hover:bg-brand/10 transition-colors text-lg leading-none">+</button>
+            <div>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center border border-gray-200 dark:border-white/10 rounded-xl overflow-hidden">
+                  <button onClick={() => setQty(q => Math.max(1, q - 1))}
+                    className="px-3 py-2 hover:bg-brand/10 transition-colors text-lg leading-none">−</button>
+                  <span className="text-[10px] text-[var(--color-text-muted)] select-none pr-1">✏️</span>
+                  <input
+                    type="text" inputMode="numeric"
+                    // تایپ آزاد عدد دلخواه — با کلیک کل متن انتخاب می‌شود تا جایگزین شود
+                    value={qtyText ?? qty.toLocaleString('en')}
+                    onFocus={e => { setQtyText(String(qty)); setTimeout(() => e.target.select(), 0) }}
+                    onChange={e => {
+                      // ارقام فارسی/عربی هم پذیرفته می‌شود
+                      const raw = e.target.value
+                        .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+                        .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+                        .replace(/[^\d]/g, '').slice(0, 5)
+                      setQtyText(raw)
+                      const v = parseInt(raw)
+                      if (v >= 1) setQty(Math.min(v, 99999))
+                    }}
+                    onBlur={() => setQtyText(null)}
+                    className="w-28 py-2 text-base font-mono font-bold text-center bg-transparent border-x border-gray-200 dark:border-white/10 focus:outline-none"
+                    dir="ltr"
+                    placeholder="تایپ کنید"
+                  />
+                  <button onClick={() => setQty(q => Math.min(99999, q + 1))}
+                    className="px-3 py-2 hover:bg-brand/10 transition-colors text-lg leading-none">+</button>
+                </div>
+
+                <button onClick={handleAdd} disabled={adding || !inStock}
+                  className={`flex-1 py-3 rounded-xl font-medium text-sm transition-all
+                    ${added ? 'bg-alert-green text-white'
+                      : inStock ? 'bg-brand text-white hover:bg-brand-light shadow-sm'
+                      : 'bg-gray-200 dark:bg-white/5 text-gray-400 cursor-not-allowed'}`}>
+                  {adding ? '...' : added ? '✓ اضافه شد!'
+                    : !inStock ? (availability === 'coming_soon' ? '🔜 به‌زودی' : availability === 'discontinued' ? 'توقف تولید' : 'ناموجود')
+                    : isPartner() ? '+ افزودن به سبد استعلام'
+                    : '+ افزودن به سبد خرید'}
+                </button>
+
+                <button onClick={handleCompare}
+                  title={compared ? 'حذف از مقایسه' : 'افزودن به مقایسه'}
+                  className={`px-4 py-3 rounded-xl text-sm font-medium border transition-all
+                    ${compared
+                      ? 'border-brand text-brand bg-brand/10'
+                      : 'border-gray-200 dark:border-white/10 text-gray-500 dark:text-gray-steel hover:border-brand hover:text-brand'}`}>
+                  ⚖ {compared ? 'در مقایسه' : 'مقایسه'}
+                </button>
               </div>
 
-              <button onClick={handleAdd} disabled={adding || !inStock}
-                className={`flex-1 py-3 rounded-xl font-medium text-sm transition-all
-                  ${added ? 'bg-alert-green text-white'
-                    : inStock ? 'bg-brand text-white hover:bg-brand-light shadow-sm'
-                    : 'bg-gray-200 dark:bg-white/5 text-gray-400 cursor-not-allowed'}`}>
-                {adding ? '...' : added ? '✓ اضافه شد!'
-                  : !inStock ? 'ناموجود'
-                  : isPartner() ? '+ افزودن به سبد استعلام'
-                  : '+ افزودن به سبد خرید'}
-              </button>
+              {/* جمع مبلغ زنده — برای خرید عمده */}
+              {inStock && qty > 1 && displayPrice != null && (
+                <div className="text-xs text-gray-steel mt-2">
+                  جمع {qty.toLocaleString('fa-IR')} عدد:
+                  <span className="font-bold text-brand dark:text-cyan mr-1">
+                    {(qty * displayPrice).toLocaleString('fa-IR')} ریال
+                  </span>
+                </div>
+              )}
+
+              {/* هشدار پیش‌خرید — تعداد بیشتر از موجودی انبار */}
+              {variant && qty > (variant.available_stock || 0) && (
+                <div className="text-[11px] text-yellow-500 bg-yellow-500/10 rounded-lg px-3 py-2 mt-2">
+                  ⏳ {(qty - (variant.available_stock || 0)).toLocaleString('fa-IR')} عدد از این سفارش بیشتر از موجودی انبار است و به‌صورت <b>پیش‌خرید</b> تامین می‌شود (زمان‌بر).
+                </div>
+              )}
+
+              {/* انتخاب سریع تعدادهای زیاد */}
+              <div className="flex items-center gap-2 mt-2 flex-wrap">
+                <span className="text-[10px] text-gray-steel">💡 روی عدد بالا کلیک کنید و تعداد دلخواه را تایپ کنید، یا:</span>
+                {[10, 50, 100, 500, 1000, 2000].map(n => (
+                  <button key={n}
+                    onClick={() => setQty(Math.min(n, 99999))}
+                    className={`text-[11px] px-3 py-1 rounded-full border transition-all
+                      ${qty === n ? 'border-brand bg-brand/10 text-brand dark:text-cyan'
+                        : 'border-gray-200 dark:border-white/10 text-gray-steel hover:border-brand/50'}`}>
+                    {n.toLocaleString('fa-IR')} عدد
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
           {!isAuthenticated() && (
-            <Link to="/auth/login"
-              className="flex items-center justify-center py-3 rounded-xl bg-brand text-white font-medium hover:bg-brand-light transition-colors">
-              برای خرید وارد شوید
-            </Link>
+            <div className="flex items-center gap-3">
+              <Link to="/auth/login"
+                className="flex-1 flex items-center justify-center py-3 rounded-xl bg-brand text-white font-medium hover:bg-brand-light transition-colors">
+                برای خرید وارد شوید
+              </Link>
+              <button onClick={handleCompare}
+                title={compared ? 'حذف از مقایسه' : 'افزودن به مقایسه'}
+                className={`px-4 py-3 rounded-xl text-sm font-medium border transition-all
+                  ${compared
+                    ? 'border-brand text-brand bg-brand/10'
+                    : 'border-gray-200 dark:border-white/10 text-gray-500 dark:text-gray-steel hover:border-brand hover:text-brand'}`}>
+                ⚖ {compared ? 'در مقایسه' : 'مقایسه'}
+              </button>
+            </div>
           )}
 
           {/* دیتاشیت */}
@@ -449,6 +708,30 @@ export default function ProductDetailPage() {
           <p className="text-xs text-gray-steel mt-3">
             این قطعات با یکدیگر سازگار هستند و می‌توانند در کنار هم استفاده شوند.
           </p>
+        </section>
+      )}
+
+      {/* دیتاشیت فنی — انتهای صفحه: گالری تصاویر PDF برای مطالعه عمیق، بدون دفن کردن محصولات مشابه */}
+      {product.has_datasheet && product.datasheet_pdf && (
+        <section className="mt-8">
+          <h2 className="font-display font-bold text-xl text-white mb-4">📄 دیتاشیت فنی</h2>
+          <a href={mediaUrl(product.datasheet_pdf)} target="_blank" rel="noreferrer" download
+            className="inline-flex items-center justify-center gap-2 mb-4 px-5 py-2.5 rounded-xl
+              bg-brand/10 text-brand dark:text-cyan border border-brand/20
+              hover:bg-brand/20 transition-colors text-sm font-medium">
+            ⬇ دانلود PDF دیتاشیت
+          </a>
+          {product.datasheet_pages?.length > 0 && (
+            <div className="space-y-4">
+              {product.datasheet_pages.map(p => (
+                <div key={p.id} className="card p-2 sm:p-3">
+                  <img src={mediaUrl(p.image)} loading="lazy"
+                    alt={`دیتاشیت ${product.name} — صفحه ${p.page}`}
+                    className="w-full rounded-lg bg-white" />
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       )}
     </div>

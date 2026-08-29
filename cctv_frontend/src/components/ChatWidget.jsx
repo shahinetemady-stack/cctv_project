@@ -1,0 +1,120 @@
+import { useState, useRef, useEffect } from 'react'
+import { Link } from 'react-router-dom'
+import api from '../services/api'
+
+// ─── ویجت چت دستیار هوشمند (LLM لوکال روی سرور) ─────────────
+export default function ChatWidget() {
+  const [open, setOpen] = useState(false)
+  const [messages, setMessages] = useState([
+    { role: 'assistant', content: 'سلام! من دستیار هوشمند دوربینکار هستم. درباره محصولات، قیمت یا انتخاب تجهیزات سؤال دارید؟' },
+  ])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const bottomRef = useRef(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, loading, open])
+
+  const send = async () => {
+    const text = input.trim()
+    if (!text || loading) return
+    const next = [...messages, { role: 'user', content: text }]
+    setMessages(next)
+    setInput('')
+    setLoading(true)
+    try {
+      const { data } = await api.post('/assistant/chat/', {
+        message: text,
+        history: next.slice(-7, -1),
+      }, { timeout: 130000 })
+      setMessages(m => [...m, { role: 'assistant', content: data.reply, products: data.products }])
+    } catch {
+      setMessages(m => [...m, { role: 'assistant', content: 'متأسفم، الان نتوانستم پاسخ بدهم. کمی بعد دوباره تلاش کنید.' }])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <>
+      {/* دکمه شناور */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        aria-label="دستیار هوشمند"
+        className="chat-fab"
+        style={{
+          position: 'fixed', left: 16, zIndex: 99997,
+          width: 52, height: 52, borderRadius: '50%', border: 'none', cursor: 'pointer',
+          background: 'var(--color-brand)', color: '#000', fontSize: 24,
+          boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
+        }}>
+        {open ? '✕' : '💬'}
+      </button>
+
+      {/* پنل چت */}
+      {open && (
+        <div className="chat-panel" style={{
+          position: 'fixed', left: 16, zIndex: 99997,
+          width: 340, maxWidth: 'calc(100vw - 32px)', height: 440, maxHeight: '60vh',
+          display: 'flex', flexDirection: 'column', borderRadius: 14, overflow: 'hidden',
+          background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
+          boxShadow: '0 10px 30px rgba(0,0,0,0.4)',
+        }}>
+          <div className="px-4 py-3 text-sm font-bold" style={{ background: 'var(--color-bg-secondary)', borderBottom: '1px solid var(--color-border)' }}>
+            🤖 دستیار هوشمند دوربینکار
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+            {messages.map((m, i) => (
+              <div key={i} style={{ textAlign: m.role === 'user' ? 'left' : 'right' }}>
+                <div className="inline-block px-3 py-2 rounded-xl text-xs leading-6 whitespace-pre-wrap"
+                  style={{
+                    maxWidth: '85%',
+                    background: m.role === 'user' ? 'var(--color-brand)' : 'var(--color-bg-secondary)',
+                    color: m.role === 'user' ? '#000' : 'var(--color-text-primary)',
+                  }}>
+                  {m.content}
+                </div>
+                {m.products?.length > 0 && (
+                  <div className="mt-1 space-y-1">
+                    {m.products.slice(0, 4).map((p, j) => (
+                      <Link key={j} to={p.url} onClick={() => setOpen(false)}
+                        className="block px-3 py-1.5 rounded-lg text-xs"
+                        style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)', color: 'var(--color-text-primary)' }}>
+                        {/* نام و قیمت در دو خط جدا — مدل لاتین وسط متن فارسی چیدمان RTL را به‌هم می‌ریزد */}
+                        <div>📷 {p.name}</div>
+                        <div style={{ marginTop: 2, color: 'var(--color-brand)', fontWeight: 700 }}>
+                          {p.price_irt ? `${Number(p.price_irt).toLocaleString('fa-IR')} ریال` : ''}
+                          {!p.in_stock && <span style={{ color: '#e74c3c', fontWeight: 400 }}> (ناموجود)</span>}
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            {loading && <div className="text-xs px-2" style={{ color: 'var(--color-text-secondary)' }}>در حال فکر کردن… ⏳</div>}
+            <div ref={bottomRef} />
+          </div>
+
+          <div className="flex gap-2 p-2" style={{ borderTop: '1px solid var(--color-border)' }}>
+            <input
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && send()}
+              placeholder="سؤالتان را بنویسید…"
+              className="flex-1 px-3 py-2 rounded-lg text-xs outline-none"
+              style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)', color: 'var(--color-text-primary)' }}
+            />
+            <button onClick={send} disabled={loading}
+              className="px-4 py-2 rounded-lg text-xs font-bold"
+              style={{ background: 'var(--color-brand)', color: '#000', border: 'none', cursor: 'pointer', opacity: loading ? 0.5 : 1 }}>
+              ارسال
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}

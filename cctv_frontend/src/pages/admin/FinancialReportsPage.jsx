@@ -18,24 +18,24 @@ function ProfitTab() {
   return (
     <div>
       {/* خلاصه */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
         <div className="card p-4 text-center">
           <div className="text-xs text-gray-steel mb-1">کل فروش</div>
-          <div className="text-lg font-bold text-white">{fmt(s.total_revenue)} ت</div>
+          <div className="text-base sm:text-lg font-bold text-white">{fmt(s.total_revenue)} ریال</div>
         </div>
         <div className="card p-4 text-center">
           <div className="text-xs text-gray-steel mb-1">بهای تمام شده</div>
-          <div className="text-lg font-bold text-orange-400">{fmt(s.total_cost)} ت</div>
+          <div className="text-base sm:text-lg font-bold text-orange-400">{fmt(s.total_cost)} ریال</div>
         </div>
         <div className="card p-4 text-center">
           <div className="text-xs text-gray-steel mb-1">سود ناخالص ریالی</div>
-          <div className={`text-lg font-bold ${s.total_profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmt(s.total_profit)} ت</div>
+          <div className={`text-base sm:text-lg font-bold ${s.total_profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmt(s.total_profit)} ریال</div>
           <div className="text-xs text-gray-steel mt-0.5">حاشیه: {pct(s.profit_margin)}</div>
         </div>
         <div className="card p-4 text-center">
           <div className="text-xs text-gray-steel mb-1">سود به یوان روز</div>
-          <div className={`text-lg font-bold ${s.total_profit_cny >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmt(s.total_profit_cny)} ¥</div>
-          <div className="text-xs text-gray-steel mt-0.5">نرخ روز: {fmt(s.exchange_rate)} ت</div>
+          <div className={`text-base sm:text-lg font-bold ${s.total_profit_cny >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmt(s.total_profit_cny)} ¥</div>
+          <div className="text-xs text-gray-steel mt-0.5">نرخ روز: {fmt(s.exchange_rate)} ریال</div>
         </div>
       </div>
 
@@ -93,50 +93,50 @@ function BalanceSheetTab() {
       {/* سود/زیان */}
       <div className="card p-5">
         <h3 className="text-sm font-semibold text-white mb-4">📊 سود و زیان</h3>
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           <div className="bg-white/5 rounded-xl p-4 text-center">
             <div className="text-xs text-gray-steel mb-1">کل فروش</div>
-            <div className="text-lg font-bold text-white">{fmt(profit.total_revenue)} ت</div>
+            <div className="text-base sm:text-lg font-bold text-white">{fmt(profit.total_revenue)} ریال</div>
           </div>
           <div className="bg-white/5 rounded-xl p-4 text-center">
             <div className="text-xs text-gray-steel mb-1">بهای تمام شده فروش</div>
-            <div className="text-lg font-bold text-orange-400">{fmt(profit.total_cost)} ت</div>
+            <div className="text-base sm:text-lg font-bold text-orange-400">{fmt(profit.total_cost)} ریال</div>
           </div>
           <div className="bg-white/5 rounded-xl p-4 text-center">
             <div className="text-xs text-gray-steel mb-1">سود ناخالص</div>
-            <div className={`text-lg font-bold ${profit.gross_profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmt(profit.gross_profit)} ت</div>
+            <div className={`text-base sm:text-lg font-bold ${profit.gross_profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmt(profit.gross_profit)} ریال</div>
             <div className="text-xs text-gray-steel mt-0.5">حاشیه {profit.margin}%</div>
           </div>
           <div className="bg-white/5 rounded-xl p-4 text-center">
             <div className="text-xs text-gray-steel mb-1">سود به یوان</div>
-            <div className={`text-lg font-bold ${profit.gross_profit_cny >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmt(profit.gross_profit_cny)} ¥</div>
-            <div className="text-xs text-gray-steel mt-0.5">نرخ: {fmt(data.exchange_rate)}</div>
+            <div className={`text-base sm:text-lg font-bold ${profit.gross_profit_cny >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmt(profit.gross_profit_cny)} ¥</div>
+            <div className="text-xs text-gray-steel mt-0.5">نرخ: {fmt(data.exchange_rate)} ریال</div>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
         {/* دارایی‌ها */}
         <div className="card p-5">
           <h3 className="text-sm font-semibold text-green-400 mb-4">💰 دارایی‌ها</h3>
           <div className="space-y-3">
             {[
-              { label: 'موجودی کالا (بهای تمام شده)', value: assets.stock_value, color: '#fff' },
+              { label: 'موجودی کالا (بهای تمام شده)', value: assets.stock_value, color: 'var(--color-text-primary)' },
               { label: 'طلب از مشتریان', value: assets.receivable, color: '#0066FF' },
               { label: 'موجودی صندوق/بانک (ریال)', value: assets.cash_irr, color: '#00C896' },
               { label: 'موجودی ارزی (یوان)', value: assets.cash_cny, suffix: ' ¥', color: '#FF9500' },
               { label: 'معادل ریالی موجودی ارزی', value: assets.cash_cny_irr, color: '#8B5CF6' },
             ].map(item => (
-              <div key={item.label} className="flex items-center justify-between bg-white/5 rounded-lg px-4 py-2.5">
+              <div key={item.label} className="flex items-center justify-between gap-2 bg-white/5 rounded-lg px-4 py-2.5">
                 <div className="text-xs text-gray-steel">{item.label}</div>
-                <div className="text-sm font-bold" style={{ color: item.color }}>
-                  {fmt(item.value)}{item.suffix || ' ت'}
+                <div className="text-xs sm:text-sm font-bold text-left" style={{ color: item.color }}>
+                  {fmt(item.value)}{item.suffix || ' ریال'}
                 </div>
               </div>
             ))}
-            <div className="flex items-center justify-between bg-green-500/10 border border-green-500/30 rounded-lg px-4 py-3">
+            <div className="flex items-center justify-between gap-2 bg-green-500/10 border border-green-500/30 rounded-lg px-4 py-3">
               <div className="text-sm font-bold text-green-400">جمع دارایی‌ها</div>
-              <div className="text-lg font-bold text-green-400">{fmt(assets.total)} ت</div>
+              <div className="text-base sm:text-lg font-bold text-green-400 whitespace-nowrap">{fmt(assets.total)} ریال</div>
             </div>
           </div>
         </div>
@@ -150,22 +150,22 @@ function BalanceSheetTab() {
               { label: 'بدهی به شرکت‌های حمل (یوان)', value: liabilities.payable_cny, suffix: ' ¥', color: '#FF9500' },
               { label: 'معادل ریالی بدهی ارزی', value: liabilities.payable_cny_irr, color: '#FF6B6B' },
             ].map(item => (
-              <div key={item.label} className="flex items-center justify-between bg-white/5 rounded-lg px-4 py-2.5">
+              <div key={item.label} className="flex items-center justify-between gap-2 bg-white/5 rounded-lg px-4 py-2.5">
                 <div className="text-xs text-gray-steel">{item.label}</div>
-                <div className="text-sm font-bold" style={{ color: item.color }}>
-                  {fmt(item.value)}{item.suffix || ' ت'}
+                <div className="text-xs sm:text-sm font-bold text-left" style={{ color: item.color }}>
+                  {fmt(item.value)}{item.suffix || ' ریال'}
                 </div>
               </div>
             ))}
-            <div className="flex items-center justify-between bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3">
+            <div className="flex items-center justify-between gap-2 bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3">
               <div className="text-sm font-bold text-red-400">جمع بدهی‌ها</div>
-              <div className="text-lg font-bold text-red-400">{fmt(liabilities.total)} ت</div>
+              <div className="text-base sm:text-lg font-bold text-red-400 whitespace-nowrap">{fmt(liabilities.total)} ریال</div>
             </div>
 
             {/* خالص دارایی */}
-            <div className="flex items-center justify-between bg-brand/10 border border-brand/30 rounded-lg px-4 py-3 mt-4">
+            <div className="flex items-center justify-between gap-2 bg-brand/10 border border-brand/30 rounded-lg px-4 py-3 mt-4">
               <div className="text-sm font-bold text-brand">خالص دارایی (حقوق صاحب)</div>
-              <div className={`text-lg font-bold ${equity >= 0 ? 'text-brand' : 'text-red-400'}`}>{fmt(equity)} ت</div>
+              <div className={`text-base sm:text-lg font-bold whitespace-nowrap ${equity >= 0 ? 'text-brand' : 'text-red-400'}`}>{fmt(equity)} ریال</div>
             </div>
           </div>
         </div>

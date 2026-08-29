@@ -1,20 +1,48 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 import api from '../services/api'
-
-function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
-function imgUrl(url) {
-  if (!url) return null
-  if (url.startsWith('http')) return url
-  return `${import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:8000'}${url}`
-}
+import { orderService } from '../services/orders'
+import useCartStore from '../store/useCartStore'
+import { mediaUrl as imgUrl } from '../utils/media'
+import { formatPrice, formatNumber } from '../utils/format'
+import Seo from '../components/Seo'
 
 export default function PackageDetailPage() {
   const { slug } = useParams()
+  const navigate = useNavigate()
+  const { increment } = useCartStore()
   const { data: pkg, isLoading } = useQuery({
     queryKey: ['package-detail', slug],
     queryFn: () => api.get(`/catalog/packages/${slug}/`).then(r => r.data),
   })
+
+  const minQty = pkg?.min_quantity || 1
+  const [qty, setQty] = useState(0) // 0 یعنی هنوز مقداردهی نشده — بعد از لود با minQty پر می‌شود
+  const [adding, setAdding] = useState(false)
+  const [added, setAdded] = useState(false)
+
+  const bundles = qty || minQty
+
+  const handleAdd = async () => {
+    setAdding(true)
+    try {
+      await orderService.addPackageToCart(pkg.id, bundles)
+      increment()
+      setAdded(true)
+      setTimeout(() => setAdded(false), 2000)
+    } catch (e) {
+      if (e.response?.status === 401) {
+        toast.info('برای خرید ابتدا وارد حساب کاربری شوید')
+        navigate('/login')
+      } else {
+        toast.error(e.response?.data?.error || 'خطا در افزودن به سبد خرید')
+      }
+    } finally {
+      setAdding(false)
+    }
+  }
 
   if (isLoading) return (
     <div className="container-main py-20 text-center text-gray-steel">در حال بارگذاری...</div>
@@ -23,15 +51,27 @@ export default function PackageDetailPage() {
     <div className="container-main py-20 text-center text-gray-steel">پکیج یافت نشد</div>
   )
 
+  // ─── SEO/GEO — همان الگوی ProductDetailPage ─────────────────
+  const seoTitle = pkg.meta_title || `${pkg.name} | دوربینکار`
+  const seoDescription = pkg.meta_description || pkg.description?.slice(0, 160)
+
   return (
     <div className="container-main py-12 max-w-4xl">
+      <Seo
+        title={seoTitle}
+        description={seoDescription}
+        keywords={pkg.keywords}
+        canonical={`/packages/${pkg.slug}`}
+        image={pkg.image}
+        geoTags={pkg.geo_tags}
+      />
       <div className="mb-6">
         <Link to="/packages" className="text-sm text-gray-steel hover:text-white">← همه پکیج‌ها</Link>
       </div>
 
-      <div className="grid grid-cols-5 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 lg:gap-8">
         {/* اطلاعات پکیج */}
-        <div className="col-span-3">
+        <div className="lg:col-span-3">
           {pkg.image && (
         <img src={imgUrl(pkg.image)} alt={pkg.name}
           className="w-full h-56 object-cover rounded-2xl mb-6 bg-white/5" />
@@ -55,20 +95,17 @@ export default function PackageDetailPage() {
                     {item.product_name}
                   </Link>
                   <div className="text-xs text-gray-steel mt-1">
-                    تعداد: {item.quantity} عدد | قیمت واحد: {fmt(item.unit_price)} ت
-                  </div>
-                  <div className={`text-xs mt-1 ${item.stock > 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {item.stock > 0 ? `موجود (${item.stock} عدد)` : 'ناموجود'}
+                    تعداد: {formatNumber(item.quantity)} عدد | قیمت واحد: {formatPrice(item.unit_price)}
                   </div>
                 </div>
-                <div className="text-sm font-bold text-white">{fmt(item.subtotal)} ت</div>
+                <div className="text-sm font-bold text-white">{formatPrice(item.subtotal)}</div>
               </div>
             ))}
           </div>
         </div>
 
         {/* قیمت و خرید */}
-        <div className="col-span-2">
+        <div className="lg:col-span-2">
           <div className="card p-5 sticky top-24">
             <div className="text-center mb-4">
               <span className="text-2xl font-bold text-red-400 bg-red-500/10 px-4 py-1 rounded-full">
@@ -78,22 +115,43 @@ export default function PackageDetailPage() {
             <div className="space-y-3 mb-5">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-steel">قیمت اصلی:</span>
-                <span className="text-sm text-gray-steel line-through">{fmt(pkg.original_price)} ت</span>
+                <span className="text-sm text-gray-steel line-through">{formatPrice(pkg.original_price)}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-green-400">صرفه‌جویی:</span>
-                <span className="text-sm text-green-400 font-bold">{fmt(pkg.savings)} ت</span>
+                <span className="text-sm text-green-400 font-bold">{formatPrice(pkg.savings)}</span>
               </div>
               <div className="flex items-center justify-between border-t border-white/10 pt-3">
                 <span className="font-bold text-white">قیمت پکیج:</span>
-                <span className="text-2xl font-bold text-brand">{fmt(pkg.final_price)} ت</span>
+                <span className="text-2xl font-bold text-brand">{formatPrice(pkg.final_price)}</span>
+              </div>
+              {pkg.min_quantity > 1 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-steel">حداقل تعداد سفارش:</span>
+                  <span className="text-sm font-bold text-amber-400">{formatNumber(pkg.min_quantity)} بسته</span>
+                </div>
+              )}
+            </div>
+
+            {/* انتخاب تعداد بسته */}
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-sm text-gray-steel">تعداد بسته:</span>
+              <div className="flex items-center border border-white/10 rounded-xl overflow-hidden">
+                <button onClick={() => setQty(Math.max(minQty, bundles - 1))}
+                  disabled={bundles <= minQty}
+                  className="px-3 py-1.5 hover:bg-brand/10 transition-colors disabled:opacity-40">−</button>
+                <span className="px-4 py-1.5 text-sm font-mono min-w-[2.5rem] text-center">{formatNumber(bundles)}</span>
+                <button onClick={() => setQty(bundles + 1)}
+                  className="px-3 py-1.5 hover:bg-brand/10 transition-colors">+</button>
               </div>
             </div>
-            <button className="btn-primary w-full py-3 text-sm font-semibold">
-              افزودن پکیج به سبد خرید
+
+            <button onClick={handleAdd} disabled={adding}
+              className="btn-primary w-full py-3 text-sm font-semibold disabled:opacity-50">
+              {adding ? 'در حال افزودن...' : added ? '✓ به سبد اضافه شد' : 'افزودن پکیج به سبد خرید'}
             </button>
             <p className="text-xs text-gray-steel text-center mt-3">
-              با خرید این پکیج {fmt(pkg.savings)} تومان صرفه‌جویی می‌کنید
+              با خرید این پکیج {formatPrice(pkg.savings)} صرفه‌جویی می‌کنید
             </p>
           </div>
         </div>

@@ -1,22 +1,34 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { orderService } from '../services/orders'
 import useCartStore from '../store/useCartStore'
+import useAuthStore from '../store/useAuthStore'
 import { PageLoader, EmptyState } from '../components/ui'
+import OverdueBanner from '../components/OverdueBanner'
+import { formatPrice } from '../utils/format'
 
 export default function InquiryCartPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { setInquiryCount } = useCartStore()
+  const { setCount } = useCartStore()
+  const { user } = useAuthStore()
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
 
+  // نحوه تسویه بر اساس سطح همکاری — مطابق منطق بک‌اند هنگام ثبت سفارش
+  // نام ستون قیمت (یکماهه/تو حسابی) به مشتری نشان داده نمی‌شود؛ فقط موعد پرداخت مهم است
+  const tier = user?.profile?.partner_tier
+  const settlementLabel =
+    tier === 'silver' ? 'اعتباری (موعد: ۳۰ روز بعد)' :
+    (tier === 'gold' || tier === 'platinum') ? 'اعتباری' : 'نقدی'
+
   const { data: cart, isLoading } = useQuery({
     queryKey: ['inquiry-cart'],
     queryFn: orderService.getInquiryCart,
-    onSuccess: (d) => setInquiryCount(d?.items?.length || 0),
+    onSuccess: (d) => setCount(d?.items?.length || 0),
   })
 
   const handleRemove = async (variantId) => {
@@ -28,11 +40,23 @@ export default function InquiryCartPage() {
     setSubmitting(true)
     try {
       const order = await orderService.submitInquiry(notes)
+      if (order.split && order.orders?.length > 1) {
+        toast.info(
+          `به دلیل تفاوت روند تسویه، سفارش شما به دو سفارش تقسیم شد: ${order.orders.map(o => o.order_number).join(' و ')}`,
+          { duration: 6000 }
+        )
+      }
+      if (order.overdue_warning?.count > 0) {
+        toast.warning(
+          `شما ${Number(order.overdue_warning.count).toLocaleString('fa-IR')} قلم تسویه معوقه به مبلغ ${formatPrice(order.overdue_warning.total)} دارید. سفارش شما در اولویت بررسی قرار می‌گیرد.`
+        )
+      }
       setSubmitted(true)
       qc.invalidateQueries(['inquiry-cart'])
       setTimeout(() => navigate(`/account/orders`), 2000)
     } catch (e) {
       console.error(e)
+      toast.error(e.response?.data?.error || 'خطا در ثبت استعلام. لطفاً دوباره تلاش کنید.')
     } finally {
       setSubmitting(false)
     }
@@ -61,6 +85,8 @@ export default function InquiryCartPage() {
         </p>
       </div>
 
+      <OverdueBanner />
+
       {items.length === 0 ? (
         <EmptyState icon="📋" title="سبد استعلام خالی است"
           action={<Link to="/products" className="btn-primary">مشاهده محصولات</Link>}
@@ -71,19 +97,41 @@ export default function InquiryCartPage() {
           <div className="lg:col-span-2 space-y-3">
             {items.map(item => (
               <div key={item.id} className="card p-4 flex items-center gap-4">
-                <div className="w-14 h-14 rounded-xl bg-navy flex-shrink-0 flex items-center justify-center text-2xl">
-                  📷
+                <div className="w-14 h-14 rounded-xl bg-navy flex-shrink-0 overflow-hidden">
+                  {item.variant_image ? (
+                    <img src={item.variant_image} alt="" className="w-full h-full object-contain p-2" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-2xl">📷</div>
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-sm truncate">
-                    {item.variant_detail?.product?.name || `محصول #${item.variant}`}
+                    {item.variant_name}
                   </div>
                   <div className="text-xs text-gray-steel mt-0.5">
                     تعداد: {item.quantity.toLocaleString('fa-IR')}
+                    {item.settlement_display && (
+                      <span className="mr-2 bg-brand/10 text-brand px-2 py-0.5 rounded-full text-[10px]">
+                        {item.settlement_display}
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-cyan mt-0.5 font-mono">
-                    {item.variant_detail?.sku}
+                    {item.variant_sku}
                   </div>
+                  {/* موجودی — هشدار فقط اطلاع‌رسانی است و ثبت را مسدود نمی‌کند */}
+                  {item.available_stock !== undefined && item.available_stock !== null && (
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] text-gray-steel">
+                        موجودی: {Number(item.available_stock).toLocaleString('fa-IR')}
+                      </span>
+                      {item.stock_short && (
+                        <span className="text-[10px] bg-amber-500/15 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                          ⏳ در انتظار تایید موجودی
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <button onClick={() => handleRemove(item.variant)}
                   className="p-1.5 rounded-lg text-alert-red/50 hover:text-alert-red hover:bg-alert-red/10 transition-all">
@@ -114,6 +162,7 @@ export default function InquiryCartPage() {
               <div>🕐 تأیید ظرف ۱۵ دقیقه</div>
               <div>💰 قیمت نهایی توسط کارشناس</div>
               <div>⏳ رزرو موجودی ۲ ساعته</div>
+              <div>🤝 نحوه تسویه: <b className="text-gray-700 dark:text-gray-300">{settlementLabel}</b></div>
             </div>
 
             <button onClick={handleSubmit} disabled={submitting || items.length === 0}

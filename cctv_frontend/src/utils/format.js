@@ -1,6 +1,6 @@
-export const formatPrice = (toman) => {
-  if (!toman && toman !== 0) return '—'
-  return new Intl.NumberFormat('fa-IR').format(toman) + ' تومان'
+export const formatPrice = (rial) => {
+  if (!rial && rial !== 0) return '—'
+  return new Intl.NumberFormat('fa-IR').format(rial) + ' ریال'
 }
 
 export const formatNumber = (n) =>

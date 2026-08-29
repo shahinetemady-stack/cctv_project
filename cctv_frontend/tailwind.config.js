@@ -5,47 +5,99 @@ export default {
   theme: {
     extend: {
       colors: {
-        // ─── Tech Steel Blue Palette ───────────────────────────────
-        navy:    { DEFAULT: '#0A1628', 800: '#0d1e38', 700: '#112548' },
-        steel:   { DEFAULT: '#1E3A5F', light: '#2a4f80' },
-        brand:   { DEFAULT: '#0066FF', light: '#3385ff', dark: '#0052cc' },
-        cyan:    { DEFAULT: '#00D4FF', dim: '#00b8e0' },
-        gray:    { steel: '#8892A4',   soft: '#CBD5E1' },
-        surface: { light: '#F0F4F8',   card: '#ffffff' },
-        alert:   { red: '#FF3B3B',     green: '#00C896', orange: '#FF9500' },
+        // ─── DOORBINKAR SENTINEL — رنگ‌ها var-driven تا با تم لایت/دارک عوض شوند
+        // نام‌ها (gold/navy/...) برای سازگاری با کلاس‌های موجود حفظ شده‌اند
+        gold: {
+          DEFAULT: 'rgb(var(--color-brand-rgb) / <alpha-value>)',
+          light: 'rgb(var(--color-brand-light-rgb) / <alpha-value>)',
+          dark: '#F9A825',
+          deep: '#C49000',
+        },
+        brand: {
+          DEFAULT: 'rgb(var(--color-brand-rgb) / <alpha-value>)',
+          light: 'rgb(var(--color-brand-light-rgb) / <alpha-value>)',
+          dark: '#F9A825',
+        },
+        ink: {
+          DEFAULT: 'rgb(var(--color-bg-secondary-rgb) / <alpha-value>)',
+          900: 'rgb(var(--color-bg-secondary-rgb) / <alpha-value>)',
+          800: 'rgb(var(--color-bg-secondary-rgb) / <alpha-value>)',
+          700: 'rgb(var(--color-bg-card-rgb) / <alpha-value>)',
+          600: 'rgb(var(--color-bg-elevated-rgb) / <alpha-value>)',
+          500: 'rgb(var(--color-bg-elevated-rgb) / <alpha-value>)',
+        },
+        smoke: {
+          DEFAULT: '#A1A1AA',
+          light: '#D4D4D8',
+          dim: '#71717A',
+        },
+        alert: {
+          red: 'var(--color-danger)',
+          green: 'var(--color-success)',
+          orange: 'var(--color-warning)',
+          blue: 'var(--color-info)',
+        },
+        // ─── Back-compat aliases ──────────────────────────────
+        navy: {
+          DEFAULT: 'rgb(var(--color-bg-secondary-rgb) / <alpha-value>)',
+          800: 'rgb(var(--color-bg-secondary-rgb) / <alpha-value>)',
+          700: 'rgb(var(--color-bg-card-rgb) / <alpha-value>)',
+        },
+        steel: {
+          DEFAULT: 'rgb(var(--color-bg-elevated-rgb) / <alpha-value>)',
+          light: 'rgb(var(--color-bg-elevated-rgb) / <alpha-value>)',
+        },
+        cyan: { DEFAULT: 'rgb(var(--color-brand-light-rgb) / <alpha-value>)', dim: '#F9A825' },
+        gray: { steel: '#A1A1AA', soft: '#D4D4D8' },
+        surface: { light: 'rgb(var(--color-bg-secondary-rgb) / <alpha-value>)', card: 'rgb(var(--color-bg-card-rgb) / <alpha-value>)' },
       },
       fontFamily: {
-        // سفارشی — فونت وزیرمتن برای فارسی + JetBrains Mono برای کدها
-        sans:  ['Vazirmatn', 'system-ui', 'sans-serif'],
-        mono:  ['JetBrains Mono', 'monospace'],
+        sans: ['Vazirmatn', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'monospace'],
         display: ['Exo 2', 'Vazirmatn', 'sans-serif'],
       },
       backgroundImage: {
+        'gradient-gold': 'var(--gradient-gold)',
+        'gold-radial': 'radial-gradient(ellipse 80% 50% at 50% -20%, rgba(251,192,45,0.12), transparent)',
         'grid-pattern': `
-          linear-gradient(rgba(0,102,255,0.05) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(0,102,255,0.05) 1px, transparent 1px)
+          linear-gradient(var(--bg-grid-line) 1px, transparent 1px),
+          linear-gradient(90deg, var(--bg-grid-line) 1px, transparent 1px)
         `,
-        'hero-glow': 'radial-gradient(ellipse 80% 50% at 50% -20%, rgba(0,102,255,0.15), transparent)',
+        'hero-glow': 'radial-gradient(ellipse 80% 50% at 50% -20%, rgba(251,192,45,0.12), transparent)',
       },
       backgroundSize: {
-        'grid': '40px 40px',
+        'grid': '44px 44px',
       },
       animation: {
-        'fade-in':    'fadeIn 0.4s ease-out',
-        'slide-up':   'slideUp 0.4s ease-out',
+        'fade-in': 'fadeIn 0.4s ease-out',
+        'slide-up': 'slideUp 0.4s ease-out',
+        'float': 'float 5s ease-in-out infinite',
+        'pulse-gold': 'pulseGold 2.5s ease-in-out infinite',
+        'shimmer': 'shimmer 1.4s infinite',
+        // aliases قدیمی
         'pulse-slow': 'pulse 3s cubic-bezier(0.4,0,0.6,1) infinite',
-        'scan':       'scan 3s linear infinite',
+        'scan': 'scan 3s linear infinite',
       },
       keyframes: {
-        fadeIn:  { from: { opacity: 0 },                      to: { opacity: 1 } },
+        fadeIn: { from: { opacity: 0 }, to: { opacity: 1 } },
         slideUp: { from: { opacity: 0, transform: 'translateY(16px)' }, to: { opacity: 1, transform: 'translateY(0)' } },
-        scan:    { '0%,100%': { backgroundPosition: '0 0' },  '50%': { backgroundPosition: '0 100%' } },
+        float: { '0%,100%': { transform: 'translateY(0)' }, '50%': { transform: 'translateY(-10px)' } },
+        pulseGold: {
+          '0%,100%': { boxShadow: '0 0 0 0 rgba(251,192,45,0.35)' },
+          '50%': { boxShadow: '0 0 0 10px rgba(251,192,45,0)' },
+        },
+        shimmer: { '0%': { backgroundPosition: '-200% 0' }, '100%': { backgroundPosition: '200% 0' } },
+        scan: { '0%,100%': { backgroundPosition: '0 0' }, '50%': { backgroundPosition: '0 100%' } },
       },
       boxShadow: {
-        'brand':   '0 0 0 1px rgba(0,102,255,0.3), 0 4px 24px rgba(0,102,255,0.15)',
-        'card':    '0 1px 3px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.06)',
-        'card-dark': '0 1px 3px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.3)',
-        'glow':    '0 0 20px rgba(0,212,255,0.3)',
+        'card': 'var(--shadow-card)',
+        'card-hover': 'var(--shadow-card-hover)',
+        'gold': 'var(--shadow-gold)',
+        'gold-strong': 'var(--shadow-gold-strong)',
+        // aliases قدیمی
+        'brand': 'var(--shadow-gold)',
+        'card-dark': 'var(--shadow-card)',
+        'glow': '0 0 20px rgba(251,192,45,0.3)',
       },
     },
   },

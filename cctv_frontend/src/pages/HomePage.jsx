@@ -4,10 +4,11 @@ import { useQuery } from '@tanstack/react-query'
 import {
   CircuitBoard, Focus, Radio, Box, Wrench, Factory, Zap, Microscope,
   Handshake, Gem, Globe, Camera, Play, ArrowLeft, Check,
-  Search, Bot, Puzzle,
+  Search, Bot, Puzzle, RotateCw, Scale,
 } from 'lucide-react'
 import api from '../services/api'
 import { mediaUrl } from '../utils/media'
+import useCompareStore from '../store/useCompareStore'
 import SmartSearch from '../components/home/SmartSearch'
 import BrandMarquee from '../components/home/BrandMarquee'
 import Seo from '../components/Seo'
@@ -74,12 +75,39 @@ function GlassCard({ children, style = {}, hover = true }) {
 // ─── Product Card ────────────────────────────────────────────────
 function ProductCard({ product }) {
   const [hov, setHov] = useState(false)
+  const [flipped, setFlipped] = useState(false)
+  const { add: addToCompare, remove: removeFromCompare, has: inCompare } = useCompareStore()
+  const compared = inCompare(product.slug)
   const price = product.variants?.[0]?.final_price || product.min_price
   const rawImg = product.main_image?.image || product.images?.[0]?.image || product.image
   const img = mediaUrl(rawImg)
+  const rawBack = product.secondary_image?.image || product.images?.[1]?.image
+  const backImg = rawBack && rawBack !== rawImg ? mediaUrl(rawBack) : null
+  const handleCompare = (e) => {
+    e.preventDefault()
+    if (compared) {
+      removeFromCompare(product.slug)
+    } else {
+      addToCompare({
+        slug: product.slug,
+        name: product.name,
+        category_id: product.category_id,
+        image: rawImg || null,
+        min_price: price || null,
+      })
+    }
+  }
+  // چیپ‌های مشخصات زیر مدل — همان الگوی کارت صفحه محصولات (زرد = رنگ برند)
+  const catType = product.category_type || 'other'
+  const specChips = catType === 'lens'
+    ? [{ v: product.lens_resolution, lat: 1 }, { v: product.lens_degree, lat: 1 }, { v: product.focal_ratio }, { v: product.brand }]
+    : catType === 'board'
+      ? [{ v: product.board_system, lat: 1 }, { v: product.board_resolution, lat: 1 }, { v: product.brand }]
+      : [{ v: product.brand }, { v: product.sensor_name, gray: 1 }, { v: product.lens_name, gray: 1 }]
   return (
-    <Link to={`/products/${product.slug || product.id}`} style={{ textDecoration: 'none' }}>
+    <Link to={`/products/${product.slug || product.id}`} style={{ textDecoration: 'none', display: 'block', height: '100%' }}>
       <div
+        className="group"
         onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
         style={{
           background: 'var(--glass-bg)',
@@ -90,18 +118,50 @@ function ProductCard({ product }) {
           transform: hov ? 'translateY(-6px) scale(1.01)' : 'none',
           transition: 'all 0.3s ease',
           boxShadow: hov ? 'var(--shadow-card-hover), 0 0 30px rgba(251,192,45,0.08)' : 'var(--shadow-card)',
+          display: 'flex', flexDirection: 'column', height: '100%',
         }}
       >
-        <div style={{ aspectRatio: '1/1', background: 'var(--color-bg-tertiary)', overflow: 'hidden', position: 'relative' }}>
+        <div className="product-media-stage" style={{ aspectRatio: '1/1', overflow: 'hidden', position: 'relative' }}>
           {img ? (
-            <img src={img} alt={product.name} loading="lazy" style={{
-              width: '100%', height: '100%', objectFit: 'contain', padding: 12,
-              transition: 'transform 0.4s', ...(hov ? { transform: 'scale(1.06)' } : {})
-            }}/>
+            backImg ? (
+              <div className="product-flip">
+                <div className={`product-flip-inner${flipped ? ' flipped' : ''}`}>
+                  <div className="product-flip-face">
+                    <img src={img} alt={product.name} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'contain', padding: 12 }}/>
+                  </div>
+                  <div className="product-flip-face product-flip-back">
+                    <img src={backImg} alt={`${product.name} — نمای دیگر`} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'contain', padding: 12 }}/>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <img src={img} alt={product.name} loading="lazy" style={{
+                width: '100%', height: '100%', objectFit: 'contain', padding: 12,
+                transition: 'transform 0.4s', ...(hov ? { transform: 'scale(1.06)' } : {})
+              }}/>
+            )
           ) : (
             <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: T3, opacity: 0.4 }}>
               <Camera size={44} strokeWidth={1.2} />
             </div>
+          )}
+          {/* دکمه چرخش تصویر — فقط روی دستگاه‌های لمسی نمایش داده می‌شود (CSS: hover: none) */}
+          {backImg && (
+            <button
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setFlipped(v => !v) }}
+              aria-label="نمایش نمای دیگر محصول"
+              className="product-flip-btn"
+              style={{
+                position: 'absolute', bottom: 8, left: 8, zIndex: 10,
+                width: 44, height: 44, borderRadius: '50%',
+                alignItems: 'center', justifyContent: 'center',
+                background: 'var(--color-bg-elevated)', opacity: 0.9,
+                border: '1px solid var(--color-border)',
+                color: '#FFB25C', cursor: 'pointer',
+              }}
+            >
+              <RotateCw size={17} />
+            </button>
           )}
           {product.is_featured && (
             <div style={{
@@ -110,8 +170,16 @@ function ProductCard({ product }) {
               fontSize: 9, fontWeight: 700, padding: '3px 8px', borderRadius: 6,
             }}>پرفروش</div>
           )}
+          {(product.discount_percent || 0) > 0 && (
+            <div style={{
+              position: 'absolute', top: 8, left: 8,
+              background: 'rgba(248,113,113,0.15)', color: 'var(--color-danger)',
+              border: '1px solid rgba(248,113,113,0.4)',
+              fontSize: 9, fontWeight: 700, padding: '3px 8px', borderRadius: 6,
+            }}>٪{Number(product.discount_percent).toLocaleString('fa-IR')} تخفیف</div>
+          )}
         </div>
-        <div style={{ padding: '10px 12px' }}>
+        <div style={{ padding: '10px 12px', flex: 1, display: 'flex', flexDirection: 'column' }}>
           <div style={{ fontSize: 10, color: T3, marginBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {product.category_name || product.category?.name || 'قطعات دوربین'}
           </div>
@@ -128,23 +196,51 @@ function ProductCard({ product }) {
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             }}>{product.model_number}</div>
           )}
+          {/* چیپ‌های مشخصات — زیر مدل محصول؛ جا نشد می‌رود خط بعد */}
+          {specChips.some(c => c.v) && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 'auto', marginBottom: 8, direction: 'rtl' }}>
+              {specChips.filter(c => c.v).map((c, i) => (
+                <span key={i} dir={c.lat ? 'ltr' : undefined} style={{
+                  fontSize: 13, padding: '3px 10px', borderRadius: 999,
+                  fontFamily: c.lat ? MONO : undefined,
+                  whiteSpace: 'nowrap',
+                  background: c.gray ? 'var(--color-bg-tertiary)' : 'rgba(251,192,45,0.12)',
+                  color: c.gray ? T3 : 'var(--color-brand)',
+                }}>{c.v}</span>
+              ))}
+            </div>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', direction: 'rtl' }}>
             {price ? (
-              <span style={{ fontSize: 'clamp(12px, 2vw, 14px)', fontWeight: 700, color: B, fontFamily: MONO }}>
-                {Number(price).toLocaleString('fa-IR')} ریال
-              </span>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {product.min_price_original && (
+                  <span style={{ fontSize: 10, color: T3, textDecoration: "line-through" }}>
+                    {Number(product.min_price_original).toLocaleString('fa-IR')}
+                  </span>
+                )}
+                <span style={{ fontSize: 'clamp(12px, 2vw, 14px)', fontWeight: 700, color: B }}>
+                  {Number(price).toLocaleString('fa-IR')} ریال
+                </span>
+              </div>
             ) : (
               <span style={{ fontSize: 11, color: B }}>استعلام قیمت</span>
             )}
-            <div style={{
-              width: 26, height: 26, borderRadius: '50%',
-              background: hov ? 'var(--gradient-gold)' : BS,
-              border: '1px solid var(--color-border-strong)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'all 0.3s', flexShrink: 0, color: hov ? 'var(--color-brand-contrast)' : B,
-            }}>
-              <ArrowLeft size={12} strokeWidth={2.5} />
-            </div>
+            {/* دکمه مقایسه — مشابه کارت صفحه محصولات */}
+            <button
+              onClick={handleCompare}
+              aria-label={compared ? 'حذف از مقایسه' : 'افزودن به مقایسه'}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                fontSize: 11, padding: '6px 10px', borderRadius: 10,
+                border: `1px solid ${compared ? 'var(--color-brand)' : 'var(--color-border-strong)'}`,
+                background: compared ? 'var(--color-brand-soft)' : 'transparent',
+                color: compared ? 'var(--color-brand)' : 'var(--color-text-secondary)',
+                cursor: 'pointer', transition: 'all 0.2s', flexShrink: 0,
+              }}
+            >
+              <Scale size={13} />
+              <span>مقایسه</span>
+            </button>
           </div>
         </div>
       </div>
@@ -189,8 +285,14 @@ export default function HomePage() {
     queryKey: ['home-faqs'],
     queryFn: () => api.get('/assistant/faqs/').then(r => r.data).catch(() => null),
   })
+  // محصولات تخفیف‌دار جدا از صفحه اول محصولات گرفته می‌شود تا هر ۶ تای اول مستقل از ترتیب کلی بیایند
+  const { data: discountedData } = useQuery({
+    queryKey: ['home-discounted'],
+    queryFn: () => api.get('/catalog/products/?is_active=true&discounted=true').then(r => r.data).catch(() => null),
+  })
 
   const products = productsData?.results || []
+  const discountedProducts = (discountedData?.results || []).slice(0, 6)
   const packages = Array.isArray(packagesData) ? packagesData : (packagesData?.results || [])
   const articles = Array.isArray(articlesData) ? articlesData : (articlesData?.results || [])
   const videos   = Array.isArray(videosData)   ? videosData   : (videosData?.results   || [])
@@ -234,38 +336,30 @@ export default function HomePage() {
 
         <div style={{ maxWidth: 880, margin: '0 auto', padding: '0 clamp(16px, 4vw, 40px)', position: 'relative', zIndex: 2, textAlign: 'center' }}>
 
-          {/* بج برند */}
-          <div className="animate-slide-up" style={{ marginBottom: 22 }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: BST, border: '1px solid var(--color-border-strong)', borderRadius: 100, padding: '6px 16px', fontSize: 11, color: B, letterSpacing: 2, fontFamily: MONO }}>
-              <span className="rec-dot" style={{ width: 7, height: 7 }} />
-              DOORBINKAR — SURVEILLANCE PARTS
-            </span>
-          </div>
-
           {/* تیتر */}
           <h1 style={{ fontWeight: 900, lineHeight: 1.3, margin: 0 }}>
-            <span className="animate-slide-up" style={{ display: 'block', animationDelay: '120ms', fontSize: 'clamp(30px, 6.5vw, 56px)', color: T1 }}>
+            <span className="animate-slide-up" style={{ display: 'block', animationDelay: '40ms', fontSize: 'clamp(30px, 6.5vw, 56px)', color: T1 }}>
               قطعات دوربین مداربسته‌ات رو راحت پیدا کن
             </span>
-            <span className="animate-slide-up gold-text" style={{ display: 'block', animationDelay: '240ms', fontSize: 'clamp(30px, 6.5vw, 56px)' }}>
+            <span className="animate-slide-up gold-text" style={{ display: 'block', animationDelay: '100ms', fontSize: 'clamp(30px, 6.5vw, 56px)' }}>
               بسپارش به ربات هوشمند دوربینکار
             </span>
           </h1>
 
           {/* زیرتیتر — معرفی دو ویژگی کلیدی */}
-          <p className="animate-slide-up" style={{ animationDelay: '360ms', fontSize: 'clamp(13px, 2vw, 16px)', color: T2, lineHeight: 1.9, maxWidth: 620, margin: '18px auto 0' }}>
+          <p className="animate-slide-up" style={{ animationDelay: '160ms', fontSize: 'clamp(13px, 2vw, 16px)', color: T2, lineHeight: 1.9, maxWidth: 620, margin: '18px auto 0' }}>
             بین هزاران قطعه با <b style={{ color: T1 }}>جستجوی پیشرفته</b> دقیقاً همان چیزی را که می‌خواهی پیدا کن — مدل، چیپست، برند.
             اگر مطمئن نیستی، <b style={{ color: T1 }}>ربات مشاور</b> در انتخاب قطعه مناسب، مچ کردن لنز و برد و پاسخ به سوالات فنی کمکت می‌کند.
             فقط کافیه توی کادر زیر هر سوالی داری ازش بپرسی.
           </p>
 
           {/* باکس هوشمند */}
-          <div className="animate-slide-up" style={{ animationDelay: '480ms', marginTop: 34, textAlign: 'right' }}>
+          <div className="animate-slide-up" style={{ animationDelay: '220ms', marginTop: 34, textAlign: 'right' }}>
             <SmartSearch />
           </div>
 
           {/* کارت‌های ویژگی */}
-          <div className="animate-slide-up" style={{ animationDelay: '600ms', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: 12, marginTop: 26, textAlign: 'right' }}>
+          <div className="animate-slide-up" style={{ animationDelay: '280ms', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: 12, marginTop: 26, textAlign: 'right' }}>
             {[
               { icon: Search, title: 'جستجوی پیشرفته', desc: 'جستجو در مدل، چیپست و برند + فیلتر دسته، قیمت و موجودی' },
               { icon: Bot, title: 'ربات مشاور هوشمند', desc: 'انتخاب قطعه مناسب و پاسخ به سوالات فنی درباره برد و سنسور' },
@@ -383,7 +477,7 @@ export default function HomePage() {
             </p>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(240px, 100%), 1fr))', gap: 'clamp(14px, 2vw, 20px)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(180px, 100%), 1fr))', gap: 'clamp(14px, 2vw, 20px)' }}>
             {[
               { icon: Factory, title: 'مستقیم از کارخانه', desc: 'بدون واسطه — قیمت واقعی کارخانه با ضمانت اصالت کالا' },
               { icon: Zap, title: 'تحویل سریع', desc: 'تحویل اکسپرس ۴۸ ساعته از انبار تهران برای سفارش‌های آماده' },
@@ -413,6 +507,36 @@ export default function HomePage() {
       {/* ══════════════════════════════════════════════
           محصولات
       ══════════════════════════════════════════════ */}
+      {/* ══════════════════════════════════════════════
+          SPECIAL OFFERS — محصولات تخفیف‌دار
+      ══════════════════════════════════════════════ */}
+      {discountedProducts.length > 0 && (
+      <Section>
+        <div style={{ maxWidth: 1280, margin: '0 auto', padding: '0 clamp(16px, 4vw, 40px) clamp(60px, 12vw, 100px)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 'clamp(28px, 5vw, 48px)', direction: 'rtl', flexWrap: 'wrap', gap: 12 }}>
+            <div>
+              <SectionTag>SPECIAL OFFERS</SectionTag>
+              <h2 style={{ fontSize: 'clamp(20px, 4vw, 40px)', fontWeight: 800, color: T1 }}>تخفیفات ویژه</h2>
+            </div>
+            <Link to="/products?discounted=true" style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+              color: B, textDecoration: 'none', fontSize: 13,
+              border: '1px solid var(--color-border-strong)', borderRadius: 100, padding: '8px 20px',
+            }}>
+              مشاهده همه
+              <ArrowLeft size={13} />
+            </Link>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(160px, 100%), 1fr))', gap: 'clamp(12px, 2vw, 20px)' }}>
+            {discountedProducts.map((p, i) => (
+              <Section key={p.id} delay={i * 60} style={{ height: '100%' }}><ProductCard product={p}/></Section>
+            ))}
+          </div>
+        </div>
+      </Section>
+      )}
+
       <Section>
         <div style={{ maxWidth: 1280, margin: '0 auto', padding: '0 clamp(16px, 4vw, 40px) clamp(60px, 12vw, 100px)' }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 'clamp(28px, 5vw, 48px)', direction: 'rtl', flexWrap: 'wrap', gap: 12 }}>
@@ -431,8 +555,8 @@ export default function HomePage() {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(160px, 100%), 1fr))', gap: 'clamp(12px, 2vw, 20px)' }}>
-            {products.length > 0 ? products.map((p, i) => (
-              <Section key={p.id} delay={i * 60}><ProductCard product={p}/></Section>
+            {products.length > 0 ? products.filter(p => !(p.discount_percent > 0)).slice(0, 18).map((p, i) => (
+              <Section key={p.id} delay={i * 60} style={{ height: '100%' }}><ProductCard product={p}/></Section>
             )) : (
               [...Array(8)].map((_, i) => (
                 <GlassCard key={i} hover={false} style={{ overflow: 'hidden' }}>
@@ -503,8 +627,8 @@ export default function HomePage() {
                         display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
                       }}>{pkg.description}</p>
                       {pkgPrice && (
-                        <div style={{ fontSize: 18, fontWeight: 700, color: B, fontFamily: MONO, marginBottom: 16 }}>
-                          {Number(pkgPrice).toLocaleString('fa-IR')} تومان
+                        <div style={{ fontSize: 18, fontWeight: 700, color: B, marginBottom: 16 }}>
+                          {Number(pkgPrice).toLocaleString('fa-IR')} ریال
                         </div>
                       )}
                       <Link to={`/packages/${pkg.slug || pkg.id}`} style={{
@@ -575,7 +699,7 @@ export default function HomePage() {
                   background: 'var(--color-bg-elevated)', color: T2,
                   textDecoration: 'none', border: '1px solid var(--color-border)',
                   borderRadius: 14, padding: '12px 24px', fontSize: 13, whiteSpace: 'nowrap',
-                }}>اطلاعات بیشتر</Link>
+                }}>اطلاعات بیشتر درباره همکاری</Link>
               </div>
             </div>
           </div>

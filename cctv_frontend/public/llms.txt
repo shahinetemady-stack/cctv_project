@@ -1,0 +1,28 @@
+# دوربینکار | فروشگاه آنلاین قطعات دوربین مداربسته
+
+> فروشگاه تخصصی قطعات دوربین مداربسته — برد، لنز، سنسور، مودم و بدنه با قیمت همکار؛ جستجوی هوشمند و ربات مشاور برای انتخاب قطعه سازگار، ارسال به سراسر ایران.
+
+## صفحات اصلی
+
+- [صفحه اصلی](https://doorbinkar.com/): معرفی فروشگاه و دسترسی سریع به بخش‌ها
+- [محصولات](https://doorbinkar.com/products): فهرست کامل قطعات دوربین مداربسته
+- [پکیج‌ها](https://doorbinkar.com/packages): پکیج‌های آماده سیستم نظارتی
+- [مقایسه محصولات](https://doorbinkar.com/compare): مقایسه مشخصات قطعات
+- [سفارش از چین](https://doorbinkar.com/china-order): ثبت سفارش و استعلام قیمت از چین
+- [پیگیری سفارش](https://doorbinkar.com/track): رهگیری مرسوله با شماره سفارش
+
+## محتوا و آموزش
+
+- [وبلاگ](https://doorbinkar.com/blog): مقالات آموزشی دوربین مداربسته
+- [ویدیوها](https://doorbinkar.com/videos): ویدیوهای آموزشی و معرفی محصول
+- [دانلودها](https://doorbinkar.com/downloads): نرم‌افزارها و فایل‌های راهنما
+- [سوالات متداول سفارش از چین](https://doorbinkar.com/china-order/faq)
+
+## قوانین
+
+- [قوانین و مقررات](https://doorbinkar.com/terms)
+- [حریم خصوصی](https://doorbinkar.com/privacy)
+
+## نقشه سایت
+
+- [sitemap.xml](https://doorbinkar.com/sitemap.xml): فهرست کامل صفحات برای خزنده‌ها

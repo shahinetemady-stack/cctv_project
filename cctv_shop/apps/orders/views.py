@@ -24,6 +24,8 @@ Admin:
 """
 
 import logging
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
@@ -37,6 +39,7 @@ from .serializers import (
     CartSerializer, CartItemSerializer,
     InquiryCartSerializer, InquiryCartItemSerializer,
     OrderSerializer, OrderAdminSerializer, ConfirmInquirySerializer,
+    PaymentReceiptSerializer,
 )
 from .services import (
     create_direct_order, create_inquiry_order,
@@ -44,6 +47,17 @@ from .services import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _overdue_warning(user):
+    """هشدار تسویه‌های سررسیدگذشته کاربر — هرگز جلوی ثبت سفارش را نمی‌گیرد."""
+    try:
+        count = user.overdue_count()
+        if count > 0:
+            return {"count": count, "total": user.overdue_total()}
+    except Exception as e:
+        logger.warning(f"[ORDER] overdue check failed for user {user.pk}: {e}")
+    return None
 
 
 # ─── Cart ─────────────────────────────────────────────────────────────────────
@@ -61,10 +75,33 @@ class CartView(APIView):
         return Response(CartSerializer(cart, context={"request": request}).data)
 
     def post(self, request):
-        """افزودن یا بروزرسانی آیتم در سبد."""
+        """افزودن یا بروزرسانی آیتم در سبد — variant_id (کالا) یا package_id (پکیج)."""
         cart = self._get_cart(request)
         variant_id = request.data.get("variant_id")
+        package_id = request.data.get("package_id")
         quantity = int(request.data.get("quantity", 1))
+        settlement = request.data.get("settlement_type") or "cash"
+
+        # ── آیتم پکیج — قیمت ثابت بسته، تسویه نقدی، حداقل تعداد رعایت می‌شود ──
+        if package_id:
+            from apps.catalog.models import Package
+            try:
+                pkg = Package.objects.get(pk=package_id, is_active=True)
+            except (Package.DoesNotExist, TypeError, ValueError):
+                return Response({"error": "پکیج یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
+            if quantity < pkg.min_quantity:
+                return Response(
+                    {"error": f"حداقل تعداد سفارش این پکیج {pkg.min_quantity} بسته است."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            item, created = CartItem.objects.get_or_create(
+                cart=cart, package=pkg, variant=None,
+                defaults={"quantity": quantity},
+            )
+            if not created:
+                item.quantity = quantity
+                item.save()
+            return Response(CartSerializer(cart, context={"request": request}).data)
 
         try:
             from apps.catalog.models import ProductVariant
@@ -72,14 +109,14 @@ class CartView(APIView):
         except (ProductVariant.DoesNotExist, TypeError):
             return Response({"error": "محصول یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
 
-        if variant.available_stock < quantity:
-            return Response(
-                {"error": f"موجودی کافی نیست. موجودی: {variant.available_stock}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        from apps.catalog.pricing import allowed_settlements
+        if settlement not in allowed_settlements(request.user, variant):
+            return Response({"error": "این نوع تسویه برای شما مجاز نیست."},
+                            status=status.HTTP_400_BAD_REQUEST)
 
+        # سقف تعداد نداریم — موجودی نمادین است و سفارش‌های عمده (حتی بیشتر از موجودی) پذیرفته می‌شود
         item, created = CartItem.objects.get_or_create(
-            cart=cart, variant=variant,
+            cart=cart, variant=variant, settlement_type=settlement,
             defaults={"quantity": quantity},
         )
         if not created:
@@ -89,10 +126,17 @@ class CartView(APIView):
         return Response(CartSerializer(cart, context={"request": request}).data)
 
     def delete(self, request):
-        """حذف آیتم از سبد."""
+        """حذف آیتم از سبد — اگر تسویه مشخص شود فقط همان نوع."""
         cart = self._get_cart(request)
+        package_id = request.data.get("package_id")
+        if package_id:
+            CartItem.objects.filter(cart=cart, package_id=package_id).delete()
+            return Response(CartSerializer(cart, context={"request": request}).data)
         variant_id = request.data.get("variant_id")
-        CartItem.objects.filter(cart=cart, variant_id=variant_id).delete()
+        qs = CartItem.objects.filter(cart=cart, variant_id=variant_id)
+        if request.data.get("settlement_type"):
+            qs = qs.filter(settlement_type=request.data["settlement_type"])
+        qs.delete()
         return Response(CartSerializer(cart, context={"request": request}).data)
 
 
@@ -109,13 +153,23 @@ def cart_checkout(request):
         return Response({"error": "سبد خرید خالی است."}, status=status.HTTP_400_BAD_REQUEST)
 
     shipping_address = request.data.get("shipping_address", "")
+    shipping_method = request.data.get("shipping_method", "")
+    freight_company = request.data.get("freight_company", "")
 
     try:
-        order = create_direct_order(request.user, cart)
-        order.shipping_address = shipping_address
-        order.save(update_fields=["shipping_address"])
+        orders = create_direct_order(request.user, cart)
+        for o in orders:
+            o.shipping_address = shipping_address
+            o.shipping_method = shipping_method
+            o.freight_company = freight_company
+            o.save(update_fields=["shipping_address", "shipping_method", "freight_company"])
         # payment_link توسط POST /api/orders/bank/request/ پر می‌شود
-        return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+        orders_data = OrderSerializer(orders, many=True).data
+        data = dict(orders_data[0])
+        data["orders"] = orders_data
+        data["split"] = len(orders) > 1
+        data["overdue_warning"] = _overdue_warning(request.user)
+        return Response(data, status=status.HTTP_201_CREATED)
     except ValueError as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -141,6 +195,7 @@ class InquiryCartView(APIView):
         cart = self._get_cart(request)
         variant_id = request.data.get("variant_id")
         quantity = int(request.data.get("quantity", 1))
+        settlement = request.data.get("settlement_type") or "cash"
 
         try:
             from apps.catalog.models import ProductVariant
@@ -148,8 +203,13 @@ class InquiryCartView(APIView):
         except (ProductVariant.DoesNotExist, TypeError):
             return Response({"error": "محصول یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
 
+        from apps.catalog.pricing import allowed_settlements
+        if settlement not in allowed_settlements(request.user, variant):
+            return Response({"error": "این نوع تسویه برای شما مجاز نیست."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
         item, created = InquiryCartItem.objects.get_or_create(
-            cart=cart, variant=variant,
+            cart=cart, variant=variant, settlement_type=settlement,
             defaults={"quantity": quantity},
         )
         if not created:
@@ -161,7 +221,10 @@ class InquiryCartView(APIView):
     def delete(self, request):
         cart = self._get_cart(request)
         variant_id = request.data.get("variant_id")
-        InquiryCartItem.objects.filter(cart=cart, variant_id=variant_id).delete()
+        qs = InquiryCartItem.objects.filter(cart=cart, variant_id=variant_id)
+        if request.data.get("settlement_type"):
+            qs = qs.filter(settlement_type=request.data["settlement_type"])
+        qs.delete()
         return Response(InquiryCartSerializer(cart, context={"request": request}).data)
 
 
@@ -184,8 +247,13 @@ def inquiry_cart_submit(request):
     cart.save()
 
     try:
-        order = create_inquiry_order(request.user, cart)
-        return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+        orders = create_inquiry_order(request.user, cart)
+        orders_data = OrderSerializer(orders, many=True).data
+        data = dict(orders_data[0])
+        data["orders"] = orders_data
+        data["split"] = len(orders) > 1
+        data["overdue_warning"] = _overdue_warning(request.user)
+        return Response(data, status=status.HTTP_201_CREATED)
     except ValueError as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -260,24 +328,52 @@ class AdminOrderListView(APIView):
 def admin_confirm_inquiry(request, order_number):
     """
     POST /api/orders/admin/<order_number>/confirm/
-    body: { "confirmed_amount": 1500000 }
+    body: { "confirmed_amount": 1500000, "settlement_type"؟, "settlement_due_date"؟,
+            "sarraf_account_number"؟, "sarraf_account_holder"؟ }
+    تأیید سفارش در انتظار — هم استعلامی هم خرید مستقیم.
+    اگر قلم نقدی داشته باشد، اطلاعات حساب صراف اجباری است.
     """
     try:
-        order = Order.objects.get(
-            order_number=order_number,
-            order_type=Order.OrderType.INQUIRY,
-        )
+        order = Order.objects.get(order_number=order_number)
     except Order.DoesNotExist:
         return Response({"error": "سفارش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
 
     serializer = ConfirmInquirySerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
 
+    sarraf_number = serializer.validated_data.get("sarraf_account_number", "").strip()
+    sarraf_holder = serializer.validated_data.get("sarraf_account_holder", "").strip()
+
+    # برای سفارش‌های دارای قلم نقدی، اطلاعات حساب صراف اجباری است
+    if order.items.filter(settlement_type="cash").exists():
+        if not sarraf_number or not sarraf_holder:
+            return Response(
+                {"error": "برای اقلام نقدی، شماره حساب و نام صاحب حساب صراف الزامی است."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    # نحوه تسویه و موعد آن (اختیاری) — فرمت تاریخ: YYYY-MM-DD
+    settlement_type = request.data.get("settlement_type") or None
+    due_raw = request.data.get("settlement_due_date") or None
+    due_date = None
+    if due_raw:
+        from datetime import date as _date
+        try:
+            due_date = _date.fromisoformat(str(due_raw))
+        except ValueError:
+            return Response({"error": "فرمت موعد تسویه نامعتبر است (YYYY-MM-DD)"},
+                            status=status.HTTP_400_BAD_REQUEST)
+
     try:
         order = confirm_inquiry_order(
             order=order,
             admin_user=request.user,
             confirmed_amount=serializer.validated_data["confirmed_amount"],
+            settlement_type=settlement_type,
+            settlement_due_date=due_date,
+            sarraf_account_number=sarraf_number,
+            sarraf_account_holder=sarraf_holder,
+            staff=request.user,
         )
         return Response(OrderAdminSerializer(order).data)
     except ValueError as e:
@@ -420,29 +516,207 @@ class AdminOrderListView(APIView):
         if not request.user.is_staff:
             return Response({'error': 'دسترسی ندارید'}, status=403)
         from .models import Order
-        qs = Order.objects.select_related('user').order_by('-created_at')
+        qs = Order.objects.select_related('user', 'user__profile', 'created_by', 'updated_by').order_by('-created_at')
 
         status = request.query_params.get('status')
         delivery = request.query_params.get('delivery_status')
         if status:
             qs = qs.filter(status=status)
+        else:
+            # پیش‌فرض: پیش‌فاکتورهای ردشده فقط با ?status=rejected (تب مخصوص) دیده می‌شوند
+            qs = qs.exclude(status=Order.Status.REJECTED)
         if delivery:
             qs = qs.filter(delivery_status=delivery)
 
         return Response([{
             'order_number': o.order_number,
+            'order_type': o.order_type,
             'user_name': o.user.get_full_name() or '',
             'user_phone': o.user.phone or '',
+            'customer_is_partner': o.user.is_partner,
             'status': o.status,
             'total_amount': o.total_amount,
+            'confirmed_amount': o.confirmed_amount,
+            'effective_amount': o.effective_amount,
+            'settlement_type': o.settlement_type,
+            'settlement_display': o.get_settlement_type_display(),
+            'settlement_due_date': o.settlement_due_date.isoformat() if o.settlement_due_date else None,
+            'is_settlement_due': o.is_settlement_due,
+            'sarraf_account_number': o.sarraf_account_number or '',
+            'sarraf_account_holder': o.sarraf_account_holder or '',
+            'items_count': o.items.count(),
+            'customer_notes': o.customer_notes or '',
+            'admin_notes': o.admin_notes or '',
             'delivery_status': getattr(o, 'delivery_status', 'pending') or 'pending',
             'courier_company': getattr(o, 'courier_company', '') or '',
             'tracking_code': o.tracking_code or '',
+            'shipping_method': o.shipping_method or '',
+            'shipping_method_display': o.get_shipping_method_display() if o.shipping_method else '',
             'shipping_address': o.shipping_address or '',
             'created_at': o.created_at.strftime('%Y-%m-%d %H:%M'),
+            'created_by': (o.created_by.get_full_name() or o.created_by.phone) if o.created_by else '',
             'updated_by': o.updated_by.get_full_name() or o.updated_by.phone if o.updated_by else '',
             'status_updated_at': o.status_updated_at.strftime('%Y-%m-%d %H:%M') if o.status_updated_at else '',
+            'reject_reason': o.reject_reason or '',
+            'rejected_at': o.rejected_at.strftime('%Y-%m-%d %H:%M') if o.rejected_at else '',
         } for o in qs[:200]])
+
+
+class AdminOrderDetailView(APIView):
+    """GET /api/orders/admin/<order_number>/detail/ — جزئیات سفارش با اقلام"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, order_number):
+        if not request.user.is_staff:
+            return Response({'error': 'دسترسی ندارید'}, status=403)
+        from .models import Order
+        try:
+            order = Order.objects.select_related('user', 'created_by', 'updated_by').prefetch_related('items__variant__product').get(
+                order_number=order_number
+            )
+        except Order.DoesNotExist:
+            return Response({'error': 'سفارش یافت نشد'}, status=404)
+
+        items = [{
+            'id': it.id,
+            'variant_id': it.variant_id,
+            'product_name': it.variant.product.name,
+            'sku': it.variant.sku,
+            'quantity': it.quantity,
+            'available_stock': it.variant.available_stock,
+            'unit_price': it.unit_price,
+            'confirmed_unit_price': it.confirmed_unit_price,
+            'subtotal': it.subtotal,
+            'settlement_type': it.settlement_type,
+            'settlement_display': it.get_settlement_type_display(),
+            'settlement_due_date': it.settlement_due_date.isoformat() if it.settlement_due_date else None,
+            'is_settlement_due': it.is_settlement_due,
+        } for it in order.items.all()]
+
+        return Response({
+            'order_number': order.order_number,
+            'order_type': order.order_type,
+            'order_type_display': order.get_order_type_display(),
+            'status': order.status,
+            'status_display': order.get_status_display(),
+            'user_name': order.user.get_full_name() or '',
+            'user_phone': order.user.phone or '',
+            'total_amount': order.total_amount,
+            'confirmed_amount': order.confirmed_amount,
+            'effective_amount': order.effective_amount,
+            'settlement_type': order.settlement_type,
+            'settlement_display': order.get_settlement_type_display(),
+            'settlement_due_date': order.settlement_due_date.isoformat() if order.settlement_due_date else None,
+            'is_settlement_due': order.is_settlement_due,
+            'sarraf_account_number': order.sarraf_account_number or '',
+            'sarraf_account_holder': order.sarraf_account_holder or '',
+            'paid_amount': order.paid_amount,
+            'payment_method': order.payment_method,
+            'customer_notes': order.customer_notes or '',
+            'admin_notes': order.admin_notes or '',
+            'delivery_status': order.delivery_status or 'pending',
+            'courier_company': order.courier_company or '',
+            'shipping_method': order.shipping_method or '',
+            'shipping_method_display': order.get_shipping_method_display() if order.shipping_method else '',
+            'shipping_address': order.shipping_address or '',
+            'tracking_code': order.tracking_code or '',
+            'items': items,
+            'reject_reason': order.reject_reason or '',
+            'rejected_at': order.rejected_at.strftime('%Y-%m-%d %H:%M') if order.rejected_at else '',
+            'created_at': order.created_at.strftime('%Y-%m-%d %H:%M'),
+            'created_by': (order.created_by.get_full_name() or order.created_by.phone) if order.created_by else '',
+            'updated_by': (order.updated_by.get_full_name() or order.updated_by.phone) if order.updated_by else '',
+            'receipts': PaymentReceiptSerializer(
+                order.payment_receipts.all(), many=True, context={'request': request}
+            ).data,
+        })
+
+
+class AdminOrderItemUpdateView(APIView):
+    """
+    PATCH /api/orders/admin/<order_number>/items/<item_id>/
+    اصلاح یک قلم سفارش — تعداد واقعی قابل ارسال، نحوه تسویه، موعد تسویه.
+    quantity=0 یعنی حذف قلم (اگر آخرین قلم باشد رد می‌شود). مبلغ کل سفارش بازمحاسبه می‌شود.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, order_number, item_id):
+        if not request.user.is_staff:
+            return Response({'error': 'دسترسی ندارید'}, status=403)
+        from .models import Order, OrderItem, Settlement, StockShortage
+        try:
+            order = Order.objects.get(order_number=order_number)
+            item = order.items.get(pk=item_id)
+        except (Order.DoesNotExist, OrderItem.DoesNotExist):
+            return Response({'error': 'سفارش یا قلم یافت نشد'}, status=404)
+
+        d = request.data
+
+        def _record_shortage(old_qty, new_qty):
+            """ثبت مازاد تقاضا وقتی ادمین تعداد را کم می‌کند یا قلم را حذف می‌کند — فقط برای سفارش‌های در انتظار بررسی."""
+            if order.status != Order.Status.PENDING or new_qty >= old_qty:
+                return
+            StockShortage.objects.create(
+                order=order,
+                variant=item.variant,
+                requested_qty=old_qty,
+                approved_qty=new_qty,
+                shortage_qty=old_qty - new_qty,
+                reason=d.get("reason", "stock"),
+                created_by=request.user,
+            )
+
+        # تعداد — صفر یعنی حذف قلم
+        if 'quantity' in d:
+            try:
+                qty = int(d['quantity'])
+            except (TypeError, ValueError):
+                return Response({'error': 'تعداد نامعتبر است'}, status=400)
+            if qty <= 0:
+                if order.items.count() <= 1:
+                    return Response({'error': 'نمی‌توان آخرین قلم سفارش را حذف کرد — سفارش را لغو کنید'}, status=400)
+                _record_shortage(item.quantity, 0)
+                item.delete()
+                order.updated_by = request.user
+                self._recalc(order)
+                return Response({'ok': True, 'deleted': True, 'total_amount': order.total_amount})
+            _record_shortage(item.quantity, qty)
+            item.quantity = qty
+
+        # نحوه تسویه — با تغییر آن قیمت واحد هم از فرمول به‌روز می‌شود
+        if 'settlement_type' in d:
+            st = d['settlement_type']
+            if st not in Settlement.values:
+                return Response({'error': 'نوع تسویه نامعتبر است'}, status=400)
+            item.settlement_type = st
+            from apps.catalog.pricing import price_for_settlement
+            item.unit_price = price_for_settlement(item.variant, order.user, st)
+            # موعد خودکار از نوع تسویه — تقویم دستی از فرانت حذف شده؛ مگر اینکه صراحتاً تاریخ ارسال شود
+            if 'settlement_due_date' not in d:
+                from .models import settlement_due_for
+                item.settlement_due_date = settlement_due_for(st)
+
+        # موعد تسویه — رشته YYYY-MM-DD یا null
+        if 'settlement_due_date' in d:
+            raw = d['settlement_due_date']
+            if not raw:
+                item.settlement_due_date = None
+            else:
+                from datetime import date as _date
+                try:
+                    item.settlement_due_date = _date.fromisoformat(str(raw))
+                except ValueError:
+                    return Response({'error': 'فرمت موعد تسویه نامعتبر است (YYYY-MM-DD)'}, status=400)
+
+        item.save()
+        order.updated_by = request.user
+        self._recalc(order)
+        return Response({'ok': True, 'total_amount': order.total_amount})
+
+    @staticmethod
+    def _recalc(order):
+        order.total_amount = sum(i.subtotal for i in order.items.all())
+        order.save(update_fields=['total_amount', 'updated_by', 'updated_at'])
 
 
 class AdminOrderUpdateView(APIView):
@@ -460,10 +734,25 @@ class AdminOrderUpdateView(APIView):
             return Response({'error': 'سفارش یافت نشد'}, status=404)
 
         d = request.data
-        allowed = ['status', 'delivery_status', 'courier_company', 'tracking_code']
+        old_status = order.status
+        allowed = ['status', 'delivery_status', 'courier_company', 'tracking_code',
+                   'settlement_type', 'confirmed_amount', 'admin_notes', 'paid_amount',
+                   'payment_method', 'shipping_method', 'freight_company']
         for field in allowed:
             if field in d:
                 setattr(order, field, d[field])
+
+        # موعد تسویه — رشته YYYY-MM-DD یا null
+        if 'settlement_due_date' in d:
+            raw = d['settlement_due_date']
+            if not raw:
+                order.settlement_due_date = None
+            else:
+                from datetime import date as _date
+                try:
+                    order.settlement_due_date = _date.fromisoformat(str(raw))
+                except ValueError:
+                    return Response({'error': 'فرمت موعد تسویه نامعتبر است (YYYY-MM-DD)'}, status=400)
 
         # تنظیم خودکار تاریخ ارسال
         if d.get('delivery_status') == 'shipped' and not getattr(order, 'shipped_at', None):
@@ -474,4 +763,450 @@ class AdminOrderUpdateView(APIView):
         order.updated_by = request.user
         order.status_updated_at = timezone.now()
         order.save()
+
+        # پیامک تغییر وضعیت به مشتری — best-effort
+        if 'status' in d and order.status != old_status:
+            from apps.notifications.services import notify_order_status_sms
+            notify_order_status_sms(order)
+
         return Response({'ok': True, 'order_number': order.order_number})
+
+
+class AdminOrderRejectView(APIView):
+    """POST /api/orders/admin/<order_number>/reject/ — رد پیش‌فاکتور (فقط از وضعیت در انتظار بررسی)"""
+    permission_classes = [IsAdminUser]
+
+    @transaction.atomic
+    def post(self, request, order_number):
+        reason = (request.data.get("reason") or "").strip()
+        if not reason:
+            return Response({"error": "دلیل رد الزامی است."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            order = Order.objects.get(order_number=order_number)
+        except Order.DoesNotExist:
+            return Response({"error": "سفارش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
+        if order.status != Order.Status.PENDING:
+            return Response({"error": "فقط پیش‌فاکتورهای در انتظار بررسی قابل رد هستند."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # آزاد کردن رزروها در صورت وجود (سفارش در انتظار بررسی معمولاً رزرو ندارد)
+        for reservation in order.reservations.filter(is_released=False):
+            reservation.release(reason="admin_reject")
+
+        order.status = Order.Status.REJECTED
+        order.reject_reason = reason
+        order.rejected_at = timezone.now()
+        order.updated_by = request.user
+        order.save(update_fields=["status", "reject_reason", "rejected_at", "updated_by", "updated_at"])
+
+        # اطلاع‌رسانی به مشتری — best-effort، خرابی آن جریان اصلی را نشکند
+        try:
+            from apps.notifications.services import notify_order_rejected
+            notify_order_rejected(order, reason)
+        except Exception as e:
+            logger.warning(f"[ORDER] notify rejected failed for {order.order_number}: {e}")
+
+        logger.info(f"[ORDER] Rejected: {order.order_number} | by: {request.user} | reason: {reason}")
+        return Response({
+            "order_number": order.order_number,
+            "status": order.status,
+            "reject_reason": order.reject_reason,
+            "rejected_at": order.rejected_at.strftime("%Y-%m-%d %H:%M"),
+        })
+
+
+class AdminOrderDeleteView(APIView):
+    """DELETE /api/orders/admin/<order_number>/ — حذف کامل پیش‌فاکتور ردشده (فقط سوپریوزر)"""
+    permission_classes = [IsAdminUser]
+
+    def delete(self, request, order_number):
+        if not request.user.is_superuser:
+            return Response({"error": "فقط مدیر ارشد می‌تواند پیش‌فاکتور را حذف کند."},
+                            status=status.HTTP_403_FORBIDDEN)
+        try:
+            order = Order.objects.get(order_number=order_number)
+        except Order.DoesNotExist:
+            return Response({"error": "سفارش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
+        if order.status != Order.Status.REJECTED:
+            return Response({"error": "فقط پیش‌فاکتورهای ردشده قابل حذف هستند."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        logger.warning(f"[ORDER] پیش‌فاکتور {order.order_number} توسط {request.user} حذف شد")
+        order.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AdminRejectReportView(APIView):
+    """
+    GET /api/orders/admin/reject-report/?from=YYYY-MM-DD&to=YYYY-MM-DD
+    گزارش پیش‌فاکتورهای ردشده در بازه زمانی (بر اساس تاریخ رد) — پیش‌فرض: ۳۰ روز گذشته.
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "sale_view"):
+            return Response(
+                {"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403
+            )
+
+        from datetime import date as _date, timedelta
+        today = timezone.now().date()
+        try:
+            date_from = _date.fromisoformat(str(request.query_params["from"])) \
+                if request.query_params.get("from") else today - timedelta(days=30)
+            date_to = _date.fromisoformat(str(request.query_params["to"])) \
+                if request.query_params.get("to") else today
+        except ValueError:
+            return Response({"error": "فرمت تاریخ نامعتبر است (YYYY-MM-DD)."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        qs = (
+            Order.objects
+            .filter(
+                status=Order.Status.REJECTED,
+                rejected_at__date__gte=date_from,
+                rejected_at__date__lte=date_to,
+            )
+            .select_related("user")
+            .order_by("-rejected_at")
+        )
+        items = [{
+            "order_number": o.order_number,
+            "customer_name": o.user.get_full_name() or "",
+            "customer_phone": o.user.phone or "",
+            "reason": o.reject_reason or "",
+            "rejected_at": o.rejected_at.strftime("%Y-%m-%d %H:%M") if o.rejected_at else "",
+        } for o in qs]
+        return Response({
+            "from": date_from.isoformat(),
+            "to": date_to.isoformat(),
+            "total": len(items),
+            "items": items,
+        })
+
+
+# ─── Receipts (فیش واریزی) ─────────────────────────────────────────────────────
+
+def _parse_receipt_payload(request):
+    """اعتبارسنجی فیلدهای فیش واریزی — خروجی: (data, error_response)."""
+    image = request.FILES.get("image")
+    if not image:
+        return None, Response({"error": "تصویر فیش واریزی الزامی است."},
+                              status=status.HTTP_400_BAD_REQUEST)
+    try:
+        amount = int(request.data.get("amount", 0))
+    except (TypeError, ValueError):
+        amount = 0
+    if amount <= 0:
+        return None, Response({"error": "مبلغ فیش باید عدد مثبت باشد."},
+                              status=status.HTTP_400_BAD_REQUEST)
+    from datetime import date as _date
+    try:
+        paid_at = _date.fromisoformat(str(request.data.get("paid_at", "")))
+    except (TypeError, ValueError):
+        return None, Response({"error": "تاریخ واریز نامعتبر است (YYYY-MM-DD)."},
+                              status=status.HTTP_400_BAD_REQUEST)
+    return {
+        "image": image,
+        "amount": amount,
+        "paid_at": paid_at,
+        "tracking_code": request.data.get("tracking_code", "") or "",
+    }, None
+
+
+class OrderReceiptCreateView(APIView):
+    """POST /api/orders/<order_number>/receipts/ — آپلود فیش واریزی توسط مشتری"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, order_number):
+        try:
+            order = Order.objects.get(order_number=order_number, user=request.user)
+        except Order.DoesNotExist:
+            return Response({"error": "سفارش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
+
+        # فیش واریزی فقط برای سفارش‌های تمام‌نقدی — سفارش‌های اعتباری سررسید دارند
+        if order.items.exclude(settlement_type="cash").exists():
+            return Response({"error": "ثبت فیش واریزی فقط برای سفارش‌های نقدی است."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        # فیش فقط بعد از تأیید سفارش و ارسال شماره حساب صراف — نه در وضعیت در انتظار بررسی
+        if order.status != Order.Status.AWAITING_PAYMENT:
+            return Response({"error": "ثبت فیش فقط بعد از تأیید سفارش و ارسال شماره حساب ممکن است."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        data, err = _parse_receipt_payload(request)
+        if err:
+            return err
+
+        from apps.accounting.models import PaymentReceipt
+        receipt = PaymentReceipt.objects.create(
+            order=order,
+            customer=order.user,
+            uploaded_by=request.user,
+            status=PaymentReceipt.Status.PENDING,
+            **data,
+        )
+        return Response(
+            PaymentReceiptSerializer(receipt, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class MyReceiptsView(APIView):
+    """GET /api/orders/my-receipts/ — فیش‌های واریزی کاربر جاری"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.accounting.models import PaymentReceipt
+        receipts = (
+            PaymentReceipt.objects.filter(customer=request.user)
+            .select_related("order", "customer", "uploaded_by")
+        )
+        return Response(
+            PaymentReceiptSerializer(receipts, many=True, context={"request": request}).data
+        )
+
+
+class AdminReceiptListCreateView(APIView):
+    """
+    GET  /api/orders/admin/receipts/?status=pending|approved|rejected — همه فیش‌ها
+    POST /api/orders/admin/receipts/ — آپلود فیش از طرف مشتری توسط ادمین (body: order_number + فیلدهای فیش)
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from apps.accounting.models import PaymentReceipt
+        qs = PaymentReceipt.objects.select_related("order", "customer", "uploaded_by")
+        status_filter = request.query_params.get("status")
+        if status_filter in PaymentReceipt.Status.values:
+            qs = qs.filter(status=status_filter)
+        return Response(
+            PaymentReceiptSerializer(qs, many=True, context={"request": request}).data
+        )
+
+    def post(self, request):
+        order_number = request.data.get("order_number")
+        if not order_number:
+            return Response({"error": "شماره سفارش الزامی است."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            order = Order.objects.get(order_number=order_number)
+        except Order.DoesNotExist:
+            return Response({"error": "سفارش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
+
+        data, err = _parse_receipt_payload(request)
+        if err:
+            return err
+
+        from apps.accounting.models import PaymentReceipt
+        receipt = PaymentReceipt.objects.create(
+            order=order,
+            customer=order.user,
+            uploaded_by=request.user,
+            status=PaymentReceipt.Status.PENDING,
+            **data,
+        )
+        return Response(
+            PaymentReceiptSerializer(receipt, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AdminReceiptApproveView(APIView):
+    """
+    POST /api/orders/admin/receipts/<pk>/approve/
+    تأیید فیش — تخصیص FIFO مبلغ فیش به ردیف‌های تسویهٔ باز مشتری (به ترتیب موعد)،
+    ثبت SalePayment برای هر فاکتور دست‌خورده، و بستن فاکتور/سفارش در صورت تسویه کامل.
+    """
+    permission_classes = [IsAdminUser]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        from django.db.models import Sum
+        from apps.accounting.models import (
+            PaymentReceipt, SettlementLine, SaleInvoice, SalePayment, ReceiptAllocation,
+        )
+        try:
+            receipt = PaymentReceipt.objects.select_related("order", "customer").get(pk=pk)
+        except PaymentReceipt.DoesNotExist:
+            return Response({"error": "فیش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
+        if receipt.status != PaymentReceipt.Status.PENDING:
+            return Response({"error": "این فیش قبلاً بررسی شده است."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # ردیف‌های تسویهٔ باز مشتری — فاکتور لغونشده، مانده > ۰، مرتب بر اساس موعد
+        open_lines = (
+            SettlementLine.objects
+            .filter(invoice__customer=receipt.customer, is_active=True)
+            .exclude(invoice__status=SaleInvoice.Status.CANCELLED)
+            .select_related("invoice")
+            .annotate(paid=Sum("allocations__amount"))
+            .order_by("due_date", "id")
+        )
+
+        remaining_receipt = receipt.amount
+        per_invoice = {}  # invoice_id → [invoice, allocated_sum] — به ترتیب تخصیص
+        for line in open_lines:
+            if remaining_receipt <= 0:
+                break
+            line_remaining = line.amount - (line.paid or 0)
+            if line_remaining <= 0:
+                continue
+            alloc = min(remaining_receipt, line_remaining)
+            ReceiptAllocation.objects.create(
+                receipt=receipt, settlement_line=line, amount=alloc,
+            )
+            entry = per_invoice.setdefault(line.invoice_id, [line.invoice, 0])
+            entry[1] += alloc
+            remaining_receipt -= alloc
+
+        first_payment = None
+        own_payment = None
+        for invoice, alloc_sum in per_invoice.values():
+            payment = SalePayment.objects.create(
+                invoice=invoice,
+                method=SalePayment.PaymentMethod.TRANSFER,
+                amount=alloc_sum,
+                date=receipt.paid_at,
+                reference=receipt.tracking_code,
+                note=f"فیش واریزی #{receipt.id} — صراف: {receipt.order.sarraf_account_holder}",
+                created_by=request.user,
+            )
+            if first_payment is None:
+                first_payment = payment
+            if invoice.order_id == receipt.order_id:
+                own_payment = payment
+            if invoice.remaining_amount <= 0:
+                invoice.status = SaleInvoice.Status.PAID
+                invoice.save(update_fields=["status", "updated_at"])
+
+        receipt.sale_payment = own_payment or first_payment
+        receipt.status = PaymentReceipt.Status.APPROVED
+        receipt.reviewed_by = request.user
+        receipt.reviewed_at = timezone.now()
+        receipt.save(update_fields=[
+            "sale_payment", "status", "reviewed_by", "reviewed_at",
+        ])
+
+        # اگر همه ردیف‌های تسویه فاکتور این سفارش تسویه شده، سفارش پرداخت‌شده می‌شود
+        order = receipt.order
+        if order.status in (Order.Status.AWAITING_PAYMENT, Order.Status.CONFIRMED):
+            invoice = getattr(order, "sale_invoice", None)
+            if invoice is not None and all(
+                line.remaining_amount <= 0 for line in invoice.settlement_lines.all()
+            ):
+                order.status = Order.Status.PAID
+                order.paid_at = timezone.now()
+                order.save(update_fields=["status", "paid_at", "updated_at"])
+
+        # اطلاع‌رسانی به مشتری — best-effort، خرابی آن جریان اصلی را نشکند
+        try:
+            from apps.notifications.services import notify_receipt_approved
+            notify_receipt_approved(receipt)
+        except Exception as e:
+            logger.warning(f"[RECEIPT] notify approved failed for receipt {receipt.id}: {e}")
+
+        return Response(
+            PaymentReceiptSerializer(receipt, context={"request": request}).data
+        )
+
+
+class AdminReceiptRejectView(APIView):
+    """POST /api/orders/admin/receipts/<pk>/reject/ — رد فیش با دلیل"""
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk):
+        reason = (request.data.get("reason") or "").strip()
+        if not reason:
+            return Response({"error": "دلیل رد فیش الزامی است."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.accounting.models import PaymentReceipt
+        try:
+            receipt = PaymentReceipt.objects.select_related("order", "customer").get(pk=pk)
+        except PaymentReceipt.DoesNotExist:
+            return Response({"error": "فیش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
+        if receipt.status != PaymentReceipt.Status.PENDING:
+            return Response({"error": "این فیش قبلاً بررسی شده است."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        receipt.status = PaymentReceipt.Status.REJECTED
+        receipt.reject_reason = reason
+        receipt.reviewed_by = request.user
+        receipt.reviewed_at = timezone.now()
+        receipt.save(update_fields=["status", "reject_reason", "reviewed_by", "reviewed_at"])
+
+        try:
+            from apps.notifications.services import notify_receipt_rejected
+            notify_receipt_rejected(receipt, reason)
+        except Exception as e:
+            logger.warning(f"[RECEIPT] notify rejected failed for receipt {receipt.id}: {e}")
+
+        return Response(
+            PaymentReceiptSerializer(receipt, context={"request": request}).data
+        )
+
+
+class AdminShortageReportView(APIView):
+    """
+    GET /api/orders/admin/shortage-report/?from=YYYY-MM-DD&to=YYYY-MM-DD
+    گزارش مازاد تقاضا (StockShortage) گروه‌بندی‌شده بر اساس واریانت — پیش‌فرض: ۳۰ روز گذشته.
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "kardex_view"):
+            return Response(
+                {"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403
+            )
+
+        from datetime import date as _date, timedelta
+        from django.db.models import Sum, Count
+        from .models import StockShortage
+
+        today = timezone.now().date()
+        try:
+            date_from = _date.fromisoformat(str(request.query_params["from"])) \
+                if request.query_params.get("from") else today - timedelta(days=30)
+            date_to = _date.fromisoformat(str(request.query_params["to"])) \
+                if request.query_params.get("to") else today
+        except ValueError:
+            return Response({"error": "فرمت تاریخ نامعتبر است (YYYY-MM-DD)."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        rows = (
+            StockShortage.objects
+            .filter(created_at__date__gte=date_from, created_at__date__lte=date_to)
+            .values("variant_id", "variant__sku", "variant__product__name")
+            .annotate(
+                total_shortage=Sum("shortage_qty"),
+                total_requested=Sum("requested_qty"),
+                orders_count=Count("order", distinct=True),
+            )
+            .order_by("-total_shortage")
+        )
+        return Response({
+            "from": date_from.isoformat(),
+            "to": date_to.isoformat(),
+            "items": [{
+                "variant_id": r["variant_id"],
+                "sku": r["variant__sku"],
+                "product_name": r["variant__product__name"],
+                "total_shortage": r["total_shortage"] or 0,
+                "total_requested": r["total_requested"] or 0,
+                "orders_count": r["orders_count"],
+            } for r in rows],
+        })
+
+
+class MyOverdueView(APIView):
+    """GET /api/orders/my-overdue/ — وضعیت معوقات کاربر جاری (برای هشدار قبل از ثبت سفارش)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response({
+            "count": request.user.overdue_count(),
+            "total": request.user.overdue_total(),
+        })

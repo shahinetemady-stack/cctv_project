@@ -1,8 +1,12 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../../services/api'
+import { formatDate } from '../../utils/date'
+import AmountInput from '../../components/ui/AmountInput'
+import { UserStamp } from '../../components/ui'
 
 const MOVEMENT_COLORS = {
+  'موجودی اول دوره': '#FBC02D',
   'خرید': '#00C896',
   'فروش': '#FF3B3B',
   'انتقال ورودی': '#0066FF',
@@ -12,33 +16,29 @@ const MOVEMENT_COLORS = {
 }
 
 const MOVEMENT_TYPES = [
-  { value: 'purchase',     label: 'خرید (ورود)',   sign: '+', color: '#00C896' },
-  { value: 'sale',         label: 'فروش (خروج)',   sign: '-', color: '#FF3B3B' },
+  { value: 'opening',      label: 'موجودی اول دوره', sign: '+', color: '#FBC02D' },
   { value: 'adjustment',   label: 'تعدیل موجودی',  sign: '±', color: '#8B5CF6' },
-  { value: 'transfer_in',  label: 'انتقال ورودی',  sign: '+', color: '#0066FF' },
-  { value: 'transfer_out', label: 'انتقال خروجی',  sign: '-', color: '#FF9500' },
-  { value: 'return',       label: 'مرجوعی',        sign: '+', color: '#FF6B6B' },
 ]
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 
 export default function KardexPage() {
   const queryClient = useQueryClient()
+  const searchRef = useRef(null)
+  const inputRef = useRef(null)
 
   const [selectedVariant, setSelectedVariant] = useState('')
   const [selectedWarehouse, setSelectedWarehouse] = useState('')
   const [search, setSearch] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 })
   const [showForm, setShowForm] = useState(false)
   const [formMsg, setFormMsg] = useState(null)
+  const [adjSign, setAdjSign] = useState('+')
 
   const [form, setForm] = useState({
-    warehouse_id: '',
-    movement_type: 'purchase',
-    quantity: '',
-    unit_price: '',
-    reference: '',
-    note: '',
+    warehouse_id: '', movement_type: 'opening',
+    quantity: '', unit_price: '', reference: '', note: '',
   })
 
   const { data: variantsData, isLoading: loadingVariants } = useQuery({
@@ -69,7 +69,8 @@ export default function KardexPage() {
     mutationFn: (payload) => api.post('/inventory/movements/', payload).then(r => r.data),
     onSuccess: (data) => {
       setFormMsg({ type: 'success', text: data.message || 'موجودی با موفقیت ثبت شد' })
-      setForm({ warehouse_id: '', movement_type: 'purchase', quantity: '', unit_price: '', reference: '', note: '' })
+      setForm({ warehouse_id: '', movement_type: 'opening', quantity: '', unit_price: '', reference: '', note: '' })
+      setAdjSign('+')
       queryClient.invalidateQueries(['kardex', selectedVariant])
       queryClient.invalidateQueries(['admin-stock', selectedVariant])
       queryClient.invalidateQueries(['variants-list'])
@@ -80,33 +81,80 @@ export default function KardexPage() {
     },
   })
 
-  const allVariants = variantsData || []
-  const warehouses = warehousesData || []
+  const allVariants = Array.isArray(variantsData)
+    ? variantsData
+    : (variantsData?.results || variantsData?.data || [])
+  const warehouses = Array.isArray(warehousesData)
+    ? warehousesData
+    : (warehousesData?.results || warehousesData?.data || [])
 
   const filtered = useMemo(() => {
-    if (!search) return allVariants.slice(0, 20)
+    if (!search) return allVariants.slice(0, 30)
     const q = search.toLowerCase()
     return allVariants.filter(v =>
-      v.product_name?.includes(search) ||
-      v.sku?.toLowerCase().includes(q) ||
-      v.category?.includes(search)
-    ).slice(0, 20)
+      (v.product_name || '').toLowerCase().includes(q) ||
+      (v.sku || '').toLowerCase().includes(q) ||
+      (v.category || '').toLowerCase().includes(q)
+    ).slice(0, 30)
   }, [allVariants, search])
 
   const selectedInfo = allVariants.find(v => String(v.id) === String(selectedVariant))
-  const movements = Array.isArray(kardex) ? kardex : []
+  const movements = Array.isArray(kardex) ? kardex : (kardex?.results || [])
   const totalIn = movements.filter(m => m.quantity > 0).reduce((s, m) => s + m.quantity, 0)
   const totalOut = movements.filter(m => m.quantity < 0).reduce((s, m) => s + Math.abs(m.quantity), 0)
+
+  // محاسبه موقعیت dropdown با position fixed
+  function updateDropdownPos() {
+    if (!inputRef.current) return
+    const rect = inputRef.current.getBoundingClientRect()
+    setDropdownPos({
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+    })
+  }
+
+  function openDropdown() {
+    updateDropdownPos()
+    setShowDropdown(true)
+  }
+
+  // بستن dropdown با کلیک بیرون + بازمحاسبه با scroll/resize
+  useEffect(() => {
+    if (!showDropdown) return
+
+    function handleClickOutside(e) {
+      if (searchRef.current && !searchRef.current.contains(e.target)) {
+        // اگر کلیک روی dropdown هم نباشد، ببند
+        const dropdown = document.getElementById('kardex-search-dropdown')
+        if (!dropdown || !dropdown.contains(e.target)) {
+          setShowDropdown(false)
+        }
+      }
+    }
+    function handleReposition() {
+      updateDropdownPos()
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    window.addEventListener('scroll', handleReposition, true)
+    window.addEventListener('resize', handleReposition)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      window.removeEventListener('scroll', handleReposition, true)
+      window.removeEventListener('resize', handleReposition)
+    }
+  }, [showDropdown])
 
   function handleSubmit() {
     if (!form.warehouse_id) return setFormMsg({ type: 'error', text: 'انبار را انتخاب کنید' })
     if (!form.quantity || Number(form.quantity) <= 0) return setFormMsg({ type: 'error', text: 'تعداد باید بیشتر از صفر باشد' })
     setFormMsg(null)
+    const qty = Number(form.quantity)
     moveMutation.mutate({
       variant_id: selectedVariant,
       warehouse_id: form.warehouse_id,
       movement_type: form.movement_type,
-      quantity: Number(form.quantity),
+      quantity: form.movement_type === 'adjustment' && adjSign === '-' ? -qty : qty,
       unit_price: Number(form.unit_price) || 0,
       reference: form.reference,
       note: form.note,
@@ -128,42 +176,17 @@ export default function KardexPage() {
       {/* فیلترها */}
       <div className="card p-5 mb-6">
         <div className="grid grid-cols-2 gap-4">
-          <div className="relative">
+          <div ref={searchRef}>
             <label className="label text-xs mb-1 block">جستجو و انتخاب محصول</label>
             <input
+              ref={inputRef}
               value={search}
-              onChange={e => { setSearch(e.target.value); setShowDropdown(true) }}
-              onFocus={() => setShowDropdown(true)}
+              onChange={e => { setSearch(e.target.value); openDropdown() }}
+              onFocus={openDropdown}
               placeholder={loadingVariants ? 'در حال بارگذاری...' : 'نام محصول یا کد SKU...'}
               className="input text-sm"
               disabled={loadingVariants}
             />
-            {showDropdown && filtered.length > 0 && (
-              <div className="absolute z-50 top-full right-0 left-0 mt-1 bg-navy border border-white/10 rounded-xl shadow-xl overflow-hidden max-h-64 overflow-y-auto">
-                {filtered.map(v => (
-                  <button key={v.id}
-                    className="w-full text-right px-4 py-3 hover:bg-white/5 transition-colors border-b border-white/5 last:border-0"
-                    onClick={() => {
-                      setSelectedVariant(String(v.id))
-                      setSearch(v.product_name)
-                      setShowDropdown(false)
-                    }}>
-                    <div className="text-sm text-white">{v.product_name}</div>
-                    <div className="text-xs text-gray-steel mt-0.5">
-                      SKU: {v.sku} | {v.category}
-                      <span className={`mr-2 ${(v.stock_quantity || 0) > 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        | موجودی: {fmt(v.stock_quantity)}
-                      </span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-            {showDropdown && !loadingVariants && search && filtered.length === 0 && (
-              <div className="absolute z-50 top-full right-0 left-0 mt-1 bg-navy border border-white/10 rounded-xl p-4 text-center text-gray-steel text-sm">
-                نتیجه‌ای یافت نشد
-              </div>
-            )}
             {selectedInfo && (
               <div className="text-xs text-green-400 mt-1">✓ {selectedInfo.product_name} [{selectedInfo.sku}]</div>
             )}
@@ -185,7 +208,66 @@ export default function KardexPage() {
         </div>
       </div>
 
-      {showDropdown && <div className="fixed inset-0 z-40" onClick={() => setShowDropdown(false)} />}
+      {/* Dropdown با position fixed — روی همه چیز ظاهر می‌شود */}
+      {showDropdown && (
+        <div
+          id="kardex-search-dropdown"
+          style={{
+            position: 'fixed',
+            top: dropdownPos.top,
+            left: dropdownPos.left,
+            width: dropdownPos.width,
+            zIndex: 99999,
+            background: '#0d1117',
+            border: '1px solid rgba(255,255,255,0.15)',
+            borderRadius: 12,
+            boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
+            maxHeight: 320,
+            overflowY: 'auto',
+          }}>
+          {loadingVariants ? (
+            <div style={{ padding: 16, textAlign: 'center', color: '#888', fontSize: 13 }}>
+              در حال بارگذاری محصولات...
+            </div>
+          ) : filtered.length === 0 ? (
+            <div style={{ padding: 16, textAlign: 'center', color: '#888', fontSize: 13 }}>
+              {search ? 'نتیجه‌ای یافت نشد' : 'محصولی موجود نیست'}
+            </div>
+          ) : (
+            filtered.map(v => (
+              <button key={v.id}
+                style={{
+                  width: '100%', textAlign: 'right',
+                  padding: '10px 14px',
+                  background: 'transparent',
+                  border: 'none',
+                  borderBottom: '1px solid rgba(255,255,255,0.05)',
+                  cursor: 'pointer',
+                  transition: 'background 0.15s',
+                  display: 'block',
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                onClick={() => {
+                  setSelectedVariant(String(v.id))
+                  setSearch(v.product_name || '')
+                  setShowDropdown(false)
+                }}>
+                <div style={{ fontSize: 13, color: 'var(--color-text-primary)' }}>{v.product_name}</div>
+                <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+                  SKU: {v.sku} {v.category ? `| ${v.category}` : ''}
+                  <span style={{
+                    marginRight: 8,
+                    color: (v.stock_quantity || 0) > 0 ? '#00C896' : '#FF3B3B',
+                  }}>
+                    | موجودی: {fmt(v.stock_quantity)}
+                  </span>
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      )}
 
       {/* مودال ثبت موجودی */}
       {showForm && selectedVariant && (
@@ -236,6 +318,27 @@ export default function KardexPage() {
                     </button>
                   ))}
                 </div>
+                {form.movement_type === 'adjustment' && (
+                  <div className="mt-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <button type="button" onClick={() => setAdjSign('+')}
+                        className={`text-xs py-2 rounded-lg border-2 transition-all ${adjSign === '+' ? 'border-green-500 bg-green-500/10 text-green-400' : 'border-transparent bg-white/5'}`}>
+                        + افزایش (اضافه شمارش)
+                      </button>
+                      <button type="button" onClick={() => setAdjSign('-')}
+                        className={`text-xs py-2 rounded-lg border-2 transition-all ${adjSign === '-' ? 'border-red-500 bg-red-500/10 text-red-400' : 'border-transparent bg-white/5'}`}>
+                        − کاهش (کسری شمارش)
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5 leading-relaxed">
+                      تعدیل برای اصلاح شمارش است — فقط عدد اختلاف را وارد کنید (مثلاً اگر ۸۷۰ ثبت شده ولی ۹۱۰ شمرده‌اید: افزایش ۴۰).
+                    </p>
+                  </div>
+                )}
+                <p className="text-[10px] text-[var(--color-text-muted)] mt-2 leading-relaxed">
+                  خرید، فروش و مرجوعی فقط از فاکتورهای مربوط (فاکتور خرید / فروش / مرجوعی) ثبت می‌شوند تا انبار و حسابداری هماهنگ بمانند.
+                  برای جابجایی کالا بین انبارها از صفحه «انبارها» → «انتقال کالا» استفاده کنید تا انتقال دوطرفه ثبت شود (هم از مبدأ کم می‌شود، هم به مقصد اضافه).
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -247,8 +350,8 @@ export default function KardexPage() {
                     className="input text-sm" />
                 </div>
                 <div>
-                  <label className="label text-xs mb-1 block">قیمت واحد (تومان)</label>
-                  <input type="number" min="0" value={form.unit_price}
+                  <label className="label text-xs mb-1 block">قیمت واحد (ریال)</label>
+                  <AmountInput value={form.unit_price}
                     onChange={e => setForm(f => ({ ...f, unit_price: e.target.value }))}
                     placeholder="اختیاری"
                     className="input text-sm" />
@@ -259,8 +362,7 @@ export default function KardexPage() {
                 <label className="label text-xs mb-1 block">شماره فاکتور / مرجع</label>
                 <input type="text" value={form.reference}
                   onChange={e => setForm(f => ({ ...f, reference: e.target.value }))}
-                  placeholder="اختیاری"
-                  className="input text-sm" />
+                  placeholder="اختیاری" className="input text-sm" />
               </div>
 
               <div>
@@ -285,9 +387,7 @@ export default function KardexPage() {
                 {moveMutation.isPending ? 'در حال ثبت...' : 'ثبت موجودی'}
               </button>
               <button onClick={() => { setShowForm(false); setFormMsg(null) }}
-                className="btn-secondary text-sm py-2.5 px-5">
-                انصراف
-              </button>
+                className="btn-secondary text-sm py-2.5 px-5">انصراف</button>
             </div>
           </div>
         </div>
@@ -295,7 +395,6 @@ export default function KardexPage() {
 
       {selectedVariant ? (
         <>
-          {/* موجودی هر انبار */}
           <div className="card p-5 mb-6">
             <h2 className="font-semibold text-sm text-white mb-4">موجودی در انبارها</h2>
             <div className="grid grid-cols-5 gap-3">
@@ -352,7 +451,7 @@ export default function KardexPage() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
                     <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.1)' }}>
-                      {['تاریخ', 'انبار', 'نوع', 'تعداد', 'موجودی بعد', 'قیمت واحد', 'مرجع'].map(h => (
+                      {['تاریخ', 'انبار', 'نوع', 'تعداد', 'موجودی بعد', 'قیمت واحد', 'خریدار', 'شماره فاکتور', 'ثبت‌کننده'].map(h => (
                         <th key={h} style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 500,
                           color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
@@ -365,7 +464,7 @@ export default function KardexPage() {
                         background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)',
                       }}>
                         <td style={{ padding: '10px 12px', direction: 'ltr', textAlign: 'right',
-                          color: 'var(--color-text-secondary)', fontSize: 11, whiteSpace: 'nowrap' }}>{m.date}</td>
+                          color: 'var(--color-text-secondary)', fontSize: 11, whiteSpace: 'nowrap' }}>{formatDate(m.date)}</td>
                         <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>{m.warehouse}</td>
                         <td style={{ padding: '10px 12px' }}>
                           <span style={{
@@ -380,10 +479,16 @@ export default function KardexPage() {
                         </td>
                         <td style={{ padding: '10px 12px', fontWeight: 500 }}>{fmt(m.balance_after)}</td>
                         <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)' }}>
-                          {m.unit_price ? fmt(m.unit_price) + ' ت' : '—'}
+                          {m.unit_price ? fmt(m.unit_price) + ' ریال' : '—'}
+                        </td>
+                        <td style={{ padding: '10px 12px', color: 'var(--color-text-primary)', fontSize: 12, whiteSpace: 'nowrap' }}>
+                          {m.counterparty || '—'}
                         </td>
                         <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }}>
                           {m.reference || '—'}
+                        </td>
+                        <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                          <UserStamp createdBy={m.created_by} />
                         </td>
                       </tr>
                     ))}

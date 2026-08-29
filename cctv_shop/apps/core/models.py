@@ -1,9 +1,46 @@
 from django.db import models
+from django.conf import settings
+
+from .middleware import get_current_user
 
 
 class TimeStampedModel(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+
+
+class AuditMixin(models.Model):
+    """پر کردن خودکار created_by/updated_by از کاربر جاری (میدل‌ور CurrentUserMiddleware).
+    مدل‌هایی که فیلدها را خودشان تعریف کرده‌اند از همین میکسین استفاده می‌کنند."""
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        user = get_current_user()
+        if user:
+            if self._state.adding and hasattr(self, "created_by") and not self.created_by_id:
+                self.created_by = user
+            if hasattr(self, "updated_by"):
+                self.updated_by = user
+        super().save(*args, **kwargs)
+
+
+class AuditableModel(AuditMixin):
+    """مدل پایه با ردیابی ثبت‌کننده و آخرین ویرایش‌کننده"""
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, editable=False,
+        related_name="created_%(class)ss", verbose_name="ثبت کننده",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, editable=False,
+        related_name="edited_%(class)ss", verbose_name="آخرین ویرایش کننده",
+    )
 
     class Meta:
         abstract = True
@@ -34,6 +71,9 @@ class SiteSettings(models.Model):
     contact_email = models.EmailField(blank=True, verbose_name="ایمیل")
     contact_address = models.TextField(blank=True, verbose_name="آدرس")
     working_hours = models.CharField(max_length=200, blank=True, default="شنبه تا پنج‌شنبه ۹-۱۸")
+    china_phone   = models.CharField(max_length=20, blank=True, verbose_name="تلفن چین")
+    china_address = models.TextField(blank=True, verbose_name="آدرس دفتر چین")
+    wechat_qr     = models.ImageField(upload_to='site/', null=True, blank=True, verbose_name="کیوآرکد ویچت")
     whatsapp_number   = models.CharField(max_length=20, blank=True)
     bale_username     = models.CharField(max_length=50, blank=True)
     eitaa_username    = models.CharField(max_length=50, blank=True)
@@ -41,6 +81,8 @@ class SiteSettings(models.Model):
     instagram_username = models.CharField(max_length=50, blank=True)
     about_us_text = models.TextField(blank=True)
     bank_accounts = models.JSONField(default=list, blank=True)
+    enamad_id = models.CharField(max_length=20, blank=True, verbose_name="کد اینماد")
+    enamad_code = models.CharField(max_length=50, blank=True, verbose_name="کد امنیتی اینماد")
 
     class Meta:
         db_table = "core_site_settings"
@@ -66,6 +108,10 @@ class StaticPage(models.Model):
     key     = models.CharField(max_length=50, choices=PAGES, unique=True, verbose_name="صفحه")
     title   = models.CharField(max_length=200, verbose_name="عنوان")
     content = models.TextField(verbose_name="محتوا (HTML)")
+    image1  = models.ImageField(upload_to='pages/', blank=True, verbose_name="تصویر ۱")
+    image2  = models.ImageField(upload_to='pages/', blank=True, verbose_name="تصویر ۲")
+    image3  = models.ImageField(upload_to='pages/', blank=True, verbose_name="تصویر ۳")
+    image4  = models.ImageField(upload_to='pages/', blank=True, verbose_name="تصویر ۴")
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

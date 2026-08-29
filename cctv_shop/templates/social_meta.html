@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }}</title>
+  {% if description %}<meta name="description" content="{{ description }}">{% endif %}
+  <link rel="canonical" href="{{ page_url }}">
+
+  <!-- Open Graph — پیش‌نمایش لینک در پیام‌رسان‌ها -->
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="fa_IR">
+  <meta property="og:site_name" content="{{ site_name }}">
+  <meta property="og:title" content="{{ title }}">
+  {% if description %}<meta property="og:description" content="{{ description }}">{% endif %}
+  <meta property="og:url" content="{{ page_url }}">
+  {% if image_url %}<meta property="og:image" content="{{ image_url }}">{% endif %}
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="{% if image_url %}summary_large_image{% else %}summary{% endif %}">
+  <meta name="twitter:title" content="{{ title }}">
+  {% if description %}<meta name="twitter:description" content="{{ description }}">{% endif %}
+  {% if image_url %}<meta name="twitter:image" content="{{ image_url }}">{% endif %}
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  {% if description %}<p>{{ description }}</p>{% endif %}
+  <p><a href="{{ page_url }}">مشاهده در {{ site_name }}</a></p>
+  <!-- اگر به هر دلیلی مرورگر انسانی به این صفحه رسید، به صفحه واقعی برود -->
+  <script>location.replace("{{ page_url|escapejs }}")</script>
+</body>
+</html>

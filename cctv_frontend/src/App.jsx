@@ -1,43 +1,69 @@
+import { lazy, Suspense, useEffect } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Layout from './components/layout/Layout'
 import useAuthStore from './store/useAuthStore'
-import AdminOrdersPage from './pages/admin/AdminOrdersPage'
-import DashboardPage from './pages/admin/DashboardPage'
-import ContactsPage from './pages/admin/ContactsPage'
-import PurchaseInvoicePage from './pages/admin/PurchaseInvoicePage'
-import BalancePage from './pages/admin/BalancePage'
-import ThemeSettingsPage from './pages/admin/ThemeSettingsPage'
-import InvoicePrintPage from './pages/admin/InvoicePrintPage'
-import SaleInvoicePage from './pages/admin/SaleInvoicePage'
-import PaymentsPage from './pages/admin/PaymentsPage'
-import FinancialReportsPage from './pages/admin/FinancialReportsPage'
-import RolesPage from './pages/admin/RolesPage'
-import ReportsPage from './pages/admin/ReportsPage'
-import KardexPage from './pages/admin/KardexPage'
+import { authService } from './services/auth'
+import { PageLoader } from './components/ui'
+import ErrorBoundary from './components/ui/ErrorBoundary'
+
+// ─── صفحات ادمین — lazy load برای کاهش باندل اولیه ──────────
+const AdminOrdersPage = lazy(() => import('./pages/admin/AdminOrdersPage'))
+const AdminProductsPage = lazy(() => import('./pages/admin/AdminProductsPage'))
+const AdminPackagesPage = lazy(() => import('./pages/admin/AdminPackagesPage'))
+const PricingPage = lazy(() => import('./pages/admin/PricingPage'))
+const ContentPage = lazy(() => import('./pages/admin/ContentPage'))
+const AdminLogsPage = lazy(() => import('./pages/admin/AdminLogsPage'))
+const AdminCategoriesPage = lazy(() => import('./pages/admin/AdminCategoriesPage'))
+const AdminCategoryFieldsPage = lazy(() => import('./pages/admin/AdminCategoryFieldsPage'))
+const DashboardPage = lazy(() => import('./pages/admin/DashboardPage'))
+const ContactsPage = lazy(() => import('./pages/admin/ContactsPage'))
+const PurchaseInvoicePage = lazy(() => import('./pages/admin/PurchaseInvoicePage'))
+const BalancePage = lazy(() => import('./pages/admin/BalancePage'))
+const InvoicePrintPage = lazy(() => import('./pages/admin/InvoicePrintPage'))
+const SaleInvoicePage = lazy(() => import('./pages/admin/SaleInvoicePage'))
+const PaymentsPage = lazy(() => import('./pages/admin/PaymentsPage'))
+const AdminBanksPage = lazy(() => import('./pages/admin/AdminBanksPage'))
+const FinancialReportsPage = lazy(() => import('./pages/admin/FinancialReportsPage'))
+const RolesPage = lazy(() => import('./pages/admin/RolesPage'))
+const KardexPage = lazy(() => import('./pages/admin/KardexPage'))
+const WarehousesPage = lazy(() => import('./pages/admin/WarehousesPage'))
+const BackupPage = lazy(() => import('./pages/admin/BackupPage'))
+const ReceiptsPage = lazy(() => import('./pages/admin/ReceiptsPage'))
+const AgingReportPage = lazy(() => import('./pages/admin/AgingReportPage'))
+const ShortageReportPage = lazy(() => import('./pages/admin/ShortageReportPage'))
+const RejectReportPage = lazy(() => import('./pages/admin/RejectReportPage'))
+const ReturnsPage = lazy(() => import('./pages/admin/ReturnsPage'))
+const SmsSettingsPage = lazy(() => import('./pages/admin/SmsSettingsPage'))
+const SmsCampaignPage = lazy(() => import('./pages/admin/SmsCampaignPage'))
+// AccountPage سنگین است (recharts) — lazy تا وارد باندل اصلی نشود
+const AccountPage = lazy(() => import('./pages/AccountPage'))
 
 import HomePage from './pages/HomePage'
-import BlogPage from './pages/BlogPage'
-import ArticleDetailPage from './pages/ArticleDetailPage'
-import VideosPage from './pages/VideosPage'
-import VideoDetailPage from './pages/VideoDetailPage'
-import PartSelectionGuidePage from './pages/PartSelectionGuidePage'
-import DownloadsPage from './pages/DownloadsPage'
-import TermsPage from './pages/TermsPage'
-import PrivacyPage from './pages/PrivacyPage'
-import BulkUploadPage from './pages/BulkUploadPage'
-import TrackingPage from './pages/TrackingPage'
-import ChinaOrderPage from './pages/ChinaOrderPage'
-import PackagesPage from './pages/PackagesPage'
-import PackageDetailPage from './pages/PackageDetailPage'
-import ProductsPage from './pages/ProductsPage'
-import ProductDetailPage from './pages/ProductDetailPage'
-import CartPage from './pages/CartPage'
-import OrdersPage from './pages/account/OrdersPage'
-import InquiryCartPage from './pages/InquiryCartPage'
-import AccountPage from './pages/AccountPage'
-import PaymentResultPage from './pages/PaymentResultPage'
-import { LoginPage } from './pages/auth/LoginPage'
-import RegisterPage from './pages/auth/RegisterPage'
+// همه صفحات غیرخانگی lazy — کاهش JS اولیه در لود موبایل
+const BlogPage = lazy(() => import('./pages/BlogPage'))
+const ArticleDetailPage = lazy(() => import('./pages/ArticleDetailPage'))
+const VideosPage = lazy(() => import('./pages/VideosPage'))
+const VideoDetailPage = lazy(() => import('./pages/VideoDetailPage'))
+const DownloadsPage = lazy(() => import('./pages/DownloadsPage'))
+const TermsPage = lazy(() => import('./pages/TermsPage'))
+const PrivacyPage = lazy(() => import('./pages/PrivacyPage'))
+const AboutPage = lazy(() => import('./pages/AboutPage'))
+const ContactPage = lazy(() => import('./pages/ContactPage'))
+const TrackingPage = lazy(() => import('./pages/TrackingPage'))
+const ChinaOrderPage = lazy(() => import('./pages/ChinaOrderPage'))
+const FAQPage = lazy(() => import('./pages/FAQPage'))
+const PackagesPage = lazy(() => import('./pages/PackagesPage'))
+const PackageDetailPage = lazy(() => import('./pages/PackageDetailPage'))
+const ProductsPage = lazy(() => import('./pages/ProductsPage'))
+const CategoryPage = lazy(() => import('./pages/CategoryPage'))
+const ProductDetailPage = lazy(() => import('./pages/ProductDetailPage'))
+const ComparePage = lazy(() => import('./pages/ComparePage'))
+const CartPage = lazy(() => import('./pages/CartPage'))
+const OrdersPage = lazy(() => import('./pages/account/OrdersPage'))
+const InquiryCartPage = lazy(() => import('./pages/InquiryCartPage'))
+const PaymentResultPage = lazy(() => import('./pages/PaymentResultPage'))
+const LoginPage = lazy(() => import('./pages/auth/LoginPage').then(m => ({ default: m.LoginPage })))
+const RegisterPage = lazy(() => import('./pages/auth/RegisterPage'))
 
 function RequireAuth({ children }) {
   const { isAuthenticated } = useAuthStore()
@@ -67,8 +93,21 @@ function GuestOnly({ children }) {
 }
 
 export default function App() {
+  // تازه‌سازی اطلاعات کاربر در هر لود اپ — تا تغییر نقش/سطح همکار توسط ادمین
+  // بدون نیاز به خروج و ورود مجدد در منو و قیمت‌ها اعمال شود
+  const accessToken = useAuthStore((s) => s.accessToken)
+  const updateUser = useAuthStore((s) => s.updateUser)
+  useEffect(() => {
+    if (!accessToken) return
+    authService.getMe().then(updateUser).catch(() => {})
+    // فقط یک بار در mount — accessToken در dependency نیاید تا بعد از login دوباره نزند
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   return (
-    <Routes>
+    <ErrorBoundary>
+      <Suspense fallback={<PageLoader />}>
+        <Routes>
       <Route path="invoice-print" element={<InvoicePrintPage />} />
       <Route element={<Layout />}>
         <Route index element={<HomePage />} />
@@ -77,19 +116,22 @@ export default function App() {
         <Route path="blog/:slug" element={<ArticleDetailPage />} />
         <Route path="videos" element={<VideosPage />} />
         <Route path="videos/:slug" element={<VideoDetailPage />} />
-        <Route path="guides/part-selection" element={<PartSelectionGuidePage />} />
-        
+
         <Route path="downloads" element={<DownloadsPage />} />
         <Route path="terms" element={<TermsPage />} />
         <Route path="privacy" element={<PrivacyPage />} />
-        <Route path="admin/bulk-upload" element={<RequireAuth><BulkUploadPage /></RequireAuth>} />
+        <Route path="about" element={<AboutPage />} />
+        <Route path="contact" element={<ContactPage />} />
         <Route path="track" element={<TrackingPage />} />
         <Route path="track/:orderNumber" element={<TrackingPage />} />
         <Route path="china-order"  element={<ChinaOrderPage />} />
+        <Route path="china-order/faq" element={<FAQPage />} />
         <Route path="packages" element={<PackagesPage />} />
         <Route path="packages/:slug" element={<PackageDetailPage />} />
         <Route path="products" element={<ProductsPage />} />
         <Route path="products/:slug" element={<ProductDetailPage />} />
+        <Route path="compare" element={<ComparePage />} />
+        <Route path="categories/:slug" element={<CategoryPage />} />
 
         <Route path="payment/success" element={<PaymentResultPage success={true} />} />
         <Route path="payment/failure" element={<PaymentResultPage success={false} />} />
@@ -99,16 +141,32 @@ export default function App() {
         <Route path="account" element={<RequireAuth><AccountPage /></RequireAuth>} />
         <Route path="admin/orders-management" element={<RequireAuth><AdminOrdersPage /></RequireAuth>} />
         <Route path="admin/dashboard" element={<RequireAuth><DashboardPage /></RequireAuth>} />
-                <Route path="admin/contacts" element={<RequireAuth><ContactsPage /></RequireAuth>} />
+        <Route path="admin/contacts" element={<RequireAuth><ContactsPage /></RequireAuth>} />
         <Route path="admin/purchases" element={<RequireAuth><PurchaseInvoicePage /></RequireAuth>} />
         <Route path="admin/balance" element={<RequireAuth><BalancePage /></RequireAuth>} />
         <Route path="admin/sales" element={<RequireAuth><SaleInvoicePage /></RequireAuth>} />
         <Route path="admin/payments" element={<RequireAuth><PaymentsPage /></RequireAuth>} />
+        <Route path="admin/returns" element={<RequireAuth><ReturnsPage /></RequireAuth>} />
+        <Route path="admin/banks" element={<RequireAuth><AdminBanksPage /></RequireAuth>} />
         <Route path="admin/financial" element={<RequireAuth><FinancialReportsPage /></RequireAuth>} />
         <Route path="admin/roles" element={<RequireAuth><RolesPage /></RequireAuth>} />
-        <Route path="admin/reports" element={<RequireAuth><ReportsPage /></RequireAuth>} />
-        <Route path="admin/theme" element={<RequireAuth><ThemeSettingsPage /></RequireAuth>} />
+        <Route path="admin/reports" element={<Navigate to="/admin/contacts" replace />} />
         <Route path="admin/kardex" element={<RequireAuth><KardexPage /></RequireAuth>} />
+        <Route path="admin/warehouses" element={<RequireAuth><WarehousesPage /></RequireAuth>} />
+        <Route path="admin/products" element={<RequireAuth><AdminProductsPage /></RequireAuth>} />
+        <Route path="admin/packages" element={<RequireAuth><AdminPackagesPage /></RequireAuth>} />
+        <Route path="admin/pricing" element={<RequireAuth><PricingPage /></RequireAuth>} />
+        <Route path="admin/content" element={<RequireAuth><ContentPage /></RequireAuth>} />
+        <Route path="admin/logs" element={<RequireAuth><AdminLogsPage /></RequireAuth>} />
+        <Route path="admin/categories" element={<RequireAuth><AdminCategoriesPage /></RequireAuth>} />
+        <Route path="admin/category-fields" element={<RequireAuth><AdminCategoryFieldsPage /></RequireAuth>} />
+        <Route path="admin/backup" element={<RequireAuth><BackupPage /></RequireAuth>} />
+        <Route path="admin/sms-settings" element={<RequireAuth><SmsSettingsPage /></RequireAuth>} />
+        <Route path="admin/sms-campaign" element={<RequireAuth><SmsCampaignPage /></RequireAuth>} />
+        <Route path="admin/receipts" element={<RequireAuth><ReceiptsPage /></RequireAuth>} />
+        <Route path="admin/aging" element={<RequireAuth><AgingReportPage /></RequireAuth>} />
+        <Route path="admin/shortage" element={<RequireAuth><ShortageReportPage /></RequireAuth>} />
+        <Route path="admin/reject-report" element={<RequireAuth><RejectReportPage /></RequireAuth>} />
 
         <Route path="inquiry-cart" element={<RequirePartner><InquiryCartPage /></RequirePartner>} />
 
@@ -132,5 +190,7 @@ export default function App() {
         } />
       </Route>
     </Routes>
+      </Suspense>
+    </ErrorBoundary>
   )
 }

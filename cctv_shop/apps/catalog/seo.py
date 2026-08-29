@@ -14,6 +14,86 @@ from django.utils.text import slugify
 # ─── نگاشت اعداد فارسی به انگلیسی ───────────────────────────────────────────
 _FA_TO_EN = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
 
+# ─── تولید اسلاگ لاتین ──────────────────────────────────────────────────────
+# اسلاگها باید لاتین باشند (سئو و خوانایی URL). واژگان فنی فارسی به معادل
+# انگلیسی نگاشت می‌شوند؛ واژگان ناشناخته به‌صورت فینگلیش برمی‌گردند تا
+# هیچ اسلاگی فارسی تولید نشود.
+
+_SLUG_WORD_MAP = {
+    'کیس': 'housing', 'بدنه': 'housing', 'پوشش': 'cover',
+    'بولت': 'bullet', 'دام': 'dome', 'باکس': 'box',
+    'فلزی': 'metal', 'فلز': 'metal', 'پلاستیکی': 'plastic', 'پلاستیک': 'plastic',
+    'وارملایت': 'warmlight', 'ورملایت': 'warmlight', 'استارلایت': 'starlight',
+    'لنز': 'lens', 'هولدر': 'holder', 'برد': 'board', 'چیپست': 'chipset',
+    'سنسور': 'sensor', 'پردازنده': 'processor', 'مودم': 'modem',
+    'کابل': 'cable', 'تیل': 'pigtail', 'آداپتور': 'adapter', 'شارژر': 'charger',
+    'فیکس': 'fixed', 'وریفکال': 'varifocal', 'موتورایز': 'motorized',
+    'فیش': 'fisheye', 'پینهول': 'pinhole', 'مخفی': 'covert',
+    'ضدآب': 'waterproof', 'رنگی': 'color', 'شب': 'night',
+    'تغذیه': 'power', 'سیم': 'sim', 'کارت': 'card',
+    'مونتاژ': 'assembly', 'نصب': 'installation', 'آموزش': 'tutorial',
+    'راهنما': 'guide', 'راهنمای': 'guide', 'مقایسه': 'comparison', 'خرید': 'buy',
+    'مگاپیکسل': 'mp', 'ولت': 'v', 'آمپر': 'a',  # به عددِ قبلی می‌چسبند: «۵ مگاپیکسل» → 5mp
+}
+
+# واژگانی که در اسلاگ نمی‌آیند (عمومی/اضافه) — قرارداد فعلی اسلاگهای سایت
+_SLUG_SKIP_WORDS = {
+    'دوربین', 'مداربسته', 'مدل', 'خرید', 'قیمت', 'اصل', 'جدید', 'نو',
+    'و', 'با', 'برای', 'در', 'از', 'به', 'مخصوص', 'سیستم', 'آی', 'آر', 'کات',
+    'منبع', 'دار',
+}
+
+# اعداد فارسی به رقم — برای ترکیب با مگاپیکسل و…
+_FA_NUM_WORDS = {
+    'یک': '1', 'دو': '2', 'سه': '3', 'چهار': '4', 'پنج': '5',
+    'شش': '6', 'هفت': '7', 'هشت': '8', 'نه': '9', 'ده': '10', 'دوازده': '12',
+}
+
+# برگردان فینگلیش برای واژه‌های خارج از نگاشت
+_FA_CHAR_MAP = {
+    'ا': 'a', 'آ': 'a', 'ب': 'b', 'پ': 'p', 'ت': 't', 'ث': 's', 'ج': 'j',
+    'چ': 'ch', 'ح': 'h', 'خ': 'kh', 'د': 'd', 'ذ': 'z', 'ر': 'r', 'ز': 'z',
+    'ژ': 'zh', 'س': 's', 'ش': 'sh', 'ص': 's', 'ض': 'z', 'ط': 't', 'ظ': 'z',
+    'ع': 'a', 'غ': 'gh', 'ف': 'f', 'ق': 'q', 'ک': 'k', 'گ': 'g', 'ل': 'l',
+    'م': 'm', 'ن': 'n', 'و': 'v', 'ه': 'h', 'ی': 'i', 'ئ': 'i', 'ء': '',
+    'أ': 'a', 'إ': 'e', 'ؤ': 'v', 'ة': 'h', 'ى': 'a',
+}
+
+_TOKEN_RE = re.compile(r'[A-Za-z0-9]+(?:[.\-][A-Za-z0-9]+)*|[؀-ۿ]+')
+
+
+def latin_slugify(text: str) -> str:
+    """
+    تبدیل متن (فارسی/لاتین) به اسلاگ لاتین.
+
+    - توکن‌های لاتین (مدل، رزولوشن…) دست‌نخورده و در ابتدای اسلاگ می‌آیند
+      — همان قرارداد اسلاگهای فعلی سایت (مدل اول).
+    - واژگان فارسی با نگاشت تخصصی، وگرنه فینگلیش برگردانده می‌شوند.
+    """
+    normalized = (text or '').translate(_FA_TO_EN).replace('‌', ' ').replace('‍', ' ')
+    latin, persian = [], []
+    last = None  # آخرین لیستی که توکن گرفت — برای چسباندن mp/v/a به عدد قبلی
+    for tok in _TOKEN_RE.findall(normalized):
+        if tok[0].isascii():
+            latin.append(tok.lower())
+            last = latin
+            continue
+        en = _SLUG_WORD_MAP.get(tok) or _FA_NUM_WORDS.get(tok)
+        # «۵ مگاپیکسل» → 5mp ، «۱۲ ولت» → 12v ، «۲ آمپر» → 2a (به عدد قبلی می‌چسبند)
+        if en in ('mp', 'v', 'a') and last and last[-1][-1].isdigit():
+            last[-1] += en
+        elif en:
+            persian.append(en)
+            last = persian
+        elif tok in _SLUG_SKIP_WORDS:
+            last = None
+        else:
+            tr = ''.join(_FA_CHAR_MAP.get(ch, '') for ch in tok)
+            if tr:
+                persian.append(tr)
+                last = persian
+    return slugify('-'.join(latin + persian)) or 'product'
+
 # ─── نام فارسی انواع قطعه ─────────────────────────────────────────────────────
 _PART_TYPE_FA = {
     'sensor':  'سنسور',
@@ -36,19 +116,13 @@ _BASE_KEYWORDS = ['خرید', 'قیمت', 'قطعات دوربین', 'CCTV', 'م
 
 def generate_slug(name: str, model_class=None, instance_pk=None) -> str:
     """
-    تولید slug یکتا از نام محصول.
+    تولید slug یکتا از نام محصول — همیشه لاتین.
 
     مراحل:
-      ۱. اعداد فارسی → انگلیسی
-      ۲. slugify (فارسی-دوست)
-      ۳. بررسی یکتایی — اگر تکراری بود عدد اضافه می‌شود
+      ۱. latin_slugify: نگاشت واژگان فنی + فینگلیش برای بقیه (اعداد فارسی → انگلیسی)
+      ۲. بررسی یکتایی — اگر تکراری بود عدد اضافه می‌شود
     """
-    # تبدیل اعداد فارسی
-    name_normalized = name.translate(_FA_TO_EN)
-    base_slug = slugify(name_normalized, allow_unicode=True)
-
-    if not base_slug:
-        base_slug = 'product'
+    base_slug = latin_slugify(name)
 
     if model_class is None:
         return base_slug

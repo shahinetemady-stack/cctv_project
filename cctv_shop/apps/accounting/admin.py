@@ -165,7 +165,7 @@ class BalanceReportAdminView(View):
         from apps.inventory.models import WarehouseStock
         from django.db.models import Sum
 
-        rate = ExchangeRateSetting.get_instance().rate_cny_to_irt // 10
+        rate = ExchangeRateSetting.get_instance().rate_cny_to_irt  # نرخ یوان به ریال
 
         # ─── تراز طرف حساب‌ها ──────────────────────────────
         contacts = []
@@ -183,11 +183,11 @@ class BalanceReportAdminView(View):
                 })
 
         # ─── موجودی انبارها ─────────────────────────────────
+        from apps.inventory.models import get_variant_cost_irr
         stock_value = 0
         stock_items = []
         for ws in WarehouseStock.objects.select_related('variant__product', 'warehouse').filter(quantity__gt=0):
-            pi = ws.variant.purchase_items.order_by('-invoice__date').first()
-            cost = pi.unit_cost_irr if pi else 0
+            cost = get_variant_cost_irr(ws.variant)
             total = cost * ws.quantity
             stock_value += total
             stock_items.append({
@@ -219,14 +219,17 @@ class BalanceReportAdminView(View):
             if a.currency == 'IRR':
                 cash_total += bal
 
-        # ─── جمع‌بندی ────────────────────────────────────────
-        payable_irr = sum(c['balance_irr'] for c in contacts if c['balance_irr'] > 0)
-        payable_cny = sum(c['balance_cny'] for c in contacts if c['balance_cny'] > 0)
-        receivable = sum(
+        # balance_cny > 0 یعنی طرف حساب به ما بدهکار (بستانکار ما) => receivable
+        # balance_cny < 0 یعنی ما به طرف حساب بدهکاریم => payable
+        receivable_cny = sum(c['balance_cny'] for c in contacts if c['balance_cny'] > 0)
+        payable_cny = sum(abs(c['balance_cny']) for c in contacts if c['balance_cny'] < 0)
+        receivable_irr = sum(c['balance_irr'] for c in contacts if c['balance_irr'] > 0)
+        payable_irr = sum(abs(c['balance_irr']) for c in contacts if c['balance_irr'] < 0)
+        receivable_sale = sum(
             inv.remaining_amount for inv in SaleInvoice.objects.filter(status__in=['confirmed', 'paid'])
             if inv.remaining_amount > 0
         )
-        total_assets = stock_value + receivable + cash_total + int(payable_cny * rate)
+        total_assets = stock_value + receivable_sale + cash_total + int(receivable_cny * rate) + receivable_irr
         total_liabilities = payable_irr + int(payable_cny * rate)
         equity = total_assets - total_liabilities
 
@@ -237,7 +240,9 @@ class BalanceReportAdminView(View):
             'stock_value': stock_value,
             'accounts': accounts,
             'cash_total': cash_total,
-            'receivable': receivable,
+            'receivable_sale': receivable_sale,
+            'receivable_cny': receivable_cny,
+            'receivable_irr': receivable_irr,
             'total_revenue': total_revenue,
             'total_cost_sold': total_cost_sold,
             'gross_profit': gross_profit,

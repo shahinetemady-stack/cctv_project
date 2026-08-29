@@ -14,6 +14,7 @@ Functions:
 """
 
 import logging
+from datetime import timedelta
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -39,17 +40,6 @@ def _create_stock_reservation(order: Order, variant, quantity: int) -> StockRese
     )
     # stock را رزرو کن (فقط reserved_qty افزایش می‌یابد)
     variant.reserve(quantity)
-
-    # لاگ حرکت موجودی
-    StockMovement.objects.create(
-        variant=variant,
-        order=order,
-        movement_type=StockMovement.MovementType.RESERVATION,
-        quantity_change=quantity,
-        stock_before=variant.stock_quantity,
-        stock_after=variant.stock_quantity,  # stock_quantity عوض نمی‌شود
-        note=f"رزرو برای سفارش {order.order_number}",
-    )
     return reservation
 
 
@@ -60,63 +50,107 @@ def _check_and_alert_low_stock(variant) -> None:
         from apps.notifications.services import notify_low_stock
         notify_low_stock(variant)
 
+def _add_package_order_items(order, cart_item) -> None:
+    """آیتم پکیج سبد به اقلام اجزایش باز می‌شود.
+    تخفیف پکیج به نسبت قیمت هر قلم سرشکن می‌شود و باقیماندهٔ گردکردن روی یک قلم
+    یک‌عددی (یا بزرگ‌ترین قلم) اعمال می‌شود تا جمع اقلام دقیقاً برابر
+    قیمت پکیج × تعداد بسته باشد — از نظر حسابداری هر قطعه جداگانه در فاکتور و
+    کاردکس ثبت می‌شود."""
+    from apps.orders.models import settlement_due_for
+    from apps.catalog.pricing import price_for_user
+
+    pkg = cart_item.package
+    bundles = cart_item.quantity
+    user = order.user
+    comps = list(pkg.package_items.select_related("variant").all())
+    if not comps:
+        return
+    # مبنای قیمت اقلام همان قیمت نمایشی کاربر است تا فاکتور با صفحه پکیج یکی باشد
+    original, final = pkg.prices_for(user)
+    factor = (final / original) if original else 1
+    unit_prices = [round(price_for_user(c.variant, user) * factor) for c in comps]
+    diff = final - sum(p * c.quantity for p, c in zip(unit_prices, comps))
+    if diff:
+        ones = [i for i, c in enumerate(comps) if c.quantity == 1]
+        target_idx = ones[0] if ones else max(
+            range(len(comps)), key=lambda i: unit_prices[i] * comps[i].quantity
+        )
+        unit_prices[target_idx] += diff // comps[target_idx].quantity
+    for c, price in zip(comps, unit_prices):
+        OrderItem.objects.create(
+            order=order,
+            variant=c.variant,
+            quantity=c.quantity * bundles,
+            unit_price=price,
+            settlement_type=cart_item.settlement_type,
+            settlement_due_date=settlement_due_for(cart_item.settlement_type),
+        )
+
 
 # ─── Direct Purchase (مشتری عمومی) ───────────────────────────────────────────
 
 @transaction.atomic
-def create_direct_order(user, cart) -> Order:
+def create_direct_order(user, cart) -> list:
     """
-    ساخت سفارش مستقیم از سبد خرید.
-    موجودی را رزرو می‌کند اما هنوز کسر نمی‌کند.
-    کاربر باید پرداخت کند تا موجودی واقعاً کسر شود.
+    ساخت سفارش مستقیم از سبد خرید — با وضعیت «در انتظار تأیید».
+    اگر سبد هم قلم نقدی هم قلم اعتباری (تو حسابی/یکماهه/دوماهه) داشته باشد،
+    چون روند تسویه و ارسالشان متفاوت است، دو سفارش جدا ساخته می‌شود:
+    یکی فقط اقلام نقدی و یکی اقلام اعتباری. خروجی: لیست سفارش‌ها (۱ یا ۲).
     """
+    from apps.orders.models import settlement_due_for
+
     items = list(cart.items.select_related("variant__product").all())
     if not items:
         raise ValueError("سبد خرید خالی است.")
 
-    # بررسی موجودی همه آیتم‌ها قبل از ساخت سفارش
-    for cart_item in items:
-        if cart_item.variant.available_stock < cart_item.quantity:
-            raise ValueError(
-                f"موجودی کافی برای '{cart_item.variant.product.name}' وجود ندارد. "
-                f"موجودی: {cart_item.variant.available_stock}"
-            )
+    # سقف تعداد نداریم — موجودی نمادین است و سفارش‌های عمده (حتی بیشتر از موجودی) پذیرفته می‌شود
+    cash_items   = [i for i in items if i.settlement_type == Order.Settlement.CASH]
+    credit_items = [i for i in items if i.settlement_type != Order.Settlement.CASH]
 
-    # محاسبه مجموع
-    total = sum(item.variant.final_price * item.quantity for item in items)
-
-    # ساخت Order
-    order = Order.objects.create(
-        user=user,
-        order_type=Order.OrderType.DIRECT_PURCHASE,
-        status=Order.Status.AWAITING_PAYMENT,
-        total_amount=total,
-    )
-    order.set_payment_deadline()
-
-    # ساخت OrderItem‌ها و رزرو موجودی
-    for cart_item in items:
-        OrderItem.objects.create(
-            order=order,
-            variant=cart_item.variant,
-            quantity=cart_item.quantity,
-            unit_price=cart_item.variant.final_price,
+    orders = []
+    for group in (cash_items, credit_items):
+        if not group:
+            continue
+        total = sum(item.subtotal for item in group)
+        order = Order.objects.create(
+            user=user,
+            order_type=Order.OrderType.DIRECT_PURCHASE,
+            status=Order.Status.PENDING,
+            total_amount=total,
+            settlement_type=Order.Settlement.CASH,
+            settlement_due_date=timezone.now().date(),
         )
-        _create_stock_reservation(order, cart_item.variant, cart_item.quantity)
+        order.set_admin_confirm_deadline()
+        for cart_item in group:
+            if cart_item.package_id:
+                _add_package_order_items(order, cart_item)
+            else:
+                OrderItem.objects.create(
+                    order=order,
+                    variant=cart_item.variant,
+                    quantity=cart_item.quantity,
+                    unit_price=cart_item.unit_price,
+                    settlement_type=cart_item.settlement_type,
+                    settlement_due_date=settlement_due_for(cart_item.settlement_type),
+                )
+        # جمع واقعی اقلام مرجع است (پکیج‌ها بعد از سرشکنِ تخفیف و گردکردن باز شده‌اند)
+        order.total_amount = sum(i.subtotal for i in order.items.all())
+        order.save(update_fields=["total_amount", "updated_at"])
+        orders.append(order)
 
     # خالی کردن سبد خرید
     cart.items.all().delete()
 
-    logger.info(f"[ORDER] Direct order created: {order.order_number} | User: {user.phone}")
-    return order
-
+    logger.info(f"[ORDER] Direct orders created: {[o.order_number for o in orders]} | User: {user.phone}")
+    return orders
 
 # ─── Inquiry Order (مشتری همکار) ─────────────────────────────────────────────
 
 @transaction.atomic
-def create_inquiry_order(user, inquiry_cart) -> Order:
+def create_inquiry_order(user, inquiry_cart) -> list:
     """
-    ساخت سفارش استعلامی از سبد استعلام.
+    ساخت سفارش استعلامی از سبد استعلام — خروجی لیست سفارش‌ها (۱ یا ۲).
+    اقلام نقدی از اقلام اعتباری جدا می‌شوند چون روند تسویه/ارسالشان متفاوت است.
     موجودی در این مرحله رزرو نمی‌شود — بعد از تأیید ادمین رزرو می‌شود.
     """
     from apps.notifications.services import notify_inquiry_received
@@ -125,48 +159,81 @@ def create_inquiry_order(user, inquiry_cart) -> Order:
     if not items:
         raise ValueError("سبد استعلام خالی است.")
 
-    # قیمت snapshot (بدون نمایش به کاربر، فقط برای سوابق)
-    total_snapshot = sum(item.variant.final_price * item.quantity for item in items)
+    from apps.catalog.pricing import price_for_settlement, user_price_key
+    from apps.orders.models import settlement_due_for
 
-    order = Order.objects.create(
-        user=user,
-        order_type=Order.OrderType.INQUIRY,
-        status=Order.Status.PENDING,
-        total_amount=total_snapshot,
-        customer_notes=inquiry_cart.notes,
+    cash_items   = [i for i in items if i.settlement_type == Order.Settlement.CASH]
+    credit_items = [i for i in items if i.settlement_type != Order.Settlement.CASH]
+
+    # نحوه تسویه سطح سفارش (نمایشی) بر اساس سطح همکار — سیلور: یکماهه، گلد/پلاتینیوم: تو حسابی
+    _, tier = user_price_key(user)
+    tier_settlement = Order.Settlement.CREDIT if tier in ("gold", "platinum") else (
+        Order.Settlement.MONTH1 if tier == "silver" else Order.Settlement.CASH
     )
-    order.set_admin_confirm_deadline()
 
-    for item in items:
-        OrderItem.objects.create(
-            order=order,
-            variant=item.variant,
-            quantity=item.quantity,
-            unit_price=item.variant.final_price,
+    orders = []
+    for group in (cash_items, credit_items):
+        if not group:
+            continue
+        is_cash_group = group is cash_items
+        settlement = Order.Settlement.CASH if is_cash_group else tier_settlement
+        due_date = settlement_due_for(settlement) if settlement != Order.Settlement.CASH else None
+        total_snapshot = sum(
+            price_for_settlement(item.variant, user, item.settlement_type) * item.quantity
+            for item in group
         )
+        order = Order.objects.create(
+            user=user,
+            order_type=Order.OrderType.INQUIRY,
+            status=Order.Status.PENDING,
+            total_amount=total_snapshot,
+            customer_notes=inquiry_cart.notes,
+            settlement_type=settlement,
+            settlement_due_date=due_date,
+        )
+        order.set_admin_confirm_deadline()
+        for item in group:
+            OrderItem.objects.create(
+                order=order,
+                variant=item.variant,
+                quantity=item.quantity,
+                unit_price=price_for_settlement(item.variant, user, item.settlement_type),
+                settlement_type=item.settlement_type,
+                settlement_due_date=settlement_due_for(item.settlement_type),
+            )
+        orders.append(order)
 
     # خالی کردن سبد استعلام
     inquiry_cart.items.all().delete()
 
-    # ارسال پیامک به ادمین و کاربر (مرحله ۲)
-    notify_inquiry_received(order)
+    # ارسال پیامک به ادمین و کاربر (مرحله ۲) — برای هر سفارش
+    for order in orders:
+        notify_inquiry_received(order)
 
-    logger.info(f"[ORDER] Inquiry order created: {order.order_number} | User: {user.phone}")
-    return order
+    logger.info(f"[ORDER] Inquiry orders created: {[o.order_number for o in orders]} | User: {user.phone}")
+    return orders
 
 
 # ─── Admin Confirmation (مرحله ۳) ─────────────────────────────────────────────
 
 @transaction.atomic
-def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int) -> Order:
+def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
+                          settlement_type: str = None, settlement_due_date=None,
+                          sarraf_account_number: str = "", sarraf_account_holder: str = "",
+                          staff=None) -> Order:
     """
     ادمین سفارش استعلامی را تأیید می‌کند:
     1. قیمت نهایی را ثبت می‌کند
     2. موجودی را رزرو می‌کند (۲ ساعت)
     3. لینک پرداخت تولید می‌کند
     4. پیامک به مشتری ارسال می‌کند
+    5. فاکتور فروش + ردیف‌های تسویه (per settlement_type) می‌سازد
+    نحوه تسویه و موعد آن هم در همین مرحله قابل تعیین/بازنویسی است.
+    اگر سفارش قلم نقدی داشته باشد → AWAITING_PAYMENT (با مهلت پرداخت)،
+    وگرنه (همه اعتباری) → READY_TO_SHIP (مستقیم به مرحله ارسال می‌رود).
     """
     from apps.notifications.services import notify_inquiry_confirmed
+    from apps.orders.models import settlement_due_for
 
     if order.status != Order.Status.PENDING:
         raise ValueError(f"این سفارش در وضعیت '{order.get_status_display()}' است و قابل تأیید نیست.")
@@ -179,20 +246,39 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int) -> Or
                 f"موجودی: {item.variant.available_stock}"
             )
 
-    # ثبت قیمت نهایی
+    # ثبت قیمت نهایی — سفارش نقدی به درگاه/فیش می‌رود، سفارش کاملاً اعتباری مستقیم به ارسال
+    has_cash_item = order.items.filter(settlement_type=Order.Settlement.CASH).exists()
     order.confirmed_amount = confirmed_amount
-    order.status = Order.Status.AWAITING_PAYMENT
+    order.updated_by = staff or admin_user
+    order.status = Order.Status.AWAITING_PAYMENT if has_cash_item else Order.Status.READY_TO_SHIP
+    update_fields = ["confirmed_amount", "status", "admin_notes", "updated_by", "updated_at"]
+    if settlement_type in Order.Settlement.values:
+        order.settlement_type = settlement_type
+        update_fields.append("settlement_type")
+    if settlement_due_date:
+        order.settlement_due_date = settlement_due_date
+        update_fields.append("settlement_due_date")
     order.admin_notes = (
         (order.admin_notes + "\n" if order.admin_notes else "")
         + f"تأیید توسط {admin_user} در {timezone.now().strftime('%Y-%m-%d %H:%M')}"
     )
-    order.save(update_fields=["confirmed_amount", "status", "admin_notes", "updated_at"])
-    order.set_payment_deadline()
+    order.save(update_fields=update_fields)
+    if has_cash_item:
+        order.set_payment_deadline()
 
-    # رزرو موجودی
-    for item in order.items.select_related("variant").all():
+    # رزرو موجودی + توزیع مبلغ تأییدشده روی اقلام به نسبت ارزش هر قلم
+    # (تقسیم مساوی قدیمی برای اقلام با قیمت متفاوت قیمت هر قلم را خراب می‌کرد)
+    items = list(order.items.select_related("variant").all())
+    base_total = sum(i.unit_price * i.quantity for i in items) or confirmed_amount
+    remaining = confirmed_amount
+    for idx, item in enumerate(items):
         _create_stock_reservation(order, item.variant, item.quantity)
-        item.confirmed_unit_price = confirmed_amount // order.items.count()  # تقسیم ساده
+        if idx == len(items) - 1:
+            item.confirmed_unit_price = remaining // item.quantity if item.quantity else 0
+        else:
+            share = round(confirmed_amount * (item.unit_price * item.quantity) / base_total)
+            item.confirmed_unit_price = share // item.quantity if item.quantity else 0
+            remaining -= item.confirmed_unit_price * item.quantity
         item.reserved_until = order.payment_deadline
         item.save(update_fields=["confirmed_unit_price", "reserved_until", "updated_at"])
 
@@ -200,8 +286,62 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int) -> Or
     # فعلاً فقط deadline را ذخیره می‌کنیم
     order.save(update_fields=["updated_at"])
 
+    # ── اطلاعات صراف ───────────────────────────────────────────────────
+    order.sarraf_account_number = sarraf_account_number or ""
+    order.sarraf_account_holder = sarraf_account_holder or ""
+    order.save(update_fields=["sarraf_account_number", "sarraf_account_holder", "updated_at"])
+
+    # ── فاکتور فروش + ردیف‌های تسویه ───────────────────────────────────
+    # کسر موجودی از طریق رزروهای سفارش مدیریت می‌شود — deduct_from_inventory صدا زده نمی‌شود.
+    from apps.accounting.models import SaleInvoice, SaleItem, SettlementLine
+
+    confirm_date = timezone.now().date()
+    invoice = SaleInvoice.objects.create(
+        source=SaleInvoice.InvoiceSource.ORDER,
+        status=SaleInvoice.Status.CONFIRMED,
+        order=order,
+        customer=order.user,
+        customer_name=order.user.get_full_name(),
+        customer_phone=order.user.phone,
+        settlement=SaleInvoice.Settlement.CASH,
+        due_date=None,
+        created_by=staff,
+    )
+    for item in items:
+        SaleItem.objects.create(
+            invoice=invoice,
+            variant=item.variant,
+            quantity=item.quantity,
+            unit_price=item.confirmed_unit_price or item.unit_price,
+        )
+
+    # گروه‌بندی اقلام بر اساس نحوه تسویه — برای هر نوع یک ردیف تسویه
+    totals_by_type = {}
+    for item in items:
+        price = item.confirmed_unit_price or item.unit_price
+        totals_by_type[item.settlement_type] = (
+            totals_by_type.get(item.settlement_type, 0) + price * item.quantity
+        )
+    for st, amount in totals_by_type.items():
+        SettlementLine.objects.create(
+            invoice=invoice,
+            settlement_type=st,
+            amount=amount,
+            due_date=settlement_due_for(st, confirm_date),
+        )
+
     # پیامک به مشتری (مرحله ۴)
     notify_inquiry_confirmed(order)
+    from apps.notifications.services import notify_order_status_sms, notify_account_info_sms
+    notify_order_status_sms(order)
+    # پیامک اطلاعات حساب صراف برای پرداخت اقلام نقدی
+    if has_cash_item and order.sarraf_account_number:
+        notify_account_info_sms(
+            order.user.phone, order.user.get_full_name(),
+            order.sarraf_account_number, order.sarraf_account_holder,
+            amount=order.confirmed_amount or order.total_amount,
+            user=order.user, order=order,
+        )
 
     logger.info(f"[ORDER] Inquiry confirmed: {order.order_number} | Admin: {admin_user}")
     return order
@@ -226,6 +366,7 @@ def process_payment_callback(order: Order, ref_id: str, success: bool) -> Order:
         return order
 
     # کسر موجودی واقعی
+    from apps.inventory.models import StockMovement
     for item in order.items.select_related("variant").all():
         stock_before = item.variant.stock_quantity
         item.variant.deduct_stock(item.quantity)
@@ -254,6 +395,8 @@ def process_payment_callback(order: Order, ref_id: str, success: bool) -> Order:
     order.save(update_fields=["status", "payment_ref_id", "paid_at", "updated_at"])
 
     notify_order_paid(order)
+    from apps.notifications.services import notify_order_status_sms
+    notify_order_status_sms(order)
     logger.info(f"[PAYMENT] Success: {order.order_number} | ref: {ref_id}")
     return order
 
@@ -283,5 +426,83 @@ def cancel_order(order: Order, reason: str = "manual") -> Order:
     order.save(update_fields=["status", "admin_notes", "updated_at"])
 
     notify_order_cancelled(order)
+    from apps.notifications.services import notify_order_status_sms
+    notify_order_status_sms(order)
     logger.info(f"[ORDER] Cancelled: {order.order_number} | reason: {reason}")
     return order
+
+
+# ─── Settlement reminders ──────────────────────────────────────────────────────
+
+def due_settlements_queryset():
+    """سفارش‌هایی که حداقل یک قلم اعتباری سررسیدرسیده دارند و هنوز تسویه/لغو نشده‌اند.
+    علاوه بر منطق per-item قدیمی، سفارش‌هایی هم شامل می‌شوند که ردیف تسویهٔ
+    فعال فاکتور فروششان سررسید رسیده و هنوز مانده دارد."""
+    from django.db.models import Q, Sum, F
+    today = timezone.now().date()
+    credit_types = [Order.Settlement.CREDIT, Order.Settlement.MONTH1, Order.Settlement.MONTH2]
+    closed_statuses = [
+        Order.Status.PAID, Order.Status.CANCELLED,
+        Order.Status.REFUNDED, Order.Status.REJECTED,
+    ]
+
+    base_filter = (
+        Q(items__settlement_type__in=credit_types, items__settlement_due_date__lte=today)
+        | Q(settlement_type__in=credit_types, settlement_due_date__lte=today)
+    )
+
+    # ردیف‌های تسویه فعالِ سررسیدرسیده با مانده > ۰ (مانده = amount − Σ allocations)
+    # نقدی: روز صدور سررسید حساب نمی‌شود — از فردای صدور فاکتور یادآوری می‌رود.
+    # اعتباری: از خود روز موعد سررسید حساب می‌شود.
+    from apps.accounting.models import SettlementLine
+    due_line_order_ids = (
+        SettlementLine.objects
+        .filter(is_active=True)
+        .filter(
+            Q(settlement_type="cash", due_date__lt=today)
+            | Q(settlement_type__in=["credit", "month1", "month2"], due_date__lte=today)
+        )
+        .exclude(invoice__status="cancelled")
+        .exclude(invoice__order__isnull=True)
+        .annotate(paid=Sum("allocations__amount"))
+        .filter(Q(paid__isnull=True) | Q(amount__gt=F("paid")))
+        .values_list("invoice__order_id", flat=True)
+    )
+
+    return Order.objects.filter(
+        base_filter | Q(pk__in=due_line_order_ids)
+    ).exclude(status__in=closed_statuses).distinct()
+
+
+def due_items(order):
+    """اقلام سررسیدرسیده یک سفارش (برای متن هشدار)."""
+    today = timezone.now().date()
+    return order.items.filter(
+        settlement_due_date__lte=today,
+    ).exclude(settlement_type=Order.Settlement.CASH)
+
+
+def send_due_settlement_reminders() -> int:
+    """
+    ارسال هشدار سررسید تسویه به مشتری و ادمین — برای هر سفارش روزی حداکثر یک بار.
+    هم از کران (management command) و هم به‌صورت تنبل از بج‌های ادمین صدا زده می‌شود.
+    """
+    from apps.notifications.models import NotificationLog
+    from apps.notifications.services import notify_settlement_due
+
+    today = timezone.now().date()
+    sent = 0
+    for order in due_settlements_queryset():
+        already = NotificationLog.objects.filter(
+            order=order,
+            subject__startswith="یادآوری موعد تسویه",
+            created_at__date=today,
+        ).exists()
+        if already:
+            continue
+        try:
+            notify_settlement_due(order, due_items(order))
+            sent += 1
+        except Exception as e:
+            logger.error(f"[SETTLEMENT] reminder failed for {order.order_number}: {e}")
+    return sent

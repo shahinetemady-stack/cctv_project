@@ -40,7 +40,7 @@ export default function InvoicePrintPage() {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      height: '100vh', fontFamily: 'Tahoma', direction: 'rtl', color: '#666'
+      height: '100vh', fontFamily: 'Vazirmatn, Tahoma', direction: 'rtl', color: '#666'
     }}>
       در حال آماده‌سازی فاکتور...
     </div>

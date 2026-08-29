@@ -1,13 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import api from '../services/api'
+import { mediaUrl as imgUrl } from '../utils/media'
+import { formatPrice } from '../utils/format'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
-function imgUrl(url) {
-  if (!url) return null
-  if (url.startsWith('http')) return url
-  return `${import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:8000'}${url}`
-}
 
 // ─── کارت پکیج ───────────────────────────────────────────────
 function PackageCard({ pkg }) {
@@ -42,7 +39,7 @@ function PackageCard({ pkg }) {
             )}
             <div className="flex-1 min-w-0">
               <div className="text-xs text-white truncate">{item.product_name}</div>
-              <div className="text-[10px] text-gray-steel">× {item.quantity} عدد | {fmt(item.unit_price)} ت</div>
+              <div className="text-[10px] text-gray-steel">× {item.quantity} عدد | {formatPrice(item.unit_price)}</div>
             </div>
           </div>
         ))}
@@ -52,15 +49,15 @@ function PackageCard({ pkg }) {
       <div className="border-t border-white/5 pt-4">
         <div className="flex items-center justify-between mb-1">
           <span className="text-xs text-gray-steel">قیمت اصلی:</span>
-          <span className="text-xs text-gray-steel line-through">{fmt(pkg.original_price)} ت</span>
+          <span className="text-xs text-gray-steel line-through">{formatPrice(pkg.original_price)}</span>
         </div>
         <div className="flex items-center justify-between mb-1">
           <span className="text-xs text-green-400">صرفه‌جویی:</span>
-          <span className="text-xs text-green-400 font-bold">{fmt(pkg.savings)} ت</span>
+          <span className="text-xs text-green-400 font-bold">{formatPrice(pkg.savings)}</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-sm font-bold text-white">قیمت پکیج:</span>
-          <span className="text-lg font-bold text-brand">{fmt(pkg.final_price)} ت</span>
+          <span className="text-lg font-bold text-brand">{formatPrice(pkg.final_price)}</span>
         </div>
       </div>
 
@@ -94,7 +91,7 @@ export function FeaturedPackages() {
             همه پکیج‌ها ←
           </Link>
         </div>
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
           {packages.slice(0, 3).map(pkg => (
             <PackageCard key={pkg.id} pkg={pkg} />
           ))}
@@ -122,7 +119,7 @@ export function ProductPackages({ productId }) {
   return (
     <section className="mt-8">
       <h2 className="font-display font-bold text-xl text-white mb-4">🎁 پکیج‌های شامل این محصول</h2>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {related.map(pkg => (
           <PackageCard key={pkg.id} pkg={pkg} />
         ))}

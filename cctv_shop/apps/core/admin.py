@@ -7,12 +7,14 @@ class SiteSettingsAdmin(admin.ModelAdmin):
     fieldsets = (
         ("اطلاعات پایه", {"fields": ("site_name", "site_logo")}),
         ("تماس", {"fields": ("contact_phone", "contact_email", "contact_address", "working_hours")}),
+        ("دفتر چین", {"fields": ("china_phone", "china_address", "wechat_qr")}),
         ("شبکه‌های اجتماعی", {"fields": (
             "whatsapp_number", "bale_username", "eitaa_username",
             "telegram_username", "instagram_username",
         )}),
         ("درباره ما", {"fields": ("about_us_text",)}),
         ("حساب‌های بانکی", {"fields": ("bank_accounts",)}),
+        ("اینماد", {"fields": ("enamad_id", "enamad_code")}),
     )
 
     def has_add_permission(self, request):
@@ -25,4 +27,7 @@ class SiteSettingsAdmin(admin.ModelAdmin):
 @admin.register(StaticPage)
 class StaticPageAdmin(admin.ModelAdmin):
     list_display = ["key", "title", "updated_at"]
-    fields = ["key", "title", "content"]
+    fieldsets = (
+        (None, {"fields": ("key", "title", "content")}),
+        ("تصاویر صفحه", {"fields": ("image1", "image2", "image3", "image4")}),
+    )

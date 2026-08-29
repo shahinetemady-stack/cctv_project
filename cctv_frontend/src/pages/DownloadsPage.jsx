@@ -20,7 +20,6 @@ const DOWNLOADS = [
   {
     category: '📚 راهنماها و مستندات',
     items: [
-      { name: 'راهنمای نصب دوربین IP', desc: 'مراحل گام به گام نصب و راه‌اندازی', url: '/guides/part-selection', size: 'آنلاین' },
       { name: 'راهنمای انتخاب لنز', desc: 'نحوه انتخاب لنز مناسب بر اساس فاصله', url: '/blog', size: 'آنلاین' },
     ]
   },

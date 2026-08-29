@@ -27,16 +27,28 @@ class RegisterSerializer(serializers.ModelSerializer):
     password  = serializers.CharField(write_only=True, min_length=8)
     password2 = serializers.CharField(write_only=True, label="تکرار رمز عبور")
     email     = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
+    first_name = serializers.CharField(required=True, allow_blank=False)
+    last_name  = serializers.CharField(required=True, allow_blank=False)
+    company_name = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     class Meta:
         model = User
-        fields = ["phone", "email", "password", "password2", "first_name", "last_name"]
+        fields = ["phone", "email", "password", "password2", "first_name", "last_name", "company_name"]
+        # UniqueValidator پیش‌فرض غیرفعال — تکراری بودن در validate_phone با پیام دقیق‌تر چک می‌شود
+        extra_kwargs = {"phone": {"validators": []}}
 
     def validate_phone(self, value):
         value = value.strip()
+        if any(ch in value for ch in "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩"):
+            raise serializers.ValidationError("شماره موبایل را با اعداد انگلیسی وارد کنید.")
         if not value.startswith('09') or len(value) != 11:
             raise serializers.ValidationError("شماره موبایل معتبر نیست (مثال: 09123456789)")
-        if User.objects.filter(phone=value).exists():
+        existing = User.objects.filter(phone=value).first()
+        if existing:
+            profile = getattr(existing, 'profile', None)
+            if profile and profile.linked_contact_id and not existing.has_usable_password():
+                raise serializers.ValidationError(
+                    "حساب این شماره از قبل توسط فروشگاه ساخته شده است؛ برای فعال‌سازی و دریافت رمز عبور با فروشگاه تماس بگیرید.")
             raise serializers.ValidationError("این شماره موبایل قبلاً ثبت شده است.")
         return value
 
@@ -53,10 +65,11 @@ class RegisterSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.pop("password2")
         password = validated_data.pop("password")
+        company_name = validated_data.pop("company_name", "")
         user = User(**validated_data)
         user.set_password(password)
         user.save()
-        UserProfile.objects.create(user=user, user_type=UserProfile.UserType.PUBLIC)
+        UserProfile.objects.create(user=user, user_type=UserProfile.UserType.PUBLIC, company_name=company_name)
         return user
 
 
@@ -87,7 +100,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         fields = ["user_type", "company_name", "national_id",
-                  "is_approved", "discount_percent", "credit_limit", "address"]
+                  "is_approved", "partner_tier", "discount_percent", "credit_limit", "address"]
         read_only_fields = ["user_type", "is_approved", "credit_limit"]
 
 
@@ -99,8 +112,8 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["id", "phone", "email", "first_name", "last_name",
-                  "is_partner", "is_staff", "date_joined", "profile", "staff_role"]
-        read_only_fields = ["phone", "date_joined", "is_staff"]
+                  "is_partner", "is_staff", "is_superuser", "date_joined", "profile", "staff_role"]
+        read_only_fields = ["phone", "date_joined", "is_staff", "is_superuser"]
 
     def get_staff_role(self, obj):
         if not obj.is_staff:
@@ -178,7 +191,7 @@ class AdminPartnerListSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         fields = ["user_id", "phone", "email", "full_name",
-                  "company_name", "national_id", "is_approved",
+                  "company_name", "national_id", "is_approved", "partner_tier",
                   "discount_percent", "credit_limit", "address", "notes", "created_at"]
         read_only_fields = ["user_id", "phone", "email", "full_name", "created_at"]
 
@@ -187,3 +200,6 @@ class AdminApprovePartnerSerializer(serializers.Serializer):
     is_approved  = serializers.BooleanField()
     credit_limit = serializers.IntegerField(min_value=0, required=False, default=0)
     notes        = serializers.CharField(required=False, allow_blank=True)
+    partner_tier = serializers.ChoiceField(
+        choices=["silver", "gold", "platinum"], required=False, allow_blank=True,
+    )

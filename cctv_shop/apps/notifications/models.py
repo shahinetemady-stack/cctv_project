@@ -94,3 +94,53 @@ class NotificationLog(TimeStampedModel):
 
     def __str__(self):
         return f"[{self.get_channel_display()}] {self.recipient_address} — {self.get_status_display()}"
+
+
+class SmsSettings(models.Model):
+    """
+    تنظیمات پنل پیامک (sms.ir) — سینگلتون؛ از پنل ادمین قابل ویرایش است.
+    شناسه قالب‌ها = Template IDهای Verify که در پنل sms.ir ساخته و تأیید شده‌اند.
+    """
+
+    # ── اتصال ─────────────────────────────────────────────────────────
+    api_key = models.CharField(max_length=100, blank=True, verbose_name="کلید API پنل sms.ir")
+    line_number = models.CharField(
+        max_length=20, blank=True, verbose_name="شماره خط ارسال",
+        help_text="برای ارسال متن آزاد/گروهی (کمپین) — خط اختصاصی پنل",
+    )
+
+    # ── قالب‌های Verify ───────────────────────────────────────────────
+    otp_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب کد تأیید (OTP)")
+    order_status_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب تغییر وضعیت سفارش")
+    payment_reminder_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب یادآوری سررسید بدهی")
+    tier_change_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب تغییر سطح همکار")
+    partner_approved_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب تأیید همکار")
+    invoice_confirmed_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب تأیید فاکتور")
+    account_info_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب اطلاعات حساب پرداخت")
+
+    # ── کلیدهای روشن/خاموش ────────────────────────────────────────────
+    order_status_enabled = models.BooleanField(default=True, verbose_name="پیامک تغییر وضعیت سفارش")
+    payment_reminder_enabled = models.BooleanField(default=True, verbose_name="پیامک یادآوری سررسید بدهی")
+    tier_change_enabled = models.BooleanField(default=True, verbose_name="پیامک تغییر سطح همکار")
+    partner_approved_enabled = models.BooleanField(default=True, verbose_name="پیامک تأیید همکار")
+    invoice_confirmed_enabled = models.BooleanField(default=True, verbose_name="پیامک تأیید فاکتور")
+    account_info_enabled = models.BooleanField(default=True, verbose_name="پیامک اطلاعات حساب پرداخت")
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "notifications_sms_settings"
+        verbose_name = "تنظیمات پیامک"
+        verbose_name_plural = "تنظیمات پیامک"
+
+    def __str__(self):
+        return "تنظیمات پیامک"
+
+    @classmethod
+    def get_instance(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }} | {{ site_name }}</title>
+  {% if description %}<meta name="description" content="{{ description }}">{% endif %}
+  <link rel="canonical" href="{{ page_url }}">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="fa_IR">
+  <meta property="og:site_name" content="{{ site_name }}">
+  <meta property="og:title" content="{{ title }}">
+  {% if description %}<meta property="og:description" content="{{ description }}">{% endif %}
+  <meta property="og:url" content="{{ page_url }}">
+  {% if image_url %}<meta property="og:image" content="{{ image_url }}">{% endif %}
+
+  {% if json_ld %}<script type="application/ld+json">{{ json_ld|safe }}</script>{% endif %}
+</head>
+<body>
+  <header>
+    <nav>
+      <a href="/">{{ site_name }}</a> |
+      <a href="/products">محصولات</a> |
+      <a href="/packages">پکیج‌ها</a> |
+      <a href="/blog">وبلاگ</a> |
+      <a href="/videos">ویدیوها</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>{{ h1 }}</h1>
+    {% if image_url %}<img src="{{ image_url }}" alt="{{ title }}">{% endif %}
+
+    {% if kind == "products" %}
+      {% if obj.category %}<p>دسته‌بندی: <a href="/categories/{{ obj.category.slug }}">{{ obj.category.name }}</a></p>{% endif %}
+      {% if min_price_toman %}<p>قیمت: از {{ min_price_toman }} تومان{% if obj.available_stock > 0 %} — موجود{% else %} — ناموجود{% endif %}</p>{% endif %}
+      {% if obj.short_description %}<p>{{ obj.short_description }}</p>{% endif %}
+      {% if obj.description %}<section><h2>توضیحات محصول</h2>{{ obj.description|linebreaks }}</section>{% endif %}
+      {% if specs %}
+      <section>
+        <h2>مشخصات فنی</h2>
+        <table>
+          <tbody>
+            {% for label, value in specs %}<tr><th>{{ label }}</th><td>{{ value }}</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </section>
+      {% endif %}
+      {% if obj.board_tech_notes %}<section><h2>اطلاعات فنی بیشتر</h2>{{ obj.board_tech_notes|linebreaks }}</section>{% endif %}
+
+    {% elif kind == "categories" %}
+      {% if obj.description %}<section>{{ obj.description|linebreaks }}</section>{% endif %}
+      {% if category_products %}
+      <section>
+        <h2>محصولات این دسته</h2>
+        <ul>
+          {% for p in category_products %}<li><a href="/products/{{ p.slug }}/">{{ p.name }}</a></li>{% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+
+    {% elif kind == "packages" %}
+      {% if min_price_toman %}<p>قیمت پکیج: {{ min_price_toman }} تومان</p>{% endif %}
+      {% if obj.description %}<section>{{ obj.description|linebreaks }}</section>{% endif %}
+      {% if package_items %}
+      <section>
+        <h2>اقلام پکیج</h2>
+        <ul>
+          {% for item in package_items %}<li><a href="/products/{{ item.product.slug }}/">{{ item.product.name }}</a> × {{ item.quantity }}</li>{% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+
+    {% elif kind == "blog" %}
+      {% if obj.category %}<p>دسته: {{ obj.category.name }}</p>{% endif %}
+      {% if obj.author %}<p>نویسنده: {{ obj.author }}</p>{% endif %}
+      <article>{{ obj.content|safe }}</article>
+      {% if latest_articles %}
+      <section>
+        <h2>مقالات دیگر</h2>
+        <ul>
+          {% for a in latest_articles %}<li><a href="/blog/{{ a.slug }}/">{{ a.title }}</a></li>{% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+
+    {% elif kind == "videos" %}
+      {% if obj.description %}<section>{{ obj.description|linebreaks }}</section>{% endif %}
+      <p><a href="{{ obj.video_url }}">مشاهده ویدیو</a>{% if obj.duration %} — مدت: {{ obj.duration }} دقیقه{% endif %}</p>
+    {% endif %}
+
+    {% if related_products %}
+    <section>
+      <h2>محصولات مرتبط</h2>
+      <ul>
+        {% for p in related_products %}<li><a href="/products/{{ p.slug }}/">{{ p.name }}</a></li>{% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+  </main>
+
+  <footer>
+    <p><a href="/sitemap.xml">نقشه سایت</a> | <a href="/llms.txt">llms.txt</a></p>
+  </footer>
+</body>
+</html>

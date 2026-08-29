@@ -1,26 +1,33 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { toast } from 'sonner'
+import { Search, Plus, UserPlus, X, Users, Shield, Check } from 'lucide-react'
 import api from '../../services/api'
 
 const PERM_GROUPS = [
-  { label: 'فروش', perms: ['sale_view', 'sale_create', 'sale_payment'] },
+  { label: 'فروش', perms: ['sale_view', 'sale_create', 'sale_edit', 'sale_payment'] },
+  { label: 'برگشت از فروش و خرید', perms: ['return_view', 'return_create', 'return_edit'] },
   { label: 'انبار و کاردکس', perms: ['kardex_view', 'kardex_edit'] },
-  { label: 'خرید', perms: ['purchase_view', 'purchase_create'] },
-  { label: 'طرف حساب‌ها', perms: ['contacts_view', 'contacts_edit'] },
-  { label: 'گزارشات مالی', perms: ['reports_view', 'balance_view'] },
+  { label: 'خرید', perms: ['purchase_view', 'purchase_create', 'purchase_edit', 'payment_edit'] },
+  { label: 'طرف حساب‌ها', perms: ['contacts_view', 'contacts_create', 'contacts_edit', 'partner_approve'] },
+  { label: 'گزارشات مالی', perms: ['reports_view', 'balance_view', 'accounts_edit'] },
   { label: 'مدیریت کاربران', perms: ['users_view', 'users_edit'] },
   { label: 'محصولات', perms: ['products_view', 'products_edit'] },
+  { label: 'فرمول قیمت', perms: ['pricing_rate_view', 'pricing_costs_view'] },
   { label: 'داشبورد', perms: ['dashboard_view'] },
 ]
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 
 // ─── ویرایش نقش ──────────────────────────────────────────────
-function RoleEditor({ role, allPerms, onSave, onClose }) {
+function RoleEditor({ role, allPerms, contactTypes = [], onSave, onClose }) {
   const [name, setName] = useState(role?.name || '')
   const [desc, setDesc] = useState(role?.description || '')
   const [perms, setPerms] = useState(new Set(role?.permissions || []))
-  const [msg, setMsg] = useState(null)
+  const [allowedTypes, setAllowedTypes] = useState(new Set(role?.allowed_contact_types || []))
   const qc = useQueryClient()
 
   const saveMut = useMutation({
@@ -29,10 +36,10 @@ function RoleEditor({ role, allPerms, onSave, onClose }) {
       : api.post('/accounting/roles/', d).then(r => r.data),
     onSuccess: () => {
       qc.invalidateQueries(['roles'])
-      setMsg({ type: 'success', text: 'ذخیره شد' })
-      setTimeout(() => onSave?.(), 800)
+      toast.success('نقش ذخیره شد')
+      onSave?.()
     },
-    onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا' }),
+    onError: (e) => toast.error(e.response?.data?.error || 'خطا در ذخیره نقش'),
   })
 
   const togglePerm = (code) => {
@@ -55,6 +62,14 @@ function RoleEditor({ role, allPerms, onSave, onClose }) {
   const selectAll = () => setPerms(new Set(allPerms.map(p => p.code)))
   const clearAll = () => setPerms(new Set())
 
+  const toggleType = (code) => {
+    setAllowedTypes(t => {
+      const n = new Set(t)
+      if (n.has(code)) n.delete(code); else n.add(code)
+      return n
+    })
+  }
+
   const permMap = Object.fromEntries(allPerms.map(p => [p.code, p.label]))
 
   return (
@@ -62,7 +77,7 @@ function RoleEditor({ role, allPerms, onSave, onClose }) {
       <div className="card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <h2 className="font-bold text-white text-lg">{role ? 'ویرایش نقش' : 'نقش جدید'}</h2>
-          <button onClick={onClose} className="text-gray-steel hover:text-white text-2xl">×</button>
+          <button onClick={onClose} className="text-gray-steel hover:text-white"><X size={20} /></button>
         </div>
 
         <div className="grid grid-cols-2 gap-4 mb-5">
@@ -111,7 +126,7 @@ function RoleEditor({ role, allPerms, onSave, onClose }) {
                           className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
                             perms.has(code) ? 'bg-brand border-brand' : 'border-white/20 group-hover:border-white/40'
                           }`}>
-                          {perms.has(code) && <span className="text-white text-xs">✓</span>}
+                          {perms.has(code) && <Check size={12} strokeWidth={3} className="text-white" />}
                         </div>
                         <span className="text-xs text-gray-steel group-hover:text-white transition-colors">
                           {permMap[code]}
@@ -125,20 +140,156 @@ function RoleEditor({ role, allPerms, onSave, onClose }) {
           </div>
         </div>
 
-        {msg && (
-          <div className={`mb-4 rounded-lg px-4 py-2 text-sm ${msg.type === 'success' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-            {msg.text}
+        {/* نوع‌های طرف حساب قابل دسترس برای این نقش */}
+        <div className="mb-4 bg-white/5 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-sm font-semibold text-white">نوع‌های طرف حساب قابل مشاهده</span>
+            {allowedTypes.size > 0 && (
+              <button onClick={() => setAllowedTypes(new Set())} className="text-xs text-brand hover:text-brand/80">
+                همه نوع‌ها
+              </button>
+            )}
           </div>
-        )}
+          <div className="text-[10px] text-gray-steel mb-3">
+            اگر هیچکدام انتخاب نشود، این نقش همه نوع‌ها را می‌بیند. با انتخاب، فقط نوع‌های انتخاب‌شده در لیست/کاردکس/جزئیات طرف حساب‌ها قابل دسترس است.
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {contactTypes.map(t => (
+              <button key={t.code} onClick={() => toggleType(t.code)}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-all ${
+                  allowedTypes.has(t.code) ? 'bg-brand/20 border-brand text-brand' : 'border-white/10 text-gray-steel hover:border-white/30'
+                }`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div className="flex gap-3">
-          <button onClick={() => saveMut.mutate({ name, description: desc, permissions: [...perms] })}
+          <button onClick={() => saveMut.mutate({ name, description: desc, permissions: [...perms], allowed_contact_types: [...allowedTypes] })}
             disabled={!name || saveMut.isPending}
             className="btn-primary flex-1 py-2.5 disabled:opacity-50">
             {saveMut.isPending ? 'در حال ذخیره...' : 'ذخیره نقش'}
           </button>
           <button onClick={onClose} className="btn-secondary px-6 py-2.5">انصراف</button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── ویرایش پرسنل ────────────────────────────────────────────
+const staffSchema = z.object({
+  first_name: z.string().max(50, 'حداکثر ۵۰ کاراکتر').optional(),
+  last_name: z.string().max(50, 'حداکثر ۵۰ کاراکتر').optional(),
+  phone: z.string().regex(/^09\d{9}$/, 'شماره موبایل معتبر نیست — مثال: 09123456789'),
+  role_id: z.string().optional(),
+  employee_id: z.string().max(20, 'حداکثر ۲۰ کاراکتر').optional(),
+  department: z.string().max(50, 'حداکثر ۵۰ کاراکتر').optional(),
+  is_active: z.string(),
+  password: z.string().min(6, 'رمز عبور حداقل ۶ کاراکتر').or(z.literal('')),
+})
+
+function StaffEditor({ staff, roles, onClose }) {
+  const qc = useQueryClient()
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    resolver: zodResolver(staffSchema),
+    defaultValues: {
+      first_name: staff.first_name || '',
+      last_name: staff.last_name || '',
+      phone: staff.phone || '',
+      role_id: staff.role_id ? String(staff.role_id) : '',
+      employee_id: staff.employee_id || '',
+      department: staff.department || '',
+      is_active: staff.is_active ? '1' : '0',
+      password: '',
+    },
+  })
+
+  const saveMut = useMutation({
+    mutationFn: (d) => api.patch(`/accounting/staff/${staff.id}/`, d).then(r => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries(['staff'])
+      toast.success('اطلاعات پرسنل ذخیره شد')
+      onClose()
+    },
+    onError: (e) => toast.error(e.response?.data?.error || 'خطا در ذخیره'),
+  })
+
+  const onSubmit = (d) => {
+    const payload = { ...d, is_active: d.is_active === '1' }
+    if (!payload.password) delete payload.password
+    saveMut.mutate(payload)
+  }
+
+  const err = (name) => errors[name] && (
+    <div className="text-[11px] text-red-400 mt-1">{errors[name].message}</div>
+  )
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="card p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="font-bold text-white text-lg">ویرایش پرسنل</h2>
+          <button onClick={onClose} className="text-gray-steel hover:text-white"><X size={20} /></button>
+        </div>
+
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="label text-xs mb-1 block">نام</label>
+              <input {...register('first_name')} className="input text-sm" />
+              {err('first_name')}
+            </div>
+            <div>
+              <label className="label text-xs mb-1 block">نام خانوادگی</label>
+              <input {...register('last_name')} className="input text-sm" />
+              {err('last_name')}
+            </div>
+            <div>
+              <label className="label text-xs mb-1 block">موبایل *</label>
+              <input {...register('phone')} dir="ltr" className="input text-sm font-mono text-left" placeholder="09..." />
+              {err('phone')}
+            </div>
+            <div>
+              <label className="label text-xs mb-1 block">نقش</label>
+              <select {...register('role_id')} className="input text-sm">
+                <option value="">بدون نقش</option>
+                {roles.map(r => <option key={r.id} value={String(r.id)}>{r.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label text-xs mb-1 block">کد پرسنلی</label>
+              <input {...register('employee_id')} className="input text-sm" />
+              {err('employee_id')}
+            </div>
+            <div>
+              <label className="label text-xs mb-1 block">بخش</label>
+              <input {...register('department')} className="input text-sm" />
+              {err('department')}
+            </div>
+            <div>
+              <label className="label text-xs mb-1 block">وضعیت</label>
+              <select {...register('is_active')} className="input text-sm">
+                <option value="1">فعال</option>
+                <option value="0">غیرفعال</option>
+              </select>
+            </div>
+            <div>
+              <label className="label text-xs mb-1 block">رمز جدید</label>
+              <input type="password" {...register('password')} dir="ltr" className="input text-sm font-mono text-left"
+                placeholder="خالی بماند، تغییر نمی‌کند" />
+              {err('password')}
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <button type="submit" disabled={saveMut.isPending} className="btn-primary px-6 py-2.5 disabled:opacity-50">
+              {saveMut.isPending ? 'در حال ذخیره...' : 'ذخیره'}
+            </button>
+            <button type="button" onClick={onClose} className="btn-secondary px-6 py-2.5">انصراف</button>
+          </div>
+        </form>
       </div>
     </div>
   )
@@ -154,7 +305,7 @@ function StaffManager({ roles }) {
   const [userSearch, setUserSearch] = useState('')
   const [selectedUser, setSelectedUser] = useState(null)
   const [showUserDrop, setShowUserDrop] = useState(false)
-  const [msg, setMsg] = useState(null)
+  const [editing, setEditing] = useState(null) // پرسنل در حال ویرایش
 
   const { data: staff = [] } = useQuery({
     queryKey: ['staff'],
@@ -173,9 +324,9 @@ function StaffManager({ roles }) {
       setSelectedUser({ id: data.user_id, name: data.name, phone: data.phone })
       setForm(f => ({ ...f, user_id: data.user_id }))
       setAddMode('search')
-      setMsg({ type: 'success', text: `کاربر ${data.name} ساخته شد` })
+      toast.success(`کاربر ${data.name} ساخته شد`)
     },
-    onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا در ساخت کاربر' }),
+    onError: (e) => toast.error(e.response?.data?.error || 'خطا در ساخت کاربر'),
   })
 
   const addMut = useMutation({
@@ -186,20 +337,18 @@ function StaffManager({ roles }) {
       setForm({ user_id: '', role_id: '', employee_id: '', department: '' })
       setSelectedUser(null)
       setUserSearch('')
+      toast.success('پرسنل ثبت شد')
     },
-    onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا' }),
-  })
-
-  const updateMut = useMutation({
-    mutationFn: ({ id, ...d }) => api.patch(`/accounting/staff/${id}/`, d).then(r => r.data),
-    onSuccess: () => qc.invalidateQueries(['staff']),
+    onError: (e) => toast.error(e.response?.data?.error || 'خطا در ثبت پرسنل'),
   })
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-white">لیست پرسنل</h3>
-        <button onClick={() => setShowAdd(true)} className="btn-primary text-xs px-4 py-2">+ افزودن پرسنل</button>
+        <button onClick={() => setShowAdd(true)} className="btn-primary text-xs px-4 py-2 flex items-center gap-1.5">
+          <Plus size={14} /> افزودن پرسنل
+        </button>
       </div>
 
       {showAdd && (
@@ -207,12 +356,12 @@ function StaffManager({ roles }) {
           {/* انتخاب حالت */}
           <div className="flex gap-2 mb-2">
             <button onClick={() => setAddMode('search')}
-              className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${addMode==='search' ? 'bg-brand/20 border-brand text-white' : 'border-white/10 text-gray-steel'}`}>
-              🔍 جستجوی کاربر موجود
+              className={`text-xs px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${addMode==='search' ? 'bg-brand/20 border-brand text-white' : 'border-white/10 text-gray-steel'}`}>
+              <Search size={13} /> جستجوی کاربر موجود
             </button>
             <button onClick={() => setAddMode('new')}
-              className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${addMode==='new' ? 'bg-brand/20 border-brand text-white' : 'border-white/10 text-gray-steel'}`}>
-              + ساخت کاربر جدید
+              className={`text-xs px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${addMode==='new' ? 'bg-brand/20 border-brand text-white' : 'border-white/10 text-gray-steel'}`}>
+              <UserPlus size={13} /> ساخت کاربر جدید
             </button>
           </div>
 
@@ -286,7 +435,6 @@ function StaffManager({ roles }) {
             </div>
           </div>
           )}
-          {msg && <div className={`text-xs ${msg.type==='success'?'text-green-400':'text-red-400'}`}>{msg.text}</div>}
           <div className="flex gap-2">
             <button onClick={() => addMut.mutate(form)} disabled={!form.user_id || !form.role_id || addMut.isPending}
               className="btn-primary text-xs px-4 py-2 disabled:opacity-50">ذخیره</button>
@@ -302,7 +450,7 @@ function StaffManager({ roles }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.1)' }}>
-                {['نام', 'موبایل', 'نقش', 'کد پرسنلی', 'بخش', 'وضعیت', 'تغییر نقش'].map(h => (
+                {['نام', 'موبایل', 'نقش', 'کد پرسنلی', 'بخش', 'وضعیت'].map(h => (
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500 }}>{h}</th>
                 ))}
               </tr>
@@ -310,7 +458,9 @@ function StaffManager({ roles }) {
             <tbody>
               {staff.map((s, i) => (
                 <tr key={s.id} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
-                  <td style={{ padding: '10px 12px', fontWeight: 500 }}>{s.name}</td>
+                  <td style={{ padding: '10px 12px', fontWeight: 500 }}>
+                    <button onClick={() => setEditing(s)} className="hover:text-brand transition-colors" title="ویرایش">{s.name}</button>
+                  </td>
                   <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }}>{s.phone}</td>
                   <td style={{ padding: '10px 12px' }}>
                     <span style={{ color: '#0066FF', background: '#0066FF20', padding: '2px 8px', borderRadius: 20, fontSize: 11 }}>
@@ -324,19 +474,14 @@ function StaffManager({ roles }) {
                       {s.is_active ? 'فعال' : 'غیرفعال'}
                     </span>
                   </td>
-                  <td style={{ padding: '10px 12px' }}>
-                    <select value={s.role_id || ''} onChange={e => updateMut.mutate({ id: s.id, role_id: e.target.value || null })}
-                      className="input text-xs" style={{ padding: '2px 6px', height: 'auto' }}>
-                      <option value="">بدون نقش</option>
-                      {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                    </select>
-                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+
+      {editing && <StaffEditor staff={editing} roles={roles} onClose={() => setEditing(null)} />}
     </div>
   )
 }
@@ -360,16 +505,17 @@ export default function RolesPage() {
 
   const roles = data?.roles || []
   const allPerms = data?.all_permissions || []
+  const contactTypes = data?.contact_types || []
 
   return (
     <div className="container-main py-8 max-w-5xl">
       <h1 className="font-display font-bold text-2xl text-white mb-6">مدیریت نقش‌ها و پرسنل</h1>
 
       <div className="flex gap-2 mb-6 border-b border-white/10">
-        {[['roles', '🎭 نقش‌ها'], ['staff', '👥 پرسنل']].map(([k, v]) => (
+        {[['roles', 'نقش‌ها', Shield], ['staff', 'پرسنل', Users]].map(([k, v, Icon]) => (
           <button key={k} onClick={() => setTab(k)}
-            className={`text-sm px-5 py-2.5 rounded-t-lg border-b-2 transition-all ${tab === k ? 'border-brand text-white bg-brand/10' : 'border-transparent text-gray-steel hover:text-white'}`}>
-            {v}
+            className={`text-sm px-5 py-2.5 rounded-t-lg border-b-2 transition-all flex items-center gap-2 ${tab === k ? 'border-brand text-white bg-brand/10' : 'border-transparent text-gray-steel hover:text-white'}`}>
+            <Icon size={15} /> {v}
           </button>
         ))}
       </div>
@@ -378,7 +524,9 @@ export default function RolesPage() {
         <>
           <div className="flex justify-between items-center mb-4">
             <div className="text-xs text-gray-steel">{roles.length} نقش تعریف شده</div>
-            <button onClick={() => setShowNew(true)} className="btn-primary text-sm px-4 py-2">+ نقش جدید</button>
+            <button onClick={() => setShowNew(true)} className="btn-primary text-sm px-4 py-2 flex items-center gap-1.5">
+              <Plus size={15} /> نقش جدید
+            </button>
           </div>
 
           {isLoading ? <div className="text-center py-8 text-gray-steel">در حال بارگذاری...</div> : (
@@ -431,6 +579,7 @@ export default function RolesPage() {
         <RoleEditor
           role={editRole}
           allPerms={allPerms}
+          contactTypes={contactTypes}
           onSave={() => { setShowNew(false); setEditRole(null) }}
           onClose={() => { setShowNew(false); setEditRole(null) }}
         />

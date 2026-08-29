@@ -2,9 +2,11 @@ import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { catalogService } from '../services/catalog'
+import api from '../services/api'
 import ProductCard from '../components/product/ProductCard'
 import FilterPanel from '../components/product/FilterPanel'
 import { PageLoader, EmptyState, ErrorMessage, Spinner } from '../components/ui'
+import Seo from '../components/Seo'
 
 function Pagination({ page, totalPages, onPage }) {
   if (totalPages <= 1) return null
@@ -37,14 +39,36 @@ export default function ProductsPage() {
     brand:         searchParams.get('brand') || '',
     search:        searchParams.get('search') || '',
     in_stock:      searchParams.get('in_stock') || '',
+    discounted:    searchParams.get('discounted') || '',
   })
   const [page, setPage] = useState(1)
   const [showFilter, setShowFilter] = useState(false)
+  // جستجوی هوشمند دوزبانه — وقتی فعال است، جایگزین لیست عادی می‌شود
+  const [smartInput, setSmartInput] = useState('')
+  const [smartQuery, setSmartQuery] = useState('')
 
-  // sync params → filters
+  const { data: smartData, isFetching: smartLoading } = useQuery({
+    queryKey: ['products-smart-search', smartQuery],
+    queryFn: () => api.get('/catalog/products/search/', { params: { q: smartQuery } }).then(r => r.data),
+    enabled: smartQuery.trim().length >= 2,
+  })
+  const smartMode = smartQuery.trim().length >= 2
+
+  // جستجوی زنده — با کمی تأخیر بعد از توقف تایپ، بدون نیاز به اینتر
+  useEffect(() => {
+    const t = setTimeout(() => setSmartQuery(smartInput.trim()), 400)
+    return () => clearTimeout(t)
+  }, [smartInput])
+
+  // sync params → filters — پارامتر search همیشه به جستجوی هوشمند می‌رود (نه فیلتر ساده)
   useEffect(() => {
     const q = Object.fromEntries(searchParams)
-    setFilters(prev => ({ ...prev, ...q }))
+    const { search, ...rest } = q
+    setFilters(prev => ({ ...prev, ...rest, search: '' }))
+    if (search) {
+      setSmartInput(search)
+      setSmartQuery(search)
+    }
     setPage(1)
   }, [searchParams])
 
@@ -67,16 +91,56 @@ export default function ProductsPage() {
     setSearchParams(next)
   }
 
-  const products = data?.results || []
-  const totalPages = data ? Math.ceil(data.count / 24) : 0
+  const products = smartMode ? (smartData?.results || []) : (data?.results || [])
+  const totalPages = data && !smartMode ? Math.ceil(data.count / 24) : 0
 
   return (
     <div className="container-main py-8">
+      <Seo
+        title="محصولات | دوربینکار"
+        description="کاتالوگ قطعات دوربین مداربسته — برد، لنز، مودم، بدنه و متعلقات با به‌روزترین قیمت‌ها."
+        canonical="/products"
+      />
+
+      {/* نوار جستجوی هوشمند دوزبانه */}
+      <form
+        onSubmit={(e) => { e.preventDefault(); setSmartQuery(smartInput.trim()) }}
+        className="relative mb-6"
+      >
+        <input
+          value={smartInput}
+          onChange={(e) => {
+            setSmartInput(e.target.value)
+            if (!e.target.value.trim()) setSmartQuery('')
+          }}
+          placeholder="جستجوی هوشمند: فارسی یا English... (مثل: لنز ytot 5mp یا برد سونی)"
+          className="input w-full text-sm py-3"
+          style={{ paddingRight: '2.75rem', paddingLeft: smartMode ? '6.5rem' : '1rem' }}
+        />
+        <svg className="w-4 h-4 absolute right-4 top-1/2 -translate-y-1/2 text-gray-steel pointer-events-none"
+          fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M21 21l-4.35-4.35M17 10a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        {smartMode && (
+          <button type="button" onClick={() => { setSmartInput(''); setSmartQuery('') }}
+            className="absolute left-2 top-1/2 -translate-y-1/2 text-xs px-3 py-1.5 rounded-lg bg-white/5 text-gray-steel hover:text-white transition-colors">
+            ✕ حذف جستجو
+          </button>
+        )}
+      </form>
+
       {/* سربرگ */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="font-display font-bold text-2xl text-white">محصولات</h1>
-          {data && (
+          {smartMode
+            ? smartData && (
+              <p className="text-sm text-gray-steel mt-1">
+                {smartData.count.toLocaleString('fa-IR')} نتیجه هوشمند برای «{smartQuery}»
+              </p>
+            )
+            : data && (
             <p className="text-sm text-gray-steel mt-1">
               {data.count.toLocaleString('fa-IR')} محصول یافت شد
             </p>
@@ -115,7 +179,7 @@ export default function ProductsPage() {
 
         {/* محصولات */}
         <div className="flex-1 min-w-0">
-          {isLoading ? (
+          {(isLoading || smartLoading) ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
               {Array(12).fill(0).map((_, i) => <div key={i} className="skeleton h-72 rounded-2xl" />)}
             </div>
@@ -131,7 +195,8 @@ export default function ProductsPage() {
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                 {products.map(p => <ProductCard key={p.id} product={p} />)}
               </div>
-              <Pagination page={page} totalPages={totalPages} onPage={setPage} />
+              <Pagination page={page} totalPages={totalPages}
+                onPage={(p) => { setPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             </>
           )}
         </div>
