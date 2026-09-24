@@ -31,7 +31,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenRefreshView as BaseTokenRefreshView
 
 from .models import UserProfile
 from .permissions import IsVerifiedUser
@@ -39,6 +38,8 @@ from .serializers import (
     AdminApprovePartnerSerializer,
     AdminPartnerListSerializer,
     ChangePasswordSerializer,
+    ClubSettingsSerializer,
+    GuaranteeSerializer,
     LoginSerializer,
     PartnerRegisterSerializer,
     RegisterSerializer,
@@ -106,9 +107,34 @@ class LoginView(APIView):
 
 # ─── Token Refresh ────────────────────────────────────────────────────────────
 
-class TokenRefreshView(BaseTokenRefreshView):
-    """POST /api/users/auth/refresh/ — simplejwt استاندارد"""
-    pass
+class TokenRefreshView(APIView):
+    """
+    POST /api/users/auth/refresh/ — { refresh } → توکن‌های جدید.
+    rotation دستی: توکن قدیمی blacklist می‌شود و مهلت‌های پرسنل (۱۰ ساعت بیکاری)
+    از get_tokens_for_user اعمال می‌شود — رفتار پیش‌فرض simplejwt مهلت سفارشی را
+    هنگام rotation نگه نمی‌داشت.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token_str = request.data.get("refresh")
+        if not token_str:
+            return Response({"error": "refresh token الزامی است."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            old = RefreshToken(token_str)  # امضا، انقضا و blacklist را چک می‌کند
+        except TokenError:
+            return Response({"error": "نشست منقضی شده است."}, status=status.HTTP_401_UNAUTHORIZED)
+        from django.contrib.auth import get_user_model
+        try:
+            user = get_user_model().objects.get(id=old["user_id"], is_active=True)
+        except Exception:
+            return Response({"error": "کاربر یافت نشد یا غیرفعال است."}, status=status.HTTP_401_UNAUTHORIZED)
+        tokens = get_tokens_for_user(user)
+        try:
+            old.blacklist()
+        except Exception:
+            pass
+        return Response(tokens)
 
 
 # ─── بازیابی رمز عبور با پیامک (OTP) ─────────────────────────────────────────
@@ -240,6 +266,8 @@ class ResetPasswordView(APIView):
         password = str(request.data.get('password') or '')
         if len(password) < 8:
             return Response({'error': 'رمز عبور باید حداقل ۸ کاراکتر باشد'}, status=400)
+        if not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
+            return Response({'error': 'رمز عبور باید ترکیبی از حروف و عدد باشد (فقط عدد یا فقط حرف کافی نیست)'}, status=400)
 
         otp = OtpCode.objects.filter(phone=phone).first()
         if otp is None or otp.expires_at < timezone.now():
@@ -299,8 +327,15 @@ class MeView(APIView):
         return Response(UserSerializer(request.user, context={"request": request}).data)
 
     def put(self, request):
+        # مشخصات هویتی (موبایل، نام، شرکت، کد ملی، آدرس، ایمیل) = هویت حساب —
+        # ویرایش مستقیم ممنوع؛ فقط با درخواست تغییر + تأیید مدیر اعمال می‌شود
+        # (پرسنل بر اساس نام طرف سرچ می‌کنند و تغییر خودسرانه داده‌ها را خراب می‌کند)
+        data = dict(request.data)
+        for f in ("phone", "first_name", "last_name", "email",
+                  "company_name", "national_id", "address"):
+            data.pop(f, None)
         serializer = UserUpdateSerializer(
-            request.user, data=request.data, partial=True, context={"request": request}
+            request.user, data=data, partial=True, context={"request": request}
         )
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -356,6 +391,10 @@ class RegisterPartnerView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         serializer.save(user=user)
 
+        # پیامک «درخواست ثبت شد» — best-effort؛ اگر قالب تنظیم نشده باشد ساکت رد می‌شود
+        from apps.notifications.services import notify_partner_request_sms
+        notify_partner_request_sms(user)
+
         logger.info(f"[AUTH] Partner request: {user.phone}")
         return Response(
             {"detail": "درخواست همکاری ثبت شد. بعد از بررسی ادمین اطلاع داده می‌شود."},
@@ -378,7 +417,10 @@ class AdminPartnerListView(APIView):
         )
         if request.query_params.get("pending", "").lower() == "true":
             qs = qs.filter(is_approved=False)
-        return Response(AdminPartnerListSerializer(qs, many=True).data)
+        elif request.query_params.get("approved", "").lower() == "true":
+            # تازه‌تأییدشده‌ها — مرتب بر اساس زمان تأیید (آخرین به‌روزرسانی پروفایل)
+            qs = qs.filter(is_approved=True).order_by("-updated_at")
+        return Response(AdminPartnerListSerializer(qs, many=True, context={"request": request}).data)
 
 
 class AdminApprovePartnerView(APIView):
@@ -405,11 +447,15 @@ class AdminApprovePartnerView(APIView):
         profile.is_approved  = data["is_approved"]
         profile.credit_limit = data.get("credit_limit", profile.credit_limit)
         if data["is_approved"]:
+            if data.get("partner_tier"):
+                # تغییر دستی سطح → پاک شدن نشان «پلاتینیوم خودکار»
+                profile.platinum_auto_granted = False
             profile.partner_tier = data.get("partner_tier") or profile.partner_tier
         else:
             # رد درخواست — برگشت به مشتری عمومی تا در لیست انتظار نماند
             profile.user_type = UserProfile.UserType.PUBLIC
             profile.partner_tier = ""
+            profile.platinum_auto_granted = False
         if data.get("notes"):
             profile.notes = (
                 (profile.notes + "\n" if profile.notes else "")
@@ -440,7 +486,167 @@ class AdminApprovePartnerView(APIView):
 
         action = "تأیید" if data["is_approved"] else "رد"
         logger.info(f"[ADMIN] Partner {action}: user_id={user_id} by {request.user.email}")
-        return Response(AdminPartnerListSerializer(profile).data)
+        return Response(AdminPartnerListSerializer(profile, context={"request": request}).data)
+
+
+# ─── Admin — Partner Club Settings ────────────────────────────────────────────
+
+class ClubSettingsView(APIView):
+    """
+    GET/PUT /api/users/club-settings/
+    آستانه‌های ارتقای سطح باشگاه همکاران (تومان) + وضعیت ارزیابی خودکار.
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from .services import get_club_settings, find_downgrade_risks, snoozed_risk_count
+        st = get_club_settings()
+        at_risk = find_downgrade_risks(limit=50)
+        return Response({
+            "silver_to_gold_amount": st.silver_to_gold_amount,
+            "gold_to_platinum_amount": st.gold_to_platinum_amount,
+            "period_months": st.period_months,
+            "auto_evaluate_enabled": st.auto_evaluate_enabled,
+            "overdue_warn_workdays": st.overdue_warn_workdays,
+            "overdue_cash_only_days": st.overdue_cash_only_days,
+            "tier_benefits_silver": st.tier_benefits_silver,
+            "tier_benefits_gold": st.tier_benefits_gold,
+            "tier_benefits_platinum": st.tier_benefits_platinum,
+            "at_risk_count": len(at_risk),
+            "at_risk": at_risk,
+            "at_risk_snoozed_count": snoozed_risk_count(),
+        })
+
+    def put(self, request):
+        from .models import PartnerClubSettings
+        from .services import invalidate_club_settings_cache
+        serializer = ClubSettingsSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        st = PartnerClubSettings.get_instance()
+        for k, v in serializer.validated_data.items():
+            setattr(st, k, v)
+        st.save()
+        invalidate_club_settings_cache()
+        logger.info(f"[CLUB] تنظیمات باشگاه توسط {request.user.phone} به‌روز شد")
+        return self.get(request)
+
+
+class ClubAtRiskSnoozeView(APIView):
+    """
+    POST /api/users/club-settings/at-risk/snooze/
+    پنهان کردن موقت هشدار تنزل برای لیستی از همکاران (پیش‌فرض ۳۰ روز).
+    body: {"phones": ["09xxxx", ...], "days": 30}
+    """
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        from .services import snooze_downgrade_risk
+        phones = request.data.get("phones") or []
+        days = request.data.get("days") or 30
+        if not isinstance(phones, list) or not phones:
+            return Response({"error": "لیست موبایل‌ها خالی است."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            days = max(1, min(int(days), 180))
+        except (TypeError, ValueError):
+            days = 30
+        n = snooze_downgrade_risk(phones, days=days)
+        logger.info(f"[CLUB] هشدار تنزل {n} همکار توسط {request.user.phone} برای {days} روز پنهان شد")
+        return Response({"ok": True, "snoozed": n, "days": days})
+
+
+class ClubInfoView(APIView):
+    """
+    GET /api/users/club-info/
+    اطلاعات عمومی باشگاه همکاران برای صفحه لندینگ — بدون نیاز به احراز هویت.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from .services import get_club_settings
+        st = get_club_settings()
+        return Response({
+            "silver_to_gold_amount": st.silver_to_gold_amount,
+            "gold_to_platinum_amount": st.gold_to_platinum_amount,
+            "period_months": st.period_months,
+            "tiers": [
+                {"key": "silver", "title": "همکار سیلور", "benefits": st.tier_benefits_silver},
+                {"key": "gold", "title": "همکار گلد", "benefits": st.tier_benefits_gold},
+                {"key": "platinum", "title": "همکار پلاتینیوم", "benefits": st.tier_benefits_platinum},
+            ],
+        })
+
+
+class ClubEvaluateView(APIView):
+    """
+    POST /api/users/club-settings/evaluate/
+    اجرای دستی ارزیابی سطوح — فقط ارتقا، با پیامک اطلاع‌رسانی.
+    """
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        from .services import evaluate_partner_tiers
+        result = evaluate_partner_tiers()
+        logger.info(f"[CLUB] ارزیابی دستی سطوح توسط {request.user.phone}: {result['upgraded']} ارتقا")
+        return Response(result)
+
+
+# ─── Admin — تضامین همکار (فروش اعتباری) ──────────────────────────────────────
+
+class PartnerGuaranteeListCreateView(APIView):
+    """
+    GET/POST /api/users/admin/partners/<user_id>/guarantees/     → تضامین کاربر سایت
+    GET/POST /api/users/admin/contacts/<contact_id>/guarantees/  → تضامین طرف حساب دستی
+    (multipart، مدرک اختیاری)
+    """
+    permission_classes = [IsAdminUser]
+
+    def _resolve(self, user_id, contact_id):
+        from django.shortcuts import get_object_or_404
+        if contact_id is not None:
+            from apps.accounting.models import Contact
+            return {"contact": get_object_or_404(Contact, pk=contact_id)}
+        return {"profile": get_object_or_404(UserProfile, user__id=user_id)}
+
+    def get(self, request, user_id=None, contact_id=None):
+        subject = self._resolve(user_id, contact_id)
+        qs = subject["profile"].guarantees.all() if "profile" in subject else subject["contact"].guarantees.all()
+        return Response(GuaranteeSerializer(qs, many=True, context={"request": request}).data)
+
+    def post(self, request, user_id=None, contact_id=None):
+        subject = self._resolve(user_id, contact_id)
+        serializer = GuaranteeSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        guarantee = serializer.save(created_by=request.user, **subject)
+        who = subject["profile"].user.phone if "profile" in subject else subject["contact"].name
+        logger.info(f"[GUARANTEE] ثبت تضمین {guarantee.get_guarantee_type_display()} برای {who} توسط {request.user.phone}")
+        return Response(
+            GuaranteeSerializer(guarantee, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class PartnerGuaranteeDeleteView(APIView):
+    """DELETE /api/users/admin/partners/<user_id>/guarantees/<gid>/
+              یا /api/users/admin/contacts/<contact_id>/guarantees/<gid>/"""
+    permission_classes = [IsAdminUser]
+
+    def delete(self, request, gid, user_id=None, contact_id=None):
+        from .models import PartnerGuarantee
+        flt = {"id": gid}
+        if contact_id is not None:
+            flt["contact_id"] = contact_id
+        else:
+            flt["profile__user__id"] = user_id
+        try:
+            g = PartnerGuarantee.objects.get(**flt)
+        except PartnerGuarantee.DoesNotExist:
+            return Response({"error": "تضمین یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
+        g.document.delete(save=False)
+        g.delete()
+        logger.info(f"[GUARANTEE] حذف تضمین #{gid} توسط {request.user.phone}")
+        return Response({"detail": "تضمین حذف شد."})
 
 
 class AdminBadgesView(APIView):
@@ -454,6 +660,7 @@ class AdminBadgesView(APIView):
         from apps.orders.models import Order
         from apps.orders.services import due_settlements_queryset, send_due_settlement_reminders
         from apps.accounting.models import SaleInvoice, PaymentReceipt
+        from .models import PhoneChangeRequest, ProfileChangeRequest
         from django.utils import timezone
         due_qs = SaleInvoice.objects.filter(
             settlement='credit', due_date__lte=timezone.now().date(),
@@ -464,6 +671,27 @@ class AdminBadgesView(APIView):
             send_due_settlement_reminders()
         except Exception:
             pass
+        # ارزیابی خودکار سطوح باشگاه همکاران — روزی یک بار (فقط ارتقا)
+        try:
+            from django.core.cache import cache
+            from .services import get_club_settings, evaluate_partner_tiers
+            today = timezone.now().date().isoformat()
+            if get_club_settings().auto_evaluate_enabled and cache.get("club_eval_day") != today:
+                cache.set("club_eval_day", today, timeout=60 * 60 * 48)
+                evaluate_partner_tiers()
+        except Exception:
+            logger.exception("[CLUB] خطا در ارزیابی خودکار سطوح")
+        # اعمال خودکار بستانکاری مشتریان (اضافه‌واریزی) به بدهی‌های باز — روزی یک بار
+        try:
+            from django.core.cache import cache
+            today = timezone.now().date().isoformat()
+            if cache.get("credit_apply_day") != today:
+                cache.set("credit_apply_day", today, timeout=60 * 60 * 48)
+                from apps.orders.services import apply_customer_credit
+                for p in UserProfile.objects.filter(payment_credit_irr__gt=0).select_related("user"):
+                    apply_customer_credit(p.user)
+        except Exception:
+            logger.exception("[CREDIT] خطا در اعمال خودکار بستانکاری")
         return Response({
             "orders_pending": Order.objects.filter(status=Order.Status.PENDING).count(),
             "partners_pending": UserProfile.objects.filter(
@@ -474,7 +702,8 @@ class AdminBadgesView(APIView):
             "receipts_pending": PaymentReceipt.objects.filter(
                 status=PaymentReceipt.Status.PENDING,
             ).count(),
-        })
+                "phone_requests": PhoneChangeRequest.objects.filter(status="pending").count(),
+            "profile_requests": ProfileChangeRequest.objects.filter(status="pending").count(),})
 
 class ActivityLogListView(APIView):
     """
@@ -510,4 +739,239 @@ class ActivityLogListView(APIView):
                 'status': a.status,
                 'created_at': a.created_at.strftime('%Y-%m-%d %H:%M:%S'),
             } for a in rows],
+        })
+
+class PhoneChangeRequestView(APIView):
+    """GET/POST /api/users/me/phone-change-request/ — درخواست تغییر موبایل مشتری."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        latest = request.user.phone_change_requests.first()
+        return Response({"request": _phone_request_payload(latest) if latest else None})
+
+    def post(self, request):
+        from .models import PhoneChangeRequest
+
+        new_phone = (request.data.get("new_phone") or "").strip()
+        reason = (request.data.get("reason") or "").strip()
+        if not new_phone.isdigit() or len(new_phone) != 11 or not new_phone.startswith("09"):
+            return Response({"error": "شماره موبایل معتبر نیست (مثلاً 0912…)"}, status=400)
+        if new_phone == request.user.phone:
+            return Response({"error": "موبایل جدید با موبایل فعلی یکی است"}, status=400)
+        if User.objects.filter(phone=new_phone).exists():
+            return Response({"error": "این شماره قبلاً در سیستم ثبت شده"}, status=400)
+        if request.user.phone_change_requests.filter(
+                status=PhoneChangeRequest.Status.PENDING).exists():
+            return Response({"error": "یک درخواست در انتظار تأیید دارید"}, status=400)
+        req = PhoneChangeRequest.objects.create(
+            user=request.user, new_phone=new_phone, reason=reason)
+        return Response({"request": _phone_request_payload(req)}, status=201)
+
+
+def _phone_request_payload(r):
+    return {
+        "id": r.id, "user_id": r.user_id,
+        "user_name": r.user.get_full_name() or r.user.phone,
+        "old_phone": r.user.phone, "new_phone": r.new_phone,
+        "reason": r.reason, "status": r.status,
+        "status_display": r.get_status_display(),
+        "created_at": r.created_at.isoformat(),
+    }
+
+
+class AdminPhoneRequestsView(APIView):
+    """GET /api/users/admin/phone-requests/?status=pending — لیست درخواست‌ها."""
+
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from .models import PhoneChangeRequest
+
+        qs = PhoneChangeRequest.objects.select_related("user")
+        st = request.query_params.get("status", "pending")
+        if st and st != "all":
+            qs = qs.filter(status=st)
+        return Response([_phone_request_payload(r) for r in qs[:200]])
+
+
+class AdminPhoneRequestActionView(APIView):
+    """POST /api/users/admin/phone-requests/<pk>/approve|reject/"""
+
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk, action):
+        from .models import PhoneChangeRequest
+        from django.utils import timezone
+
+        if not _has_users_edit(request.user):
+            return Response({"error": "دسترسی ندارید"}, status=403)
+        try:
+            req = PhoneChangeRequest.objects.select_related("user").get(pk=pk)
+        except PhoneChangeRequest.DoesNotExist:
+            return Response({"error": "یافت نشد"}, status=404)
+        if req.status != PhoneChangeRequest.Status.PENDING:
+            return Response({"error": "این درخواست قبلاً بررسی شده"}, status=400)
+
+        if action == "approve":
+            if User.objects.filter(phone=req.new_phone).exists():
+                return Response({"error": "این شماره قبلاً در سیستم ثبت شده"}, status=400)
+            req.user.phone = req.new_phone
+            req.user.save(update_fields=["phone"])
+            req.status = PhoneChangeRequest.Status.APPROVED
+        elif action == "reject":
+            req.status = PhoneChangeRequest.Status.REJECTED
+        else:
+            return Response({"error": "اکشن نامعتبر"}, status=400)
+        req.reviewed_by = request.user
+        req.reviewed_at = timezone.now()
+        req.save(update_fields=["status", "reviewed_by", "reviewed_at"])
+        return Response({"ok": True, "request": _phone_request_payload(req)})
+
+
+class ProfileChangeRequestView(APIView):
+    """GET/POST /api/users/me/profile-change-request/ — درخواست تغییر مشخصات مشتری."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = request.user.profile_change_requests.all()[:20]
+        return Response({"requests": [_profile_request_payload(r) for r in qs]})
+
+    def post(self, request):
+        from .models import ProfileChangeRequest
+
+        field = (request.data.get("field") or "").strip()
+        new_value = (request.data.get("new_value") or "").strip()
+        reason = (request.data.get("reason") or "").strip()
+        if field not in ProfileChangeRequest.Field.values:
+            return Response({"error": "فیلد نامعتبر است"}, status=400)
+        if not new_value:
+            return Response({"error": "مقدار جدید را وارد کنید"}, status=400)
+        current = _profile_field_value(request.user, field)
+        if new_value == (current or ""):
+            return Response({"error": "مقدار جدید با مقدار فعلی یکی است"}, status=400)
+        if request.user.profile_change_requests.filter(
+                field=field, status=ProfileChangeRequest.Status.PENDING).exists():
+            return Response({"error": "برای این مورد یک درخواست در انتظار تأیید دارید"}, status=400)
+        req = ProfileChangeRequest.objects.create(
+            user=request.user, field=field, new_value=new_value, reason=reason)
+        return Response({"request": _profile_request_payload(req)}, status=201)
+
+
+def _profile_field_value(user, field):
+    if field in ("first_name", "last_name"):
+        return getattr(user, field, "")
+    profile = getattr(user, "profile", None)
+    return getattr(profile, field, "") if profile else ""
+
+
+def _profile_request_payload(r):
+    return {
+        "id": r.id, "user_id": r.user_id,
+        "user_name": r.user.get_full_name() or r.user.phone,
+        "user_phone": r.user.phone,
+        "field": r.field, "field_display": r.get_field_display(),
+        "old_value": _profile_field_value(r.user, r.field),
+        "new_value": r.new_value,
+        "reason": r.reason, "status": r.status,
+        "status_display": r.get_status_display(),
+        "created_at": r.created_at.isoformat(),
+    }
+
+
+class AdminProfileRequestsView(APIView):
+    """GET /api/users/admin/profile-requests/?status=pending — لیست درخواست‌های تغییر مشخصات."""
+
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from .models import ProfileChangeRequest
+
+        qs = ProfileChangeRequest.objects.select_related("user", "user__profile")
+        st = request.query_params.get("status", "pending")
+        if st and st != "all":
+            qs = qs.filter(status=st)
+        return Response([_profile_request_payload(r) for r in qs[:200]])
+
+
+class AdminProfileRequestActionView(APIView):
+    """POST /api/users/admin/profile-requests/<pk>/approve|reject/"""
+
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk, action):
+        from .models import ProfileChangeRequest, UserProfile
+        from django.utils import timezone
+
+        if not _has_users_edit(request.user):
+            return Response({"error": "دسترسی ندارید"}, status=403)
+        try:
+            req = ProfileChangeRequest.objects.select_related("user", "user__profile").get(pk=pk)
+        except ProfileChangeRequest.DoesNotExist:
+            return Response({"error": "یافت نشد"}, status=404)
+        if req.status != ProfileChangeRequest.Status.PENDING:
+            return Response({"error": "این درخواست قبلاً بررسی شده"}, status=400)
+
+        if action == "approve":
+            if req.field in ("first_name", "last_name"):
+                setattr(req.user, req.field, req.new_value)
+                req.user.save(update_fields=[req.field])
+            else:
+                profile, _ = UserProfile.objects.get_or_create(user=req.user)
+                setattr(profile, req.field, req.new_value)
+                profile.save(update_fields=[req.field])
+            req.status = ProfileChangeRequest.Status.APPROVED
+        elif action == "reject":
+            req.status = ProfileChangeRequest.Status.REJECTED
+        else:
+            return Response({"error": "اکشن نامعتبر"}, status=400)
+        req.reviewed_by = request.user
+        req.reviewed_at = timezone.now()
+        req.save(update_fields=["status", "reviewed_by", "reviewed_at"])
+        return Response({"ok": True, "request": _profile_request_payload(req)})
+
+
+def _has_users_edit(user):
+    if user.is_superuser:
+        return True
+    sp = getattr(user, "staff_profile", None)
+    return bool(sp and sp.has_perm("users_edit"))
+
+
+class AdminLinkAccountView(APIView):
+    """PATCH /api/users/admin/users/<user_id>/link/ — لینک شریک به حساب اصلی.
+
+    بدنه: {"parent_account_id": <id> | null} — null یعنی جدا کردن لینک.
+    """
+
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, user_id):
+        if not _has_users_edit(request.user):
+            return Response({"error": "دسترسی ندارید"}, status=403)
+        try:
+            user = User.objects.get(pk=user_id)
+            profile = user.profile
+        except (User.DoesNotExist, User.profile.RelatedObjectDoesNotExist):
+            return Response({"error": "کاربر یا پروفایل یافت نشد"}, status=404)
+        parent_id = request.data.get("parent_account_id")
+        if parent_id is None:
+            profile.parent_account = None
+        else:
+            if int(parent_id) == user.id:
+                return Response({"error": "کاربر نمی‌تواند حساب اصلی خودش باشد"}, status=400)
+            parent = User.objects.filter(pk=parent_id).first()
+            if not parent:
+                return Response({"error": "حساب اصلی یافت نشد"}, status=404)
+            if getattr(parent.profile, "parent_account_id", None):
+                return Response({"error": "حساب اصلی خودش نمی‌تواند شریک باشد"}, status=400)
+            profile.parent_account = parent
+        profile.save(update_fields=["parent_account"])
+        return Response({
+            "ok": True,
+            "parent_account_id": profile.parent_account_id,
+            "parent_account_name": (profile.parent_account.get_full_name()
+                                    or profile.parent_account.phone)
+            if profile.parent_account_id else None,
         })

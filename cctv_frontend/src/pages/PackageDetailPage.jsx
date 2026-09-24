@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import api from '../services/api'
@@ -13,6 +13,7 @@ export default function PackageDetailPage() {
   const { slug } = useParams()
   const navigate = useNavigate()
   const { increment } = useCartStore()
+  const qc = useQueryClient()
   const { data: pkg, isLoading } = useQuery({
     queryKey: ['package-detail', slug],
     queryFn: () => api.get(`/catalog/packages/${slug}/`).then(r => r.data),
@@ -29,6 +30,7 @@ export default function PackageDetailPage() {
     setAdding(true)
     try {
       await orderService.addPackageToCart(pkg.id, bundles)
+      qc.invalidateQueries(['cart'])
       increment()
       setAdded(true)
       setTimeout(() => setAdded(false), 2000)

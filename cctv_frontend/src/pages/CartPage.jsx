@@ -2,12 +2,15 @@ import { useState } from 'react'
 import { Link, useNavigate, Navigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { orderService } from '../services/orders'
+import { orderService, paymentService } from '../services/orders'
 import useCartStore from '../store/useCartStore'
 import useAuthStore from '../store/useAuthStore'
 import { PageLoader, EmptyState } from '../components/ui'
 import OverdueBanner from '../components/OverdueBanner'
 import { formatPrice, formatNumber } from '../utils/format'
+
+// سقف خرید مستقیم با پرداخت آنلاین (ریال) — هم‌راستا با DIRECT_PURCHASE_MAX_RIAL بک‌اند
+const DIRECT_MAX_RIAL = 200_000_000
 
 function CartItem({ item, onRemove, onUpdate }) {
   const [qty, setQty] = useState(item.quantity)
@@ -18,7 +21,9 @@ function CartItem({ item, onRemove, onUpdate }) {
   const handleQtyChange = async (newQty) => {
     setQty(newQty)
     setSaving(true)
-    try { await onUpdate(item.variant, item.package, newQty) } finally { setSaving(false) }
+    try { await onUpdate(item.variant, item.package, newQty) }
+    catch { setQty(item.quantity) }
+    finally { setSaving(false) }
   }
 
   return (
@@ -50,19 +55,6 @@ function CartItem({ item, onRemove, onUpdate }) {
           <span className="inline-block mt-1 text-[10px] bg-brand/10 text-brand px-2 py-0.5 rounded-full">
             {item.settlement_display}
           </span>
-        )}
-        {/* موجودی — هشدار فقط اطلاع‌رسانی است و ثبت سفارش را مسدود نمی‌کند */}
-        {!isPkg && item.available_stock !== undefined && item.available_stock !== null && (
-          <div className="mt-1 flex items-center gap-2 flex-wrap">
-            <span className="text-[10px] text-gray-steel">
-              موجودی: {Number(item.available_stock).toLocaleString('fa-IR')}
-            </span>
-            {item.stock_short && (
-              <span className="text-[10px] bg-amber-500/15 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full">
-                ⏳ در انتظار تایید موجودی
-              </span>
-            )}
-          </div>
         )}
         <div className="text-sm font-bold text-brand dark:text-cyan mt-1">
           {formatPrice(item.unit_price || item.variant_detail?.pricing?.price || item.variant_detail?.final_price)}
@@ -120,15 +112,21 @@ export default function CartPage() {
   }
 
   const update = async (variantId, packageId, qty) => {
-    if (packageId) await orderService.addPackageToCart(packageId, qty)
-    else await orderService.addToCart(variantId, qty)
-    qc.invalidateQueries(['cart'])
+    try {
+      if (packageId) await orderService.addPackageToCart(packageId, qty)
+      else await orderService.addToCart(variantId, qty)
+      qc.invalidateQueries(['cart'])
+    } catch (e) {
+      console.error(e)
+      toast.error(e.response?.data?.error || 'خطا در بروزرسانی سبد. لطفاً دوباره تلاش کنید.')
+      qc.invalidateQueries(['cart'])
+      throw e
+    }
   }
 
   const handleCheckout = async () => {
     setCheckingOut(true)
     try {
-      // سفارش با وضعیت «در انتظار تأیید» ثبت می‌شود — بعد از تأیید فروشگاه قابل پرداخت است
       const order = await orderService.checkout(address, shippingMethod, freightCompany)
       if (order.split && order.orders?.length > 1) {
         toast.info(
@@ -140,6 +138,16 @@ export default function CartPage() {
         toast.warning(
           `شما ${Number(order.overdue_warning.count).toLocaleString('fa-IR')} قلم تسویه معوقه به مبلغ ${formatPrice(order.overdue_warning.total)} دارید. سفارش شما در اولویت بررسی قرار می‌گیرد.`
         )
+      }
+      // سفارش نقدی تا سقف، همین‌جا تأیید شده — مستقیم به درگاه بانک
+      if (order.status === 'awaiting_payment' && !order.split) {
+        try {
+          const res = await paymentService.requestPayment(order.order_number)
+          window.location.href = res.redirect_url
+          return
+        } catch (payErr) {
+          toast.error(payErr?.response?.data?.error || 'خطا در اتصال به درگاه — از صفحه سفارش‌ها دوباره تلاش کنید.')
+        }
       }
       navigate(`/account/orders?new=${order.order_number}`)
     } catch (e) {
@@ -156,6 +164,7 @@ export default function CartPage() {
   if (isLoading) return <PageLoader />
 
   const items = cart?.items || []
+  const overCap = (cart?.total_price || 0) > DIRECT_MAX_RIAL
 
   return (
     <div className="container-main py-8 max-w-4xl">
@@ -188,7 +197,7 @@ export default function CartPage() {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-steel">نحوه تسویه</span>
-                <span>نقدی — پس از تأیید فروشگاه</span>
+                <span>نقدی — پرداخت آنلاین</span>
               </div>
               <div className="flex justify-between font-bold text-base border-t border-gray-100 dark:border-white/5 pt-3">
                 <span>جمع کل</span>
@@ -196,6 +205,13 @@ export default function CartPage() {
               </div>
             </div>
 
+            {overCap ? (
+              <div className="rounded-xl border border-gold/30 bg-gold/5 p-3 text-xs leading-6 text-gray-700 dark:text-gray-300">
+                سقف خرید مستقیم با پرداخت آنلاین {formatPrice(DIRECT_MAX_RIAL)} است.
+                برای خرید بیشتر با فروشگاه تماس بگیرید.
+              </div>
+            ) : (
+              <>
             <div>
               <label className="label text-xs">روش ارسال</label>
               <div className="grid grid-cols-3 gap-2 mt-1">
@@ -240,12 +256,14 @@ export default function CartPage() {
               disabled={checkingOut}
               className="btn-primary w-full py-3 text-base"
             >
-              {checkingOut ? 'در حال ثبت سفارش...' : '✅ ثبت سفارش'}
+              {checkingOut ? 'در حال ثبت سفارش...' : '✅ ثبت سفارش و پرداخت آنلاین'}
             </button>
 
             <p className="text-[11px] text-gray-steel text-center">
-              سفارش بعد از تأیید فروشگاه قابل پرداخت می‌شود
+              بلافاصله بعد از ثبت سفارش به درگاه بانک ملت هدایت می‌شوید
             </p>
+              </>
+            )}
           </div>
         </div>
       )}

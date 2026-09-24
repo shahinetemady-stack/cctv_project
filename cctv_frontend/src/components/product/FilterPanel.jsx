@@ -292,6 +292,7 @@ export default function FilterPanel({ filters, onChange }) {
       search: filters.search || '',
       in_stock: filters.in_stock || '',
       discounted: filters.discounted || '',
+      ordering: filters.ordering || '',
     })
   }
 
@@ -319,14 +320,40 @@ export default function FilterPanel({ filters, onChange }) {
         </button>
       </div>
 
-      {/* تخفیف — همیشه نمایان (بدون آکاردئون) */}
-      <label className="flex items-center gap-2 cursor-pointer mb-4 pb-3 border-b border-[var(--color-border)]">
-        <input type="checkbox"
-          checked={filters.discounted === 'true'}
-          onChange={e => set('discounted', e.target.checked ? 'true' : '')}
-          className="w-4 h-4 rounded border-gray-300 text-brand focus:ring-brand" />
-        <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">فقط تخفیف‌دار</span>
-      </label>
+      {/* موجودی + تخفیف — همیشه نمایان (بدون آکاردئون)، بالای لیست */}
+      <div className="flex items-center gap-4 mb-4 pb-3 border-b border-[var(--color-border)]">
+        <label className="flex items-center gap-1.5 cursor-pointer whitespace-nowrap">
+          <input type="checkbox"
+            checked={filters.in_stock === 'true'}
+            onChange={e => set('in_stock', e.target.checked ? 'true' : '')}
+            className="w-3.5 h-3.5 rounded border-gray-300 text-brand focus:ring-brand" />
+          <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">فقط موجود</span>
+        </label>
+        <label className="flex items-center gap-1.5 cursor-pointer whitespace-nowrap">
+          <input type="checkbox"
+            checked={filters.discounted === 'true'}
+            onChange={e => set('discounted', e.target.checked ? 'true' : '')}
+            className="w-3.5 h-3.5 rounded border-gray-300 text-brand focus:ring-brand" />
+          <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">فقط تخفیف‌دار</span>
+        </label>
+      </div>
+
+      {/* مرتب‌سازی قیمت — همیشه نمایان (زیر فقط تخفیف‌دار) */}
+      <div className="mb-4 pb-3 border-b border-[var(--color-border)]">
+        <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">مرتب‌سازی قیمت</p>
+        <div className="flex flex-wrap gap-1.5">
+          <FilterChip
+            active={filters.ordering === 'price'}
+            onClick={() => set('ordering', filters.ordering === 'price' ? '' : 'price')}>
+            از کم به زیاد
+          </FilterChip>
+          <FilterChip
+            active={filters.ordering === '-price'}
+            onClick={() => set('ordering', filters.ordering === '-price' ? '' : '-price')}>
+            از زیاد به کم
+          </FilterChip>
+        </div>
+      </div>
 
       {/* قدم اول: انتخاب دسته اصلی — فیلترهای ویژگی فقط بعد از انتخاب دسته ظاهر می‌شوند */}
       <div className="mb-2 pb-3 border-b border-[var(--color-border)]">
@@ -355,18 +382,6 @@ export default function FilterPanel({ filters, onChange }) {
       {filters.category && specFields.map(f => (
         <SpecFieldFilter key={f.key} field={f} filters={filters} set={set} />
       ))}
-
-      {/* فیلترهای عمومی */}
-
-      <Section title="موجودی" defaultOpen={false}>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox"
-            checked={filters.in_stock === 'true'}
-            onChange={e => set('in_stock', e.target.checked ? 'true' : '')}
-            className="w-4 h-4 rounded border-gray-300 text-brand focus:ring-brand" />
-          <span className="text-sm text-gray-700 dark:text-gray-300">فقط موجود</span>
-        </label>
-      </Section>
     </aside>
   )
 }

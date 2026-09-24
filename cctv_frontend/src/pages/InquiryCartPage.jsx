@@ -119,19 +119,6 @@ export default function InquiryCartPage() {
                   <div className="text-xs text-cyan mt-0.5 font-mono">
                     {item.variant_sku}
                   </div>
-                  {/* موجودی — هشدار فقط اطلاع‌رسانی است و ثبت را مسدود نمی‌کند */}
-                  {item.available_stock !== undefined && item.available_stock !== null && (
-                    <div className="mt-1 flex items-center gap-2 flex-wrap">
-                      <span className="text-[10px] text-gray-steel">
-                        موجودی: {Number(item.available_stock).toLocaleString('fa-IR')}
-                      </span>
-                      {item.stock_short && (
-                        <span className="text-[10px] bg-amber-500/15 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full">
-                          ⏳ در انتظار تایید موجودی
-                        </span>
-                      )}
-                    </div>
-                  )}
                 </div>
                 <button onClick={() => handleRemove(item.variant)}
                   className="p-1.5 rounded-lg text-alert-red/50 hover:text-alert-red hover:bg-alert-red/10 transition-all">

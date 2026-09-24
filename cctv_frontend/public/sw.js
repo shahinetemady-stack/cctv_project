@@ -1,7 +1,8 @@
 // Service Worker — CCTV Parts Shop
-// Cache-first for static assets, network-first for API calls
+// Cache-first for static assets — درخواست‌های API اصلاً کش نمی‌شوند
+// (کش شدن پاسخ‌های شخصی مثل سبد خرید باعث می‌شد کاربر سبد پر را خالی ببیند)
 
-const CACHE_NAME = 'cctv-parts-v6';
+const CACHE_NAME = 'cctv-parts-v11';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -23,18 +24,36 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
+      // فقط وقتی کش نسخه قبلی وجود دارد یعنی این یک «آپدیت» است، نه اولین نصب
+      const hadOldCache = keys.some((k) => k !== CACHE_NAME);
       return Promise.all(
         keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
-      );
+      ).then(() => self.clients.claim()).then(() => hadOldCache);
+    }).then((hadOldCache) => {
+      // رفرش فقط در آپدیت واقعی — در اولین بازدید (بدون SW قبلی) رفرش یعنی
+      // لود دوباره کامل صفحه برای کاربر تازه‌وارد و خزنده‌ها
+      if (!hadOldCache) return;
+      return self.clients.matchAll({ type: 'window' })
+        .then((clients) => clients.forEach((c) => c.postMessage('SW_ACTIVATED')));
     })
   );
-  self.clients.claim();
+});
+
+// صفحه از ما خواست نسخه تازه بدون معطلی فعال شود
+self.addEventListener('message', (event) => {
+  if (event.data === 'SKIP_WAITING') self.skipWaiting();
 });
 
 // Fetch: cache-first for static, network-first for API
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
+
+  // درخواست‌های دامنه‌های دیگر (مثل لوگوی ای‌نماد) را سرویس‌ورکر اصلاً دخالت ندهد —
+  // وگرنه اگر شبکه خطا داد، respondWith با undefined رفع می‌شد و تصویر کلاً لود نمی‌شد
+  if (url.origin !== self.location.origin) {
+    return;
+  }
 
   // HTML navigations: همیشه network-first تا نسخه تازه سایت دیده شود
   if (request.mode === 'navigate') {
@@ -52,21 +71,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // API calls: network-first (فقط GETها قابل کش‌اند)
+  // API calls: فقط شبکه — پاسخ‌های API شخصی‌اند (سبد خرید، حساب کاربری، قیمت همکاری)
+  // و کش کردن/فالبک کش‌شده آن‌ها داده کهنه نشان می‌داد
   if (url.pathname.startsWith('/api/')) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (request.method === 'GET') {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, clone);
-            });
-          }
-          return response;
-        })
-        .catch(() => caches.match(request))
-    );
     return;
   }
 
@@ -100,8 +107,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // بقیه: network-first
+  // بقیه: network-first — اگر هم شبکه خطا داد و کش هم نداشت، پاسخ خطای واقعی برگردد
   event.respondWith(
-    fetch(request).catch(() => caches.match(request))
+    fetch(request).catch(() =>
+      caches.match(request).then((cached) => cached || Response.error())
+    )
   );
 });

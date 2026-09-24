@@ -70,7 +70,7 @@ export default function BalancePage() {
                     {fmt(Math.abs(c.balance_irr))} ریال
                   </td>
                   <td style={{ padding: '10px 12px' }}>
-                    {c.balance_cny !== 0 && (
+                    {c.has_fx !== false && c.balance_cny !== 0 && (
                       <span style={{
                         color: c.balance_cny > 0 ? '#FF3B3B' : '#00C896',
                         background: (c.balance_cny > 0 ? '#FF3B3B' : '#00C896') + '20',
@@ -79,7 +79,7 @@ export default function BalancePage() {
                     )}
                   </td>
                   <td style={{ padding: '10px 12px', fontWeight: 700, color: c.balance_cny > 0 ? '#FF3B3B' : '#00C896' }}>
-                    {c.balance_cny !== 0 ? `${fmt(Math.abs(c.balance_cny))} ¥` : '—'}
+                    {c.has_fx === false ? '—' : (c.balance_cny !== 0 ? `${fmt(Math.abs(c.balance_cny))} ¥` : '—')}
                   </td>
                 </tr>
               ))}

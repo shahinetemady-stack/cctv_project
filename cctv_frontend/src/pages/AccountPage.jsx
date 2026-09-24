@@ -1,6 +1,6 @@
 import { useState, Fragment } from 'react'
 import { toast } from 'sonner'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { orderService, paymentService } from '../services/orders'
 import { authService } from '../services/auth'
 import api from '../services/api'
@@ -11,6 +11,9 @@ import { Link } from 'react-router-dom'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 
 const fmt = (n) => Number(n || 0).toLocaleString('fa-IR')
+
+// تبدیل ریال به تومان با ارقام فارسی
+const fmtToman = (rial) => fmt(Math.round(Number(rial || 0) / 10)) + ' تومان'
 
 // ─── داشبورد عملکرد مشتری ────────────────────────────────────────────────────
 function DashboardTab() {
@@ -42,7 +45,55 @@ function DashboardTab() {
   return (
     <div className="space-y-6">
       {/* وضعیت همکاری */}
-      {data.is_partner && (
+      {data.is_partner && data.club && (
+        <div className="card p-5 border-r-4 border-brand space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🤝</span>
+              <div>
+                <div className="text-sm font-bold text-white">حساب همکار فعال</div>
+                {data.partner_tier_display && (
+                  <div className="text-xs text-gold mt-0.5">{data.partner_tier_display}</div>
+                )}
+              </div>
+            </div>
+            <div className="text-xs text-gray-steel">{fmt(data.club.progress || 0)}٪</div>
+          </div>
+
+          {/* نوار پیشرفت تا سطح بعد */}
+          <div className="h-2 rounded-full bg-white/10 overflow-hidden" dir="ltr">
+            <div className="h-full rounded-full bg-gradient-to-l from-brand to-gold transition-all"
+              style={{ width: `${Math.min(100, data.club.progress || 0)}%` }} />
+          </div>
+
+          <div className="space-y-1.5 text-xs">
+            <div className="flex justify-between">
+              <span className="text-gray-steel">خرید شمرده‌شده در این دوره:</span>
+              <span className="font-bold text-white">{fmtToman(data.club.total)}</span>
+            </div>
+            {data.club.next_tier ? (
+              <div className="flex justify-between">
+                <span className="text-gray-steel">مانده تا {data.club.next_tier_display}:</span>
+                <span className="font-bold text-gold">{fmtToman(data.club.remaining)}</span>
+              </div>
+            ) : (
+              <div className="text-gold font-bold">🏆 بالاترین سطح باشگاه</div>
+            )}
+            {data.club.platinum_tenure_locked && (
+              <div className="text-[11px] text-gray-steel leading-4">
+                ⏳ ارتقای پلاتینیوم پس از ۶ ماه همکاری فعال می‌شود.
+              </div>
+            )}
+          </div>
+
+          <Link to="/club" className="text-[11px] text-gray-steel hover:text-brand transition-colors">
+            مشاهده قوانین باشگاه ←
+          </Link>
+        </div>
+      )}
+
+      {/* fallback: همکار بدون داده باشگاه */}
+      {data.is_partner && !data.club && (
         <div className="card p-4 flex items-center gap-3 border-r-4 border-brand">
           <span className="text-2xl">🤝</span>
           <div>
@@ -356,26 +407,38 @@ function OrdersTab() {
 }
 
 // ─── پروفایل ──────────────────────────────────────────────────────────────────
+const PROFILE_FIELD_LABELS = {
+  first_name: 'نام',
+  last_name: 'نام خانوادگی',
+  company_name: 'نام شرکت',
+  national_id: 'کد ملی',
+  address: 'آدرس',
+}
+
 function ProfileTab() {
-  const { user, updateUser } = useAuthStore()
-  const [form, setForm] = useState({
-    first_name: user?.first_name || '',
-    last_name:  user?.last_name  || '',
-    phone:      user?.phone      || '',
-  })
+  const { user } = useAuthStore()
+  const queryClient = useQueryClient()
   const [pwForm, setPwForm] = useState({ old_password: '', new_password: '', new_password2: '' })
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
+  const [showPhoneModal, setShowPhoneModal] = useState(false)
+  const [phoneForm, setPhoneForm] = useState({ new_phone: '', reason: '' })
+  const [submittingPhone, setSubmittingPhone] = useState(false)
+  const [showProfileModal, setShowProfileModal] = useState(false)
+  const [profForm, setProfForm] = useState({ field: 'first_name', new_value: '', reason: '' })
+  const [submittingProf, setSubmittingProf] = useState(false)
 
-  const handleProfile = async (e) => {
-    e.preventDefault()
-    setSaving(true)
-    try {
-      const data = await authService.updateMe(form)
-      updateUser(data)
-      setMsg('پروفایل با موفقیت بروزرسانی شد ✓')
-    } catch { setMsg('خطا در ذخیره') } finally { setSaving(false) }
-  }
+  const { data: phoneChangeData } = useQuery({
+    queryKey: ['phone-change-request'],
+    queryFn: () => api.get('/users/me/phone-change-request/').then(r => r.data),
+  })
+  const phoneRequest = phoneChangeData?.request
+
+  const { data: profReqData } = useQuery({
+    queryKey: ['profile-change-requests'],
+    queryFn: () => api.get('/users/me/profile-change-request/').then(r => r.data),
+  })
+  const profRequests = profReqData?.requests || []
 
   const handlePw = async (e) => {
     e.preventDefault()
@@ -388,6 +451,40 @@ function ProfileTab() {
     } catch { setMsg('رمز فعلی اشتباه است') } finally { setSaving(false) }
   }
 
+  const handlePhoneChange = async (e) => {
+    e.preventDefault()
+    setSubmittingPhone(true)
+    try {
+      await api.post('/users/me/phone-change-request/', phoneForm)
+      toast.success('درخواست ثبت شد و پس از تأیید مدیر اعمال می‌شود')
+      queryClient.invalidateQueries({ queryKey: ['phone-change-request'] })
+      setShowPhoneModal(false)
+      setPhoneForm({ new_phone: '', reason: '' })
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'خطا در ثبت درخواست')
+    } finally { setSubmittingPhone(false) }
+  }
+
+  const handleProfileChange = async (e) => {
+    e.preventDefault()
+    setSubmittingProf(true)
+    try {
+      await api.post('/users/me/profile-change-request/', profForm)
+      toast.success('درخواست ثبت شد و پس از تأیید مدیر اعمال می‌شود')
+      queryClient.invalidateQueries({ queryKey: ['profile-change-requests'] })
+      setShowProfileModal(false)
+      setProfForm({ field: 'first_name', new_value: '', reason: '' })
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'خطا در ثبت درخواست')
+    } finally { setSubmittingProf(false) }
+  }
+
+  const profileValue = (f) => {
+    if (f === 'first_name') return user?.first_name
+    if (f === 'last_name') return user?.last_name
+    return user?.profile?.[f]
+  }
+
   return (
     <div className="space-y-6">
       {msg && (
@@ -396,7 +493,13 @@ function ProfileTab() {
         </div>
       )}
 
-      <form onSubmit={handleProfile} className="card p-5 space-y-4">
+      {user?.parent_account && (
+        <div className="bg-brand/10 border border-brand/20 rounded-xl p-3 text-sm text-brand">
+          🔗 این حساب، شریک حساب «{user.parent_account.name}» است — سفارش‌ها و کارت‌ها روی حساب اصلی ثبت و دیده می‌شوند
+        </div>
+      )}
+
+      <div className="card p-5 space-y-4">
         <h3 className="font-semibold text-sm">اطلاعات شخصی</h3>
         <div className="text-sm text-gray-steel bg-brand/5 px-3 py-2 rounded-lg font-mono">
           {user?.email}
@@ -404,24 +507,80 @@ function ProfileTab() {
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">نام</label>
-            <input value={form.first_name} onChange={e => setForm(f => ({ ...f, first_name: e.target.value }))}
-              className="input" />
+            <input value={user?.first_name || ''} readOnly className="input opacity-60 cursor-not-allowed" />
           </div>
           <div>
             <label className="label">نام خانوادگی</label>
-            <input value={form.last_name} onChange={e => setForm(f => ({ ...f, last_name: e.target.value }))}
-              className="input" />
+            <input value={user?.last_name || ''} readOnly className="input opacity-60 cursor-not-allowed" />
           </div>
         </div>
+        {user?.is_partner && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">نام شرکت</label>
+                <input value={user?.profile?.company_name || ''} readOnly className="input opacity-60 cursor-not-allowed" />
+              </div>
+              <div>
+                <label className="label">کد ملی</label>
+                <input value={user?.profile?.national_id || ''} readOnly className="input opacity-60 cursor-not-allowed" dir="ltr" />
+              </div>
+            </div>
+            <div>
+              <label className="label">آدرس</label>
+              <input value={user?.profile?.address || ''} readOnly className="input opacity-60 cursor-not-allowed" />
+            </div>
+          </>
+        )}
         <div>
           <label className="label">موبایل</label>
-          <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-            className="input" dir="ltr" placeholder="09..." />
+          <input value={user?.phone || ''} readOnly
+            className="input opacity-60 cursor-not-allowed" dir="ltr" placeholder="09..." />
+          {phoneRequest && (
+            <div className="mt-2 text-xs">
+              {phoneRequest.status === 'pending' && (
+                <span className="badge badge-gold">⏳ درخواست تغییر به {phoneRequest.new_phone} در انتظار تأیید</span>
+              )}
+              {phoneRequest.status === 'approved' && (
+                <span className="text-alert-green">✅ تأیید شد</span>
+              )}
+              {phoneRequest.status === 'rejected' && (
+                <span className="text-alert-red">❌ رد شد</span>
+              )}
+            </div>
+          )}
         </div>
-        <button type="submit" disabled={saving} className="btn-primary">
-          {saving ? '...' : 'ذخیره'}
-        </button>
-      </form>
+        <div className="text-[11px] text-gray-steel">
+          مشخصات هویتی (نام، موبایل، شرکت و…) قابل ویرایش مستقیم نیست — برای تغییر، درخواست بدهید تا پس از تأیید مدیریت اعمال شود.
+        </div>
+        {profRequests.length > 0 && (
+          <div className="space-y-1">
+            {profRequests.map(r => (
+              <div key={r.id} className="text-xs">
+                {r.status === 'pending' && (
+                  <span className="badge badge-gold">⏳ تغییر {r.field_display} به «{r.new_value}» در انتظار تأیید</span>
+                )}
+                {r.status === 'approved' && (
+                  <span className="text-alert-green">✅ تغییر {r.field_display} تأیید شد</span>
+                )}
+                {r.status === 'rejected' && (
+                  <span className="text-alert-red">❌ تغییر {r.field_display} رد شد</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setShowProfileModal(true)}
+            className="btn-secondary text-xs px-3 py-1.5">
+            ✏️ درخواست تغییر مشخصات
+          </button>
+          <button type="button" onClick={() => setShowPhoneModal(true)}
+            className="btn-secondary text-xs px-3 py-1.5">
+            📱 درخواست تغییر موبایل
+          </button>
+        </div>
+      </div>
 
       <form onSubmit={handlePw} className="card p-5 space-y-4">
         <h3 className="font-semibold text-sm">تغییر رمز عبور</h3>
@@ -437,6 +596,85 @@ function ProfileTab() {
           {saving ? '...' : 'تغییر رمز'}
         </button>
       </form>
+
+      {/* مودال درخواست تغییر موبایل */}
+      {showPhoneModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setShowPhoneModal(false)}>
+          <div className="card p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-bold text-white text-sm">📱 درخواست تغییر موبایل</h2>
+              <button onClick={() => setShowPhoneModal(false)}
+                className="text-gray-steel hover:text-white text-lg leading-none">✕</button>
+            </div>
+            <form onSubmit={handlePhoneChange} className="space-y-4">
+              <div>
+                <label className="label">موبایل جدید</label>
+                <input value={phoneForm.new_phone}
+                  onChange={e => setPhoneForm(f => ({ ...f, new_phone: e.target.value }))}
+                  className="input" dir="ltr" placeholder="0912..." required />
+              </div>
+              <div>
+                <label className="label">دلیل تغییر</label>
+                <textarea value={phoneForm.reason}
+                  onChange={e => setPhoneForm(f => ({ ...f, reason: e.target.value }))}
+                  className="input" rows={3} required />
+              </div>
+              <button type="submit" disabled={submittingPhone}
+                className="btn-primary w-full disabled:opacity-50">
+                {submittingPhone ? '...' : 'ثبت درخواست'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* مودال درخواست تغییر مشخصات */}
+      {showProfileModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setShowProfileModal(false)}>
+          <div className="card p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-bold text-white text-sm">✏️ درخواست تغییر مشخصات</h2>
+              <button onClick={() => setShowProfileModal(false)}
+                className="text-gray-steel hover:text-white text-lg leading-none">✕</button>
+            </div>
+            <form onSubmit={handleProfileChange} className="space-y-4">
+              <div>
+                <label className="label">کدام مورد را می‌خواهید تغییر دهید؟</label>
+                <select value={profForm.field}
+                  onChange={e => setProfForm(f => ({ ...f, field: e.target.value, new_value: '' }))}
+                  className="input">
+                  {Object.entries(PROFILE_FIELD_LABELS).map(([k, label]) => (
+                    <option key={k} value={k}>{label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">مقدار فعلی</label>
+                <input value={profileValue(profForm.field) || '—'} readOnly
+                  className="input opacity-60 cursor-not-allowed" />
+              </div>
+              <div>
+                <label className="label">مقدار جدید</label>
+                <input value={profForm.new_value}
+                  onChange={e => setProfForm(f => ({ ...f, new_value: e.target.value }))}
+                  className="input" required />
+              </div>
+              <div>
+                <label className="label">دلیل تغییر</label>
+                <textarea value={profForm.reason}
+                  onChange={e => setProfForm(f => ({ ...f, reason: e.target.value }))}
+                  className="input" rows={3} required />
+              </div>
+              <button type="submit" disabled={submittingProf}
+                className="btn-primary w-full disabled:opacity-50">
+                {submittingProf ? '...' : 'ثبت درخواست'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

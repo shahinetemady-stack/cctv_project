@@ -38,7 +38,7 @@ def get_api_key():
 
 
 def get_template_id(kind="otp"):
-    """kind: otp | order_status | payment_reminder | tier_change | partner_approved | invoice_confirmed"""
+    """kind: otp | order_status | payment_reminder | tier_change | near_tier | partner_approved | partner_request | invoice_confirmed"""
     value = (getattr(get_sms_settings(), f"{kind}_template_id", "") or "").strip()
     if not value and kind == "otp":
         value = config("SMS_IR_TEMPLATE_ID", default="")

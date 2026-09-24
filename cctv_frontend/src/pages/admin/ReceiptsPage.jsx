@@ -278,7 +278,7 @@ export default function ReceiptsPage() {
                     <td style={{ padding: '10px 12px', fontSize: 11, whiteSpace: 'nowrap' }}>{formatDate(r.paid_at)}</td>
                     <td style={{ padding: '10px 12px', fontSize: 11 }} dir="ltr">{r.tracking_code || '—'}</td>
                     <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                      <UserStamp createdBy={r.uploaded_by_name} />
+                      <UserStamp createdBy={r.uploaded_by_name} createdAt={r.created_at} />
                     </td>
                     <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
                       <span style={{ color: st.color, background: st.color + '20', padding: '2px 8px', borderRadius: 20, fontSize: 11 }}>

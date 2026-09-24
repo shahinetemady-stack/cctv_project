@@ -1,4 +1,3 @@
-import { motion } from 'framer-motion'
 import { Sun, Moon } from 'lucide-react'
 import useThemeStore from '../../../store/useThemeStore'
 
@@ -7,23 +6,16 @@ export default function ThemeToggle({ className = '' }) {
   const { theme, toggle } = useThemeStore()
   const isDark = theme === 'dark'
   return (
-    <motion.button
+    <button
       onClick={toggle}
-      className={className}
+      className={`${className} transition-transform active:scale-[0.85] active:rotate-[25deg]`}
       aria-label={isDark ? 'حالت روشن' : 'حالت تاریک'}
       title={isDark ? 'حالت روشن' : 'حالت تاریک'}
-      whileTap={{ scale: 0.85, rotate: 25 }}
-      transition={{ type: 'spring', stiffness: 500, damping: 22 }}
     >
-      <motion.span
-        key={theme}
-        initial={{ rotate: -60, opacity: 0, scale: 0.6 }}
-        animate={{ rotate: 0, opacity: 1, scale: 1 }}
-        transition={{ type: 'spring', stiffness: 350, damping: 20 }}
-        style={{ display: 'flex' }}
-      >
+      {/* key بر اساس تم: با تعویض تم، آیکون دوباره مانت و انیمیشن ورود CSS اجرا می‌شود */}
+      <span key={theme} className="animate-theme-icon" style={{ display: 'flex' }}>
         {isDark ? <Sun size={19} /> : <Moon size={19} />}
-      </motion.span>
-    </motion.button>
+      </span>
+    </button>
   )
 }

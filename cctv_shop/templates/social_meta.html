@@ -21,6 +21,15 @@
   <meta name="twitter:title" content="{{ title }}">
   {% if description %}<meta name="twitter:description" content="{{ description }}">{% endif %}
   {% if image_url %}<meta name="twitter:image" content="{{ image_url }}">{% endif %}
+
+  <!-- متا تگ‌های ترب (torob.com) — خزنده‌اش JS اجرا نمی‌کند -->
+  {% if torob_name %}
+  <meta name="product_id" content="{{ obj.pk }}">
+  <meta name="product_name" content="{{ torob_name }}">
+  {% if torob_price is not None %}<meta name="product_price" content="{{ torob_price }}">{% endif %}
+  {% if torob_old_price is not None %}<meta name="product_old_price" content="{{ torob_old_price }}">{% endif %}
+  {% if torob_availability %}<meta name="availability" content="{{ torob_availability }}">{% endif %}
+  {% endif %}
 </head>
 <body>
   <h1>{{ title }}</h1>

@@ -732,7 +732,7 @@ function AccountSmsPicker({ customerName, phone, pending, onSend, onClose }) {
 // ─── InvoiceDetail ────────────────────────────────────────────
 function InvoiceDetail({ id, onClose, isAdmin, onEdit }) {
   const qc = useQueryClient()
-  const { can } = usePermissions()
+  const { can, isSuperuser } = usePermissions()
   const [showPrint, setShowPrint] = useState(false)
   const { data: inv, isLoading } = useQuery({
     queryKey: ['sale-invoice', id],
@@ -748,7 +748,17 @@ function InvoiceDetail({ id, onClose, isAdmin, onEdit }) {
 
   const payMut = useMutation({
     mutationFn: d => api.post('/accounting/sale-payments/', d).then(r => r.data),
-    onSuccess: () => { qc.invalidateQueries(['sale-invoice', id]); qc.invalidateQueries(['sale-invoices']); setPayForm(f => ({ ...f, show: false })); setMsg({ type: 'success', text: 'پرداخت ثبت شد' }); setTimeout(() => setMsg(null), 2000) },
+    onSuccess: (r) => {
+      qc.invalidateQueries(['sale-invoice', id]); qc.invalidateQueries(['sale-invoices'])
+      setPayForm(f => ({ ...f, show: false }))
+      // خلاصه تخصیص خودکار FIFO — پول ممکن است به فاکتورهای قدیمی‌تر هم رفته باشد
+      const parts = (r.allocated || []).map(a => `${Number(a.amount).toLocaleString('fa-IR')} ← فاکتور ${a.invoice_number}`)
+      let text = 'پرداخت ثبت شد'
+      if (parts.length) text += ' — تخصیص: ' + parts.join('، ')
+      if (r.leftover > 0) text += ` — مازاد ${Number(r.leftover).toLocaleString('fa-IR')} ریال به بستانکاری مشتری رفت`
+      setMsg({ type: 'success', text })
+      setTimeout(() => setMsg(null), 6000)
+    },
     onError: e => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا' }),
   })
   const delPayMut = useMutation({
@@ -830,6 +840,7 @@ function InvoiceDetail({ id, onClose, isAdmin, onEdit }) {
               {inv.updated_by && <> | ✏️ ویرایش شده توسط {inv.updated_by} در {formatDate(inv.updated_at, { withTime: true })}</>}
             </div>
             <div className="text-sm text-white mt-1">{inv.customer_name} | {inv.customer_phone}</div>
+            {inv.seller_name && <div className="text-xs text-gray-steel mt-0.5">🧑‍💼 فروشنده: <b className="text-white">{inv.seller_name}</b></div>}
             {inv.order_number && <div className="text-xs text-blue-400 mt-0.5">سفارش: {inv.order_number}</div>}
           </div>
           <div className="flex items-center gap-3">
@@ -879,10 +890,12 @@ function InvoiceDetail({ id, onClose, isAdmin, onEdit }) {
             </div>
           ))}
         </div>
-        <div className="mt-3 flex gap-4 text-xs">
-          <span className="text-gray-steel">بهای تمام شده: <span className="text-white">{fmt(inv.total_cost)} ریال</span></span>
-          <span className="text-gray-steel">سود: <span className={inv.gross_profit >= 0 ? 'text-green-400' : 'text-red-400'}>{fmt(inv.gross_profit)} ریال</span></span>
-        </div>
+        {isSuperuser && (
+          <div className="mt-3 flex gap-4 text-xs">
+            <span className="text-gray-steel">بهای تمام شده: <span className="text-white">{fmt(inv.total_cost)} ریال</span></span>
+            <span className="text-gray-steel">سود: <span className={inv.gross_profit >= 0 ? 'text-green-400' : 'text-red-400'}>{fmt(inv.gross_profit)} ریال</span></span>
+          </div>
+        )}
         {can('sale_edit') && (
           <div className="flex gap-2 mt-4">
             {['draft','confirmed','paid','cancelled'].map(s => (
@@ -902,7 +915,7 @@ function InvoiceDetail({ id, onClose, isAdmin, onEdit }) {
           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
             <thead>
               <tr style={{ borderBottom:'0.5px solid rgba(255,255,255,0.1)' }}>
-                {['کالا','SKU','تعداد','قیمت واحد','تخفیف%','جمع','بهای تمام شده','سود'].map(h => (
+                {['کالا','SKU','تعداد','قیمت واحد','تخفیف%','جمع',...(isSuperuser ? ['بهای تمام شده','سود'] : [])].map(h => (
                   <th key={h} style={{ padding:'6px 10px', textAlign:'right', color:'var(--color-text-secondary)', fontWeight:500, whiteSpace:'nowrap' }}>{h}</th>
                 ))}
               </tr>
@@ -916,8 +929,8 @@ function InvoiceDetail({ id, onClose, isAdmin, onEdit }) {
                   <td style={{ padding:'8px 10px' }}>{fmt(item.unit_price)}</td>
                   <td style={{ padding:'8px 10px', textAlign:'center', color:'#FF9500' }}>{item.discount_percent > 0 ? item.discount_percent + '%' : '—'}</td>
                   <td style={{ padding:'8px 10px', fontWeight:600, color:'#0066FF' }}>{fmt(item.subtotal)}</td>
-                  <td style={{ padding:'8px 10px', color:'var(--color-text-secondary)' }}>{fmt(item.total_cost)}</td>
-                  <td style={{ padding:'8px 10px', fontWeight:600, color:item.profit>=0?'#00C896':'#FF3B3B' }}>{fmt(item.profit)}</td>
+                  {isSuperuser && <td style={{ padding:'8px 10px', color:'var(--color-text-secondary)' }}>{fmt(item.total_cost)}</td>}
+                  {isSuperuser && <td style={{ padding:'8px 10px', fontWeight:600, color:item.profit>=0?'#00C896':'#FF3B3B' }}>{fmt(item.profit)}</td>}
                 </tr>
               ))}
             </tbody>
@@ -1017,6 +1030,9 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
   const [pendingContact, setPendingContact] = useState(null)  // طرف حساب بدون موبایل معتبر — فرم تکمیلی
   const [pendingPhone, setPendingPhone] = useState('')
   const { data: customers = [] } = useQuery({ queryKey:['customer-search',customerSearch], queryFn:()=>api.get('/accounting/customer-search/',{params:{q:customerSearch}}).then(r=>r.data), enabled:!editing&&customerSearch.length>=2 })
+  // فروشنده — از پرسنل فعال؛ seller_id همان user_id پرسنل است که بک‌اند روی فاکتور می‌نشاند
+  const { data: staffList = [] } = useQuery({ queryKey:['seller-staff'], queryFn:()=>api.get('/accounting/staff/').then(r=>r.data) })
+  const [sellerId, setSellerId] = useState('')
   const [items, setItems] = useState(prefillOrder?.items?.map(i=>({variant_id:String(i.variant_id),quantity:String(i.quantity),unit_price:String(i.unit_price),discount_percent:'0'}))||[{variant_id:'',quantity:'',unit_price:'',discount_percent:'0'}])
   const [hdr, setHdr] = useState({discount_amount:'0',shipping_cost:'0',tax_amount:'0',note:'',status:'confirmed',order_id:prefillOrder?.id||'',source:prefillOrder?'order':'manual'})
   const [initialized, setInitialized] = useState(false)
@@ -1025,7 +1041,6 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
   const [settlement, setSettlement] = useState('cash')
   const [dueDate, setDueDate] = useState('')
   const [issueDate, setIssueDate] = useState('')  // تاریخ صدور فاکتور — خالی یعنی امروز
-  const [dueDays, setDueDays] = useState('')
 
   // نرخ یوان مرجع روز — تبدیل قیمت فروش خارجی به یوان
   const { data: rateData } = useQuery({
@@ -1035,15 +1050,13 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
   })
   const dayRate = Number(rateData?.rate_cny_to_irt || 0)
 
-  // موعد تسویه با «چند روز» — تاریخ = تاریخ صدور فاکتور + N روز (بدون تاریخ صدور = امروز)
+  // موعد تسویه تو حسابی — ثابت ۱۴ روز از تاریخ صدور، بدون سؤال از کاربر
   useEffect(() => {
-    const n = Number(dueDays)
-    if (n > 0) {
-      const d = issueDate ? new Date(issueDate + 'T00:00:00') : new Date()
-      d.setDate(d.getDate() + n)
-      setDueDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
-    }
-  }, [dueDays, issueDate])
+    if (settlement !== 'credit') return
+    const d = issueDate ? new Date(issueDate + 'T00:00:00') : new Date()
+    d.setDate(d.getDate() + 14)
+    setDueDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
+  }, [settlement, issueDate])
 
   // سطح مشتری و کلید ستون قیمت — قیمت کالا بر اساس همین انتخاب می‌شود
   const tier = customer?.tier || 'public'
@@ -1053,14 +1066,10 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
     : 'retail'
 
   // با انتخاب مشتری، نحوه تسویه پیش‌فرض بر اساس سطحش (فروش خارجی همیشه انتخابی است)
+  // سیلور و گلد تسویه‌شان نقدی است — ستون یکماهه/توحسابی فقط مبنای «قیمت» آن‌هاست، نه نوع تسویه
   useEffect(() => {
     if (!customer) return
-    setSettlement(
-      tier === 'silver' ? 'month1'
-      : tier === 'gold' ? 'credit'
-      : tier === 'platinum' ? 'credit'
-      : 'cash'
-    )
+    setSettlement(tier === 'platinum' ? 'credit' : 'cash')
   }, [customer?.id])
 
   // قیمت فرمول واریانت‌ها برای همین مشتری
@@ -1082,6 +1091,7 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
     setInitialized(true)
     setCustHdr({ customer_name: editInv.customer_name || '', customer_phone: editInv.customer_phone || '' })
     setIssueDate(editInv.issue_date || '')
+    setSellerId(editInv.seller_id ? String(editInv.seller_id) : '')
     setItems(editInv.items?.length ? editInv.items.map(i => ({
       variant_id: String(i.variant_id),
       quantity: String(i.quantity),
@@ -1118,6 +1128,7 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
       const payload = {
         customer_name: custHdr.customer_name,
         customer_phone: custHdr.customer_phone,
+        seller_id: sellerId ? Number(sellerId) : null,
         discount_amount: Number(hdr.discount_amount||0),
         shipping_cost: Number(hdr.shipping_cost||0),
         tax_amount: Number(hdr.tax_amount||0),
@@ -1139,6 +1150,7 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
     if(filled.some(it=>!it.variant_id||!it.quantity||!it.unit_price))return setMsg({type:'error',text:'اطلاعات اقلام را کامل کنید'})
     createMut.mutate({customer_id:customer.id,customer_name:customer.name,customer_phone:customer.phone||'',...hdr,
       sale_type:'domestic',currency:'IRR',settlement,due_date:dueDate||null,issue_date:issueDate||null,
+      seller_id: sellerId ? Number(sellerId) : null,
       items:filled.map(it=>({...it,quantity:Number(it.quantity),unit_price:Number(it.unit_price),discount_percent:Number(it.discount_percent)}))})
   }
   if (editing && editLoading) return <div className="text-center py-8 text-gray-steel">در حال بارگذاری...</div>
@@ -1199,7 +1211,7 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
             {customer && (
               <button type="button" title="پاک کردن انتخاب"
                 onClick={()=>{
-                  setCustomer(null); setCustomerSearch(''); setDueDate(''); setDueDays('')
+                  setCustomer(null); setCustomerSearch(''); setDueDate('')
                   setTimeout(() => document.querySelector('input[data-flow="si"]')?.focus(), 0)
                 }}
                 className="absolute left-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-red-500/20 text-red-400 hover:bg-red-500/40 text-xs flex items-center justify-center">
@@ -1267,7 +1279,7 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
             <div className="flex items-center gap-2 mt-1">
               <div className="text-xs text-green-400">✓ {customer.name} | {customer.phone} — <b>{TIER_LABELS[tier]}</b></div>
               <button type="button"
-                onClick={()=>{ setCustomer(null); setCustomerSearch(''); setDueDate(''); setDueDays('') }}
+                onClick={()=>{ setCustomer(null); setCustomerSearch(''); setDueDate('') }}
                 className="text-[10px] text-gray-steel hover:text-red-400 transition-colors">
                 ✕ تغییر مشتری
               </button>
@@ -1275,6 +1287,26 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
           )}
         </div>
         )}
+
+        {/* فروشنده — پرسنل فعال از همان اندپوینت پرسنل؛ پیش‌فرض «بدون فروشنده» */}
+        <div className="mt-4 pt-4 border-t border-white/10 max-w-sm">
+          <label className="label text-xs mb-1 block">🧑‍💼 فروشنده</label>
+          <SearchSelect
+            value={sellerId}
+            onChange={setSellerId}
+            placeholder="بدون فروشنده"
+            options={[
+              { value: '', label: 'بدون فروشنده' },
+              ...staffList.map(s => ({ value: s.user_id, label: s.name, sub: s.phone })),
+            ]}
+          />
+          {sellerId && (
+            <button type="button" onClick={() => setSellerId('')}
+              className="text-[10px] text-gray-steel hover:text-red-400 transition-colors mt-1">
+              ✕ حذف فروشنده
+            </button>
+          )}
+        </div>
 
         {/* نحوه تسویه — فقط پلاتینیوم انتخاب می‌کند؛ برای بقیه سطوح خودکار تعیین می‌شود
             و نمایش داده نمی‌شود (ستون قیمتِ سطح مشتری لو نمی‌رود). موعد تسویه فقط برای credit لازم است. */}
@@ -1293,33 +1325,13 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
                 </div>
               </>
             )}
-            {/* موعد تسویه — فقط تو حسابی */}
+            {/* موعد تسویه تو حسابی — ثابت ۱۴ روزه، بدون انتخاب دستی */}
             {settlement==='credit' && (
-              <div className="mt-3 max-w-md">
-                <div className="grid grid-cols-2 gap-3 items-end mb-3">
-                  <div>
-                    <label className="label text-xs mb-1 block">تسویه چند روزه؟</label>
-                    <AmountInput value={dueDays} onChange={e=>setDueDays(e.target.value)} className="input text-sm" placeholder="مثلاً ۳۰"
-                      id="due-days-input"
-                      data-flow="si"
-                      onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();advanceFlow('si',e.target)}}} />
-                  </div>
-                  {dueDate && (
-                    <div className="text-xs pb-2">
-                      📅 موعد: <b className="text-white">{jalaliText(dueDate)}</b>
-                      {jalaliHolidayInfo(dueDate) && (
-                        <div className="text-red-400 font-bold mt-0.5">⚠️ این روز {jalaliHolidayInfo(dueDate)} است!</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-                <label className="label text-xs mb-1 block">📅 یا انتخاب مستقیم از تقویم:</label>
-                <JalaliDateInput value={dueDate} onChange={(iso) => {
-                  setDueDate(iso)
-                  // بعد از انتخاب تاریخ ← پرش به باکس کالا
-                  if (iso) advanceFlow('si', document.getElementById('due-days-input')
-                    || document.querySelector('input[data-flow="si"]'))
-                }} />
+              <div className="mt-3 text-xs text-gray-steel">
+                📅 موعد تسویه: <b className="text-white">۱۴ روز بعد{dueDate ? ` (${jalaliText(dueDate)})` : ''}</b> — خودکار
+                {dueDate && jalaliHolidayInfo(dueDate) && (
+                  <span className="text-red-400 font-bold mr-1">⚠️ این روز {jalaliHolidayInfo(dueDate)} است!</span>
+                )}
               </div>
             )}
           </div>
@@ -1476,13 +1488,34 @@ export default function SaleInvoicePage() {
   // فیلتر سررسید تسویه — لینک از بج منو با ?due=1
   const [searchParams] = useSearchParams()
   const [dueOnly, setDueOnly] = useState(searchParams.get('due') === '1')
+  // پیش‌فرض فقط فاکتورهای باز — تسویه‌شده‌ها لیست را شلوغ نکنند
+  const [statusFilter, setStatusFilter] = useState('open')
+  // فیلتر بازه زمانی (روی تاریخ صدور) + جستجوی مشتری/شماره فاکتور
+  const [invQ, setInvQ] = useState('')
+  const [invQd, setInvQd] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  useEffect(() => { const t = setTimeout(() => setInvQd(invQ.trim()), 400); return () => clearTimeout(t) }, [invQ])
   const { data: badges } = useQuery({ queryKey:['admin-badges'], queryFn:()=>api.get('/users/admin-badges/').then(r=>r.data), staleTime:15000, refetchInterval:30000 })
 
-  const { data: invoices=[], isLoading } = useQuery({
-    queryKey:['sale-invoices', dueOnly],
-    queryFn:()=>api.get('/accounting/sale-invoices/', { params: dueOnly ? { due: '1' } : {} }).then(r=>r.data),
+  // صفحه‌بندی واقعی سمت سرور — با رشد تعداد فاکتورها لیست سنگین نمی‌شود
+  const PAGE_SIZE = 50
+  const [page, setPage] = useState(1)
+  useEffect(() => setPage(1), [dueOnly, statusFilter, invQd, dateFrom, dateTo])
+  const { data: invData, isLoading } = useQuery({
+    queryKey:['sale-invoices', dueOnly, statusFilter, invQd, dateFrom, dateTo, page],
+    queryFn:()=>{
+      const params = { ...(dueOnly ? { due:'1' } : { status: statusFilter }), page, page_size: PAGE_SIZE }
+      if (invQd) params.q = invQd
+      if (dateFrom) params.date_from = dateFrom
+      if (dateTo) params.date_to = dateTo
+      return api.get('/accounting/sale-invoices/', { params }).then(r=>r.data)
+    },
     enabled:view==='list',
   })
+  const invoices = invData?.results || []
+  const invTotal = invData?.count || 0
+  const pageCount = Math.max(1, Math.ceil(invTotal / PAGE_SIZE))
   const { data: pendingOrders=[] } = useQuery({ queryKey:['pending-orders'], queryFn:()=>api.get('/accounting/pending-orders/').then(r=>r.data), enabled:view==='list' })
 
   return (
@@ -1507,17 +1540,38 @@ export default function SaleInvoicePage() {
             </button>
           )}
           <div className="flex gap-2 mb-4 border-b border-white/10">
-            {[['invoices',`فاکتورها (${invoices.length})`],['pending',`سفارشات در انتظار (${pendingOrders.filter(o=>!o.has_invoice).length})`]].map(([k,v])=>(
+            {[['invoices',`فاکتورها (${invTotal.toLocaleString('fa-IR')})`],['pending',`سفارشات در انتظار (${pendingOrders.filter(o=>!o.has_invoice).length})`]].map(([k,v])=>(
               <button key={k} onClick={()=>setTab(k)} className={`text-sm px-5 py-2.5 rounded-t-lg border-b-2 transition-all ${tab===k?'border-brand text-white bg-brand/10':'border-transparent text-gray-steel hover:text-white'}`}>{v}</button>
             ))}
           </div>
           {tab==='invoices'&&(
             <div className="card p-5">
+              {!dueOnly&&(
+                <div className="flex gap-1 mb-4 bg-white/5 rounded-lg p-1 w-fit">
+                  {[['open','باز'],['paid','تسویه‌شده'],['all','همه']].map(([k,v])=>(
+                    <button key={k} onClick={()=>setStatusFilter(k)}
+                      className={`text-xs px-4 py-1.5 rounded-md transition-all ${statusFilter===k?'bg-brand text-white':'text-gray-steel hover:text-white'}`}>{v}</button>
+                  ))}
+                </div>
+              )}
+              {/* فیلتر مشتری و بازه زمانی صدور — هر کدام خالی بماند اعمال نمی‌شود؛ برای یک روز خاص هر دو تاریخ را همان روز بگذارید */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
+                <input value={invQ} onChange={e=>setInvQ(e.target.value)} className="input text-xs"
+                  placeholder="جستجو: نام/موبایل مشتری یا شماره فاکتور..." />
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-gray-steel whitespace-nowrap">از</span>
+                  <JalaliDateInput value={dateFrom} onChange={setDateFrom} className="input text-xs" />
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-gray-steel whitespace-nowrap">تا</span>
+                  <JalaliDateInput value={dateTo} onChange={setDateTo} className="input text-xs" />
+                </div>
+              </div>
               {isLoading?<div className="text-center py-8 text-gray-steel">در حال بارگذاری...</div>:invoices.length===0?(
-                <div className="text-center py-12"><div className="text-4xl mb-3">🧾</div><div className="text-gray-steel text-sm mb-4">هنوز فاکتوری صادر نشده</div>{can('sale_create')&&<button onClick={()=>setView('new')} className="btn-primary text-sm px-6 py-2">+ صدور اولین فاکتور</button>}</div>
+                <div className="text-center py-12"><div className="text-4xl mb-3">🧾</div><div className="text-gray-steel text-sm mb-4">{statusFilter==='open'?'فاکتور بازی نیست':statusFilter==='paid'?'فاکتور تسویه‌شده‌ای نیست':'هنوز فاکتوری صادر نشده'}</div>{statusFilter==='open'&&can('sale_create')&&<button onClick={()=>setView('new')} className="btn-primary text-sm px-6 py-2">+ صدور فاکتور</button>}</div>
               ):(
                 <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
-                  <thead><tr style={{borderBottom:'0.5px solid rgba(255,255,255,0.1)'}}>{['شماره فاکتور','مشتری','تاریخ','وضعیت','مبلغ نهایی','پرداخت شده','مانده','سود','ثبت‌کننده',''].map(h=><th key={h} style={{padding:'8px 12px',textAlign:'right',color:'var(--color-text-secondary)',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>)}</tr></thead>
+                  <thead><tr style={{borderBottom:'0.5px solid rgba(255,255,255,0.1)'}}>{['شماره فاکتور','مشتری','تاریخ','وضعیت','مبلغ نهایی','پرداخت شده','مانده','تسویه','ثبت‌کننده',''].map(h=><th key={h} style={{padding:'8px 12px',textAlign:'right',color:'var(--color-text-secondary)',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>)}</tr></thead>
                   <tbody>
                     {invoices.map((inv,i)=>(
                       <tr key={inv.id} style={{borderBottom:'0.5px solid rgba(255,255,255,0.05)',background:i%2?'rgba(255,255,255,0.02)':'transparent'}}>
@@ -1528,7 +1582,7 @@ export default function SaleInvoicePage() {
                         <td style={{padding:'10px 12px',fontWeight:600}}>{fmt(inv.total_amount)} ریال</td>
                         <td style={{padding:'10px 12px',color:'#00C896'}}>{fmt(inv.paid_amount)} ریال</td>
                         <td style={{padding:'10px 12px',color:inv.remaining_amount>0?'#FF3B3B':'#00C896',fontWeight:inv.remaining_amount>0?700:400}}>{inv.remaining_amount>0?fmt(inv.remaining_amount)+' ریال':'✓ تسویه'}</td>
-                        <td style={{padding:'10px 12px',color:inv.gross_profit>=0?'#00C896':'#FF3B3B'}}>{fmt(inv.gross_profit)} ریال</td>
+                        <td style={{padding:'10px 12px',whiteSpace:'nowrap',color:'var(--color-text-secondary)',fontSize:12}}>{inv.settlement_display}</td>
                         <td style={{padding:'10px 12px',whiteSpace:'nowrap'}}>
                           <UserStamp createdBy={inv.created_by} updatedBy={inv.updated_by} createdAt={inv.created_at} updatedAt={inv.updated_at} />
                         </td>
@@ -1537,6 +1591,15 @@ export default function SaleInvoicePage() {
                     ))}
                   </tbody>
                 </table>
+              )}
+              {pageCount>1&&(
+                <div className="flex items-center justify-center gap-3 mt-4 text-xs">
+                  <button disabled={page<=1} onClick={()=>setPage(p=>p-1)}
+                    className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-40 transition-all">→ قبلی</button>
+                  <span className="text-gray-steel">صفحه {page.toLocaleString('fa-IR')} از {pageCount.toLocaleString('fa-IR')} — {invTotal.toLocaleString('fa-IR')} فاکتور</span>
+                  <button disabled={page>=pageCount} onClick={()=>setPage(p=>p+1)}
+                    className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-40 transition-all">بعدی ←</button>
+                </div>
               )}
             </div>
           )}

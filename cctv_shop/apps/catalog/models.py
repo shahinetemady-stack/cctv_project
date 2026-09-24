@@ -266,6 +266,29 @@ class Product(TimeStampedModel):
         return sum(v.available_stock for v in self.variants.all())
 
     @property
+    def sellable_stock(self):
+        """موجودی قابل فروش به مشتری — فقط انبارهای با تیک «نمایش به مشتری»."""
+        return sum(v.sellable_stock for v in self.variants.all())
+
+    @property
+    def effective_availability(self):
+        """وضعیت نمایشی موجودی — در حالت «خودکار»، اگر موجودی قابل فروش (فروشگاه)
+        صفر باشد ولی کالا در انبار «در راه هوایی» موجودی داشته باشد، به‌صورت
+        خودکار «به‌زودی» برمی‌گردد. مقادیر دستی (به‌زودی/توقف تولید) اولویت دارند."""
+        if self.availability != 'auto':
+            return self.availability
+        variants = list(self.variants.filter(is_active=True))
+        if any(v.sellable_stock > 0 for v in variants):
+            return 'auto'
+        from apps.inventory.models import Warehouse, WarehouseStock
+        in_air = WarehouseStock.objects.filter(
+            variant__in=variants, quantity__gt=0,
+            warehouse__warehouse_type=Warehouse.Type.AIR_TRANSIT,
+            warehouse__is_active=True,
+        ).exists()
+        return 'coming_soon' if in_air else 'auto'
+
+    @property
     def category_type(self):
         return self.category.category_type if self.category_id else None
 
@@ -321,6 +344,10 @@ class ProductVariant(TimeStampedModel):
     reserved_qty   = models.PositiveIntegerField(default=0, verbose_name="رزرو شده")
     month2_unavailable = models.BooleanField(default=False, verbose_name="فروش دوماهه ندارد",
         help_text="در فرمول قیمت، ستون دوماهه این واریانت «ندارد» نمایش داده می‌شود")
+    month1_unavailable = models.BooleanField(default=False, verbose_name="فروش یکماهه ندارد",
+        help_text="در فرمول قیمت، ستون یکماهه این واریانت «ندارد» نمایش داده می‌شود")
+    credit_unavailable = models.BooleanField(default=False, verbose_name="فروش توحسابی ندارد",
+        help_text="در فرمول قیمت، ستون توحسابی این واریانت «ندارد» نمایش داده می‌شود")
     purchase_price_cny = models.DecimalField(
         max_digits=10, decimal_places=2,
         validators=[MinValueValidator(Decimal("0.00"))],
@@ -368,6 +395,30 @@ class ProductVariant(TimeStampedModel):
     @property
     def available_stock(self):
         return max(0, self.stock_quantity - self.reserved_qty)
+
+    @property
+    def sellable_stock(self):
+        """موجودی قابل فروش به مشتری — فقط انبارهایی با تیک «نمایش به مشتری» (is_public)
+        منهای رزروشده. اگر کالا هیچ رکورد انباری نداشته باشد (داده‌های قدیمی/ایمپورت)،
+        به موجودی کل واریانت برمی‌گردد — همان منطق نمایش موجودی در پنل ادمین."""
+        from django.db.models import Sum
+        qs = self.warehouse_stocks.filter(warehouse__is_active=True)
+        if qs.exists():
+            base = qs.filter(warehouse__is_public=True).aggregate(t=Sum("quantity"))["t"] or 0
+        else:
+            base = self.stock_quantity
+        return max(0, base - self.reserved_qty)
+
+    def stock_by_warehouse(self):
+        """موجودی به تفکیک انبار (انبارهای فعال با موجودی > ۰) — برای نمایش در پنل ادمین."""
+        return [
+            {"warehouse": ws.warehouse.name, "warehouse_type": ws.warehouse.warehouse_type,
+             "quantity": ws.quantity,
+             "is_public": ws.warehouse.is_public}
+            for ws in self.warehouse_stocks
+            .filter(warehouse__is_active=True, quantity__gt=0)
+            .select_related("warehouse").order_by("warehouse__name")
+        ]
 
     @property
     def is_in_stock(self):
@@ -482,7 +533,7 @@ class ProductPriceHistory(models.Model):
     variant    = models.ForeignKey('ProductVariant', on_delete=models.CASCADE,
                    related_name='price_history', verbose_name="variant")
     date       = models.DateField(verbose_name="تاریخ")
-    price_irr  = models.PositiveIntegerField(verbose_name="قیمت (تومان)")
+    price_irr  = models.PositiveIntegerField(verbose_name="قیمت (ریال)")
     price_cny  = models.DecimalField(max_digits=10, decimal_places=2,
                    default=0, verbose_name="قیمت (یوان)")
 

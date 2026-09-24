@@ -1,13 +1,14 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, UserProfile, Role, StaffProfile
+from .models import User, UserProfile, Role, StaffProfile, PartnerClubSettings, PartnerGuarantee
 
 
 class UserProfileInline(admin.StackedInline):
     model = UserProfile
+    fk_name = "user"
     can_delete = False
-    fields = ["user_type", "company_name", "national_id",
-              "is_approved", "discount_percent", "credit_limit", "address", "notes"]
+    fields = ["user_type", "company_name", "national_id", "social_url", "document",
+              "is_approved", "partner_tier", "discount_percent", "credit_limit", "address", "notes"]
 
 
 @admin.register(User)
@@ -49,3 +50,22 @@ class StaffProfileAdmin(admin.ModelAdmin):
     list_display  = ["user", "role", "employee_id", "department", "is_active"]
     list_filter   = ["role", "is_active"]
     search_fields = ["user__phone", "user__first_name", "employee_id"]
+
+
+@admin.register(PartnerClubSettings)
+class PartnerClubSettingsAdmin(admin.ModelAdmin):
+    list_display = ["__str__", "silver_to_gold_amount", "gold_to_platinum_amount",
+                    "period_months", "auto_evaluate_enabled", "updated_at"]
+
+    def has_add_permission(self, request):
+        return False  # سینگلتون — فقط ویرایش
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(PartnerGuarantee)
+class PartnerGuaranteeAdmin(admin.ModelAdmin):
+    list_display  = ["profile", "guarantee_type", "amount_rials", "created_by", "created_at"]
+    list_filter   = ["guarantee_type"]
+    search_fields = ["profile__user__phone", "profile__user__first_name", "profile__user__last_name"]

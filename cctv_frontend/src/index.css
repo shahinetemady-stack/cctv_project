@@ -3,6 +3,9 @@
 @tailwind utilities;
 
 /* ─── فونت‌های self-hosted (بدون وابستگی به CDN گوگل) ──────── */
+/* فونت عربی optional است: پری‌لود می‌شود پس در اتصال سریع قبل از اولین نقاشی
+   می‌رسد (بدون swap) و در اتصال کند همان فونت جایگزین متریک‌هماهنگ می‌ماند
+   (بدون بازچیدمان سراسری دیررس) — در هر دو حالت نه CLS داریم نه متن نامرئی */
 @font-face {
   font-family: 'Vazirmatn';
   font-style: normal;
@@ -19,11 +22,60 @@
   src: url(/fonts/vazirmatn-latin.woff2) format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
+/* فونت جایگزین متریک‌هماهنگ — تا لود وزیرمتن، متن با ابعاد تقریباً یکسان دیده
+   می‌شود و swap هیچ بازچیدمان/CLS ایجاد نمی‌کند (پس font-display: swap امن است) */
+@font-face {
+  font-family: 'Vazirmatn Fallback';
+  src: local('Noto Sans Arabic UI'), local('Noto Naskh Arabic'), local('Noto Sans Arabic'), url(/fonts/vazirmatn-fb-reg.woff2) format('woff2');
+  font-weight: 100 400;
+  size-adjust: 97%;
+  ascent-override: 102.5%;
+  descent-override: 53.7%;
+  line-gap-override: 0%;
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3, U+08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
+}
+@font-face {
+  font-family: 'Vazirmatn Fallback';
+  src: local('Noto Sans Arabic UI'), local('Noto Naskh Arabic'), local('Noto Sans Arabic'), url(/fonts/vazirmatn-fb-bold.woff2) format('woff2');
+  font-weight: 500 900;
+  size-adjust: 93%;
+  ascent-override: 102.5%;
+  descent-override: 53.7%;
+  line-gap-override: 0%;
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3, U+08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
+}
+@font-face {
+  font-family: 'Vazirmatn Fallback';
+  src: local('Tahoma');
+  ascent-override: 102.5%;
+  descent-override: 53.7%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: 'Vazirmatn Fallback';
+  src: local('DejaVu Sans');
+  font-weight: 100 400;
+  size-adjust: 91%;
+  ascent-override: 102.5%;
+  descent-override: 53.7%;
+  line-gap-override: 0%;
+  unicode-range: U+0000-00FF;
+}
+@font-face {
+  font-family: 'Vazirmatn Fallback';
+  src: local('DejaVu Sans');
+  font-weight: 500 900;
+  size-adjust: 83.5%;
+  ascent-override: 102.5%;
+  descent-override: 53.7%;
+  line-gap-override: 0%;
+  unicode-range: U+0000-00FF;
+}
 @font-face {
   font-family: 'Exo 2';
   font-style: normal;
   font-weight: 100 900;
-  font-display: swap;
+  font-display: optional;
   src: url(/fonts/exo2-latin.woff2) format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+20AC, U+2122, U+FEFF, U+FFFD;
 }
@@ -31,7 +83,7 @@
   font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 100 800;
-  font-display: swap;
+  font-display: optional;
   src: url(/fonts/jetbrainsmono-latin.woff2) format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+20AC, U+2122, U+FEFF, U+FFFD;
 }
@@ -44,7 +96,7 @@
 ═══════════════════════════════════════════════════════════════ */
 
 :root {
-  --font-fa: 'Vazirmatn', 'Tahoma', 'Segoe UI', 'Arial', sans-serif;
+  --font-fa: 'Vazirmatn', 'Vazirmatn Fallback', 'Tahoma', 'Segoe UI', 'Arial', sans-serif;
 
   /* ─── تم دارک (پیش‌فرض) — مشکی/زرد ─────────────────────── */
   /* پس‌زمینه‌ها — مشکی عمیق */
@@ -56,6 +108,7 @@
   --color-bg-secondary-rgb: 18 18 20;
   --color-bg-card-rgb:      22 22 24;
   --color-bg-elevated-rgb:  28 28 31;
+  --color-bg-primary-rgb:   10 10 11;
 
   /* متن */
   --color-text-primary:   #F5F5F4;
@@ -103,9 +156,24 @@
     radial-gradient(800px circle at 10% 110%, rgba(251, 192, 45, 0.045), transparent 50%),
     #0A0A0B;
   --bg-grid-line: rgba(251, 192, 45, 0.022);
+  --bg-circuit: rgba(251, 192, 45, 0.05);
   --bg-glow: rgba(251, 192, 45, 0.05);
   --glass-bg: rgba(22, 22, 24, 0.72);
   --bottom-nav-bg: rgba(18, 18, 20, 0.92);
+
+  /* بک‌گراند gas+circuit (fx.js) — نام توکن‌ها طبق قرارداد همان کتابخانه است */
+  --fx-bg: #0A0A0B;
+  --gas-1: #8a5a00;  /* لکه‌های داغ دود */
+  --gas-2: #2a1c05;  /* بدنه ابر */
+  --gas-3: #5c3d06;  /* رشته‌های ظریف */
+  --accent: #FBC02D;
+  --ink: #F5F5F4;
+
+  /* کره زمین سه‌بعدی (globe.js) — پالت طلایی سایت */
+  --globe-deep: #070605; --globe-sea: #241c07; --globe-land: #e9c96a; --globe-landnight: #3a2f10;
+  --globe-city: #ffb85c; --globe-coast: #f7dd8f; --globe-grid: #453a18; --globe-air: #ffd75c;
+  --globe-night-k: .3; --globe-air-a: .8; --globe-coast-a: .85; --globe-grid-a: .1; --globe-orbit-a: .3;
+  --warn: #e05252;
 }
 
 /* ─── تم لایت — سفید گرم + طلایی عمیق ─────────────────────── */
@@ -118,6 +186,7 @@
   --color-bg-secondary-rgb: 255 255 255;
   --color-bg-card-rgb:      255 255 255;
   --color-bg-elevated-rgb:  244 240 230;
+  --color-bg-primary-rgb:   250 248 243;
 
   --color-text-primary:   #221C0E;
   --color-text-secondary: #5C5540;
@@ -160,9 +229,24 @@
     radial-gradient(800px circle at 10% 110%, rgba(251, 192, 45, 0.07), transparent 50%),
     #FAF8F3;
   --bg-grid-line: rgba(161, 98, 7, 0.05);
+  --bg-circuit: rgba(161, 98, 7, 0.09);
   --bg-glow: rgba(251, 192, 45, 0.10);
   --glass-bg: rgba(255, 255, 255, 0.78);
   --bottom-nav-bg: rgba(255, 255, 255, 0.94);
+
+  /* بک‌گراند gas+circuit (fx.js) — نسخه لایت (دود طوسی) */
+  --fx-bg: #FAF8F3;
+  --gas-1: #d6d6d8;
+  --gas-2: #e9e7e4;
+  --gas-3: #c2c2c6;
+  --accent: #A16207;
+  --ink: #221C0E;
+
+  /* کره زمین سه‌بعدی (globe.js) — نسخه لایت: کره چینی‌سفید با خط ساحلی مرکب */
+  --globe-deep: #eae4d5; --globe-sea: #f7f3e8; --globe-land: #8a6d1f; --globe-landnight: #c9c0a8;
+  --globe-city: #c47a1e; --globe-coast: #6b5510; --globe-grid: #d8d0ba; --globe-air: #d9c9a0;
+  --globe-night-k: .86; --globe-air-a: .18; --globe-coast-a: .7; --globe-grid-a: .16; --globe-orbit-a: .2;
+  --warn: #c0392b;
 }
 
 /* ─── Base ──────────────────────────────────────────────────── */
@@ -293,6 +377,93 @@ input:-webkit-autofill:focus {
   border: 1px solid rgba(251, 192, 45, 0.20);
 }
 [data-theme="light"] .glass-gold { border-color: rgba(251, 192, 45, 0.28); }
+
+/* ─── هدر شناور (الگوی Modern Header) ────────────────────────
+   پیل شناور گرد با بلور، خط اسکن طلایی روی لبه بالا و
+   hairline طلایی که با اسکرول روشن می‌شود */
+.site-header {
+  position: sticky;
+  top: 12px;
+  z-index: 50;
+  margin: 12px auto 0;
+  width: calc(100% - 24px);
+  max-width: 1280px;
+  border-radius: 20px;
+  background: rgb(var(--color-bg-primary-rgb) / 0.55);
+  border: 1px solid var(--color-border);
+  backdrop-filter: blur(20px) saturate(1.35);
+  -webkit-backdrop-filter: blur(20px) saturate(1.35);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  transition: background 0.18s cubic-bezier(0.22, 0.9, 0.28, 1), box-shadow 0.18s cubic-bezier(0.22, 0.9, 0.28, 1);
+}
+.site-header.scrolled {
+  background: rgb(var(--color-bg-primary-rgb) / 0.82);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+/* هاور آیتم‌های منوی اصلی — جایگزین سازگار color-mix برای مرورگرهای قدیمی (کروم ۱۰۹/Win7) */
+.hover-bg-soft:hover { background-color: rgb(var(--color-text-primary-rgb) / 0.06); }
+/* hairline طلایی زیر هدر که با اسکرول روشن می‌شود */
+.site-header::after {
+  content: '';
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-brand) 30%, var(--color-brand-hover) 50%, var(--color-brand) 70%, transparent);
+  opacity: 0;
+  transition: opacity 0.18s cubic-bezier(0.22, 0.9, 0.28, 1);
+}
+.site-header.scrolled::after { opacity: 0.8; }
+/* خط اسکن متحرک روی لبه بالای هدر */
+.hd-scan {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  overflow: hidden;
+  border-radius: 20px 20px 0 0;
+  pointer-events: none;
+}
+.hd-scan::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-brand), transparent) no-repeat right top / 160px 100%;
+  animation: hdScan 5.5s linear infinite;
+  will-change: transform;
+}
+/* نوار اسکن با transform حرکت می‌کند (composite-only)؛ انیمیت inset-inline-start هر فریم layout/paint می‌ساخت */
+@keyframes hdScan {
+  from { transform: translateX(160px); }
+  to   { transform: translateX(-100%); }
+}
+/* نقطه پالس‌دار روی لوگو */
+.brand-dot {
+  position: absolute;
+  top: 5px;
+  inset-inline-start: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-brand);
+  box-shadow: 0 0 8px var(--color-brand);
+  animation: brandPulse 2.2s ease-in-out infinite;
+}
+@keyframes brandPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.35; transform: scale(0.75); }
+}
+@media (max-width: 767px) {
+  .site-header { top: 8px; margin-top: 8px; width: calc(100% - 16px); border-radius: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hd-scan::before, .brand-dot { animation: none; }
+}
 
 /* Safe Area — در حالت PWA (Add to Home Screen) محتوا زیر نوار وضعیت/ناچ گوشی نرود */
 .pt-safe { padding-top: env(safe-area-inset-top, 0px); }
@@ -582,21 +753,26 @@ select.input option { background: var(--color-bg-elevated); }
   opacity: 0.85;
 }
 
-/* خط اسکن دوربین — جاروی افقی ملایم */
-@keyframes scanline {
-  0%   { top: -10%; opacity: 0; }
+/* هیرو افکت برد — روی موبایل ستون متن بالا می‌نشیند چون دای در پایین کنواس قرار دارد */
+@media (max-width: 991px) {
+  .hero-board { align-items: flex-start !important; }
+}
+
+/* خط اسکن دوربین — جاروی افقی ملایم (transform به‌جای top برای جلوگیری از layout thrash) */
+@keyframes scanline {  0%   { transform: translateY(-10vh); opacity: 0; }
   8%   { opacity: 1; }
   92%  { opacity: 1; }
-  100% { top: 105%; opacity: 0; }
+  100% { transform: translateY(105vh); opacity: 0; }
 }
 .scanline {
   position: absolute;
-  left: 0; right: 0;
+  top: 0; left: 0; right: 0;
   height: 72px;
   background: linear-gradient(180deg, transparent, var(--color-brand-soft) 45%, rgba(251, 192, 45, 0.22) 50%, var(--color-brand-soft) 55%, transparent);
   animation: scanline 5.5s linear infinite;
   pointer-events: none;
   z-index: 1;
+  will-change: transform;
 }
 [data-theme="light"] .scanline {
   background: linear-gradient(180deg, transparent, rgba(251, 192, 45, 0.05) 45%, rgba(251, 192, 45, 0.12) 50%, rgba(251, 192, 45, 0.05) 55%, transparent);
@@ -638,6 +814,70 @@ select.input option { background: var(--color-bg-elevated); }
   .marquee-track { animation: none; }
 }
 
+/* ─── مارکی برندها — تایپوگرافی غول‌پیکر (سبک کیمی) ─── */
+.brand-marquee-band {
+  padding: clamp(30px, 6vw, 64px) 0;
+  background: linear-gradient(180deg, transparent, rgba(251, 192, 45, 0.04), transparent);
+}
+.brand-marquee-band .marquee-viewport { mask-image: none; -webkit-mask-image: none; }
+/* حرکت با اسکرول — انیمیشن خودکار غیرفعال */
+.brand-marquee-band .marquee-track { animation: none; will-change: transform; }
+.bm-item {
+  display: inline-flex; align-items: baseline;
+  gap: clamp(7px, 1vw, 14px);
+  padding: 0 clamp(7px, 1vw, 15px);
+  white-space: nowrap;
+}
+.bm-label {
+  display: table;
+  margin: 0 auto clamp(18px, 3vw, 34px);
+  padding: 7px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--color-brand);
+  color: var(--color-brand);
+  background: rgba(251, 192, 45, 0.08);
+  font-size: clamp(12px, 1.6vw, 15px);
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.bm-word {
+  font-family: 'Exo 2', Vazirmatn, sans-serif;
+  font-weight: 900;
+  font-size: clamp(52px, 9vw, 128px);
+  line-height: 1;
+  letter-spacing: -1px;
+  color: var(--color-text-primary);
+}
+.bm-cap {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(11px, 1.4vw, 15px);
+  font-weight: 500;
+  letter-spacing: 3px;
+  color: var(--color-brand);
+}
+
+/* ─── ردیف شناور مقالات — اسکرول عمودی ردیف را افقی می‌برد، کارت وسط بزرگ‌تر ─── */
+/* سکشن پین می‌شود: تا رسیدن به مقالات، اسکرول عمودی همان‌جا چند کارت را ورق می‌زند */
+.art-pin-wrap { height: 300vh; position: relative; }
+.art-pin-sticky {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  height: 100svh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+}
+.art-row-viewport { overflow: hidden; padding-bottom: clamp(18px, 3vw, 34px); }
+.art-row-track { display: flex; width: max-content; will-change: transform; }
+.art-float-card {
+  flex-shrink: 0;
+  width: clamp(300px, 34vw, 460px);
+  padding: 0 clamp(8px, 1.2vw, 18px);
+  will-change: transform, opacity;
+}
+
 /* گرید ظریف سیان */
 .grid-bg {
   background-image:
@@ -669,6 +909,7 @@ select.input option { background: var(--color-bg-elevated); }
   align-items: stretch;
   max-width: 480px;
   margin-inline: auto;
+  position: relative;
 }
 .bottom-nav-item {
   flex: 1;
@@ -683,6 +924,7 @@ select.input option { background: var(--color-bg-elevated); }
   color: var(--color-text-muted);
   transition: color 0.2s ease;
   position: relative;
+  z-index: 2;
 }
 .bottom-nav-item svg {
   width: 22px;
@@ -693,16 +935,32 @@ select.input option { background: var(--color-bg-elevated); }
   color: var(--color-brand);
 }
 .bottom-nav-item.active svg { transform: translateY(-2px); }
-.bottom-nav-item.active::before {
-  content: '';
+/* نوار نور Limelight (اقتباس از 21st.dev) — با transform به آیتم فعال حرکت می‌کند */
+.bottom-nav-limelight {
   position: absolute;
   top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 24px;
-  height: 3px;
-  border-radius: 0 0 3px 3px;
+  left: 0;
+  width: 44px;
+  height: 5px;
+  border-radius: 999px;
   background: var(--gradient-gold);
+  box-shadow: 0 14px 22px rgba(251, 192, 45, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.bottom-nav-limelight.ready {
+  opacity: 1;
+  transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+}
+.bottom-nav-limelight-cone {
+  position: absolute;
+  top: 5px;
+  left: -30%;
+  width: 160%;
+  height: 56px;
+  clip-path: polygon(5% 100%, 25% 0, 75% 0, 95% 100%);
+  background: linear-gradient(to bottom, rgba(251, 192, 45, 0.28), transparent);
 }
 .bottom-nav-badge {
   position: absolute;
@@ -734,9 +992,10 @@ select.input option { background: var(--color-bg-elevated); }
   from { opacity: 0; transform: translateY(16px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+/* برق اسکلت — لایه گرادیان با transform می‌لغزد (composite-only)؛ انیمیت background-position هر فریم paint می‌ساخت */
 @keyframes shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
 }
 @keyframes float {
   0%, 100% { transform: translateY(0); }
@@ -752,20 +1011,107 @@ select.input option { background: var(--color-bg-elevated); }
 .animate-float    { animation: float 5s ease-in-out infinite; }
 .animate-pulse-gold { animation: pulseGold 2.5s ease-in-out infinite; }
 
+/* ─── انیمیشن‌های هدر (جایگزین کتابخانه انیمیشن JS — خالص CSS) ─ */
+@keyframes headerIn {
+  from { opacity: 0; transform: translateY(-20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes badgePop {
+  from { opacity: 0; transform: scale(0) rotate(-45deg); }
+  to   { opacity: 1; transform: scale(1) rotate(0); }
+}
+@keyframes megaIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes megaItemIn {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes fadeUpSm {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideDownSm {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes drawerIn {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes dropdownIn {
+  from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes topbarIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes wiggle {
+  0%, 100% { transform: rotate(0); }
+  25%      { transform: rotate(15deg); }
+  75%      { transform: rotate(-15deg); }
+}
+@keyframes themeIconIn {
+  from { opacity: 0; transform: rotate(-60deg) scale(0.6); }
+  to   { opacity: 1; transform: rotate(0) scale(1); }
+}
+@keyframes bounceSoft {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-4px); }
+}
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes errorIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.animate-header-in   { animation: headerIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-badge-pop   { animation: badgePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.animate-mega-in     { animation: megaIn 0.25s cubic-bezier(0.22, 1, 0.36, 1) both; transform-origin: top right; }
+.animate-mega-item   { animation: megaItemIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-fade-up-sm  { animation: fadeUpSm 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-slide-down-sm { animation: slideDownSm 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-drawer-in   { animation: drawerIn 0.3s cubic-bezier(0.32, 0.72, 0, 1) both; }
+.animate-fade-in-fast { animation: fadeIn 0.18s ease-out both; }
+.animate-dropdown-in { animation: dropdownIn 0.2s cubic-bezier(0.22, 1, 0.36, 1) both; transform-origin: top left; }
+.animate-modal-in    { animation: modalIn 0.25s cubic-bezier(0.34, 1.3, 0.64, 1) both; }
+.animate-topbar-in   { animation: topbarIn 0.3s ease-out both; }
+.animate-wiggle      { animation: wiggle 2s ease-in-out infinite; }
+.animate-wiggle-rev  { animation: wiggle 2s ease-in-out infinite reverse; }
+.animate-theme-icon  { animation: themeIconIn 0.35s cubic-bezier(0.34, 1.3, 0.64, 1) both; }
+.animate-bounce-soft { animation: bounceSoft 2s ease-in-out infinite; }
+.animate-scale-in    { animation: scaleIn 0.3s ease-out both; }
+.animate-error-in    { animation: errorIn 0.25s ease-out both; }
+
 /* اسکلت لودینگ */
 .skeleton {
-  background: linear-gradient(90deg,
-    var(--color-bg-elevated) 25%,
-    var(--color-bg-tertiary) 50%,
-    var(--color-bg-elevated) 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.4s infinite;
+  position: relative;
+  overflow: hidden;
+  background: var(--color-bg-elevated);
   border-radius: 8px;
+}
+.skeleton::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--color-bg-tertiary), transparent);
+  animation: shimmer 1.4s infinite;
+  will-change: transform;
 }
 
 /* احترام به کاهش حرکت */
 @media (prefers-reduced-motion: reduce) {
-  .scanline, .rec-dot, .animate-float, .animate-pulse-gold { animation: none; }
+  .scanline, .rec-dot, .animate-float, .animate-pulse-gold,
+  .animate-wiggle, .animate-wiggle-rev, .animate-bounce-soft { animation: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -924,4 +1270,275 @@ select.input option { background: var(--color-bg-elevated); }
   padding-right: 1rem;
   margin: 1rem 0;
   color: var(--color-text-muted);
+}
+
+/* ─── About Doorbinkar — دو بک‌گراند ترکیبی (دفتر چین + کانتینر) ─── */
+.about-hero { position: relative; overflow: hidden; }
+.about-hero-bg { position: absolute; inset: 0; z-index: 0; }
+.about-hero-layer {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-repeat: no-repeat;
+  will-change: transform;
+  animation: aboutKenBurns 38s ease-in-out infinite alternate;
+}
+/* دفتر چین — سمت راست، محو نرم به سمت چپ */
+.about-hero-office {
+  background-image: url('/images/about-office-china.webp');
+  background-position: right center;
+  -webkit-mask-image: linear-gradient(to left, #000 42%, transparent 80%);
+          mask-image: linear-gradient(to left, #000 42%, transparent 80%);
+}
+/* کانتینر — سمت چپ، محو نرم به سمت راست؛ دو لایه در وسط در هم فرو می‌روند */
+.about-hero-container {
+  background-image: url('/images/about-container.webp');
+  background-position: left center;
+  -webkit-mask-image: linear-gradient(to right, #000 42%, transparent 80%);
+          mask-image: linear-gradient(to right, #000 42%, transparent 80%);
+  animation-delay: -19s;
+}
+@keyframes aboutKenBurns {
+  from { transform: scale(1); }
+  to   { transform: scale(1.08); }
+}
+/* لایه تیره/روشن روی تصاویر برای خوانایی متن + اتصال نرم به بالا و پایین صفحه */
+.about-hero-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, var(--color-bg-primary) 0%, transparent 20%, transparent 80%, var(--color-bg-primary) 100%),
+    rgb(var(--color-bg-primary-rgb) / 0.74);
+}
+/* موبایل: عکس کانتینر به‌صورت <img> واقعی (نسخه سبک) — نقاشی فوری و قابل‌پیش‌بینی برای LCP،
+   به‌جای CSS background که رستر آن تا دیروقت به‌تأخیر می‌افتاد */
+.about-hero-img { display: none; }
+@media (max-width: 768px) {
+  .about-hero-img {
+    display: block;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 40%;
+  }
+  .about-hero-office { display: none; }
+  .about-hero-container { display: none; }
+  .about-hero-scrim {
+    background:
+      linear-gradient(180deg, var(--color-bg-primary) 0%, transparent 20%, transparent 80%, var(--color-bg-primary) 100%),
+      rgb(var(--color-bg-primary-rgb) / 0.59);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .about-hero-layer { animation: none; }
+}
+
+/* ─── SmartSearch (هیرو) — نقطه‌های تایپینگ و هاله فوکوس ─── */
+@keyframes chatDotPulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50% { opacity: 0.95; transform: scale(1.15); }
+}
+.chat-typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-brand);
+  display: inline-block;
+  animation: chatDotPulse 1.2s ease-in-out infinite;
+}
+.smart-input-wrap:focus-within {
+  box-shadow: inset 0 0 0 1.5px var(--color-brand), 0 0 0 4px var(--color-brand-soft);
+  border-radius: 12px;
+}
+
+/* ─── ربات باکس هیرو (SmartSearch) — حالت‌های چشم و حباب فکر ─── */
+.bot-face {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  border-radius: 50%;
+  background: var(--gradient-gold);
+  /* هاله نامتقارن — نور قوی از بالا-راست، بازتاب ضعیف پایین-چپ (مثل ربات کیمی) */
+  box-shadow: 0 0 0 3px rgba(255, 205, 80, 0.20), 7px -7px 22px 5px rgba(255, 190, 40, 0.38), -5px 7px 14px 2px rgba(255, 165, 20, 0.16), 0 4px 14px rgba(0, 0, 0, 0.35);
+  transition: transform 0.3s ease;
+}
+.bot-eye {
+  width: 7px; height: 9px; border-radius: 50%;
+  background: var(--color-brand-contrast);
+  transition: all 0.25s ease;
+}
+/* حالت بیکار: شناور + تنفس هاله نورانی دور دایره (مثل ربات کیمی) — هاله روی ::before با opacity پالس می‌زند، نه box-shadow */
+.bot-face-idle { animation: bot-bob 3.2s ease-in-out infinite; }
+.bot-face-idle::before { animation: bot-halo-pulse 3.2s ease-in-out infinite; }
+/* چشم‌های بیکار: نگاه چپ/راست + پلک — هر ۶ ثانیه یک چرخه */
+.bot-face-idle .bot-eye { animation: bot-idle-eyes 6s ease-in-out infinite; }
+.bot-face-listening { animation: bot-bob 1.6s ease-in-out infinite; }
+.bot-face-listening .bot-eye { animation: bot-listen-look 2.2s ease-in-out infinite; transform: scaleY(1.25); }
+.bot-face-thinking { animation: bot-think-tilt 1s ease-in-out infinite; }
+.bot-face-thinking .bot-eye { height: 7px; animation: bot-think-look 0.9s ease-in-out infinite; }
+.bot-face-happy { animation: bot-happy-jump 0.7s ease 2; }
+.bot-face-happy .bot-eye {
+  width: 9px; height: 5px; border-radius: 9px 9px 0 0;
+  background: transparent;
+  border: 2.5px solid var(--color-brand-contrast); border-bottom: none;
+}
+@keyframes bot-bob { 0%, 100% { transform: translateY(2px); } 50% { transform: translateY(-2px); } }
+/* هاله پالس‌دار روی ::before — انیمیت opacity به‌جای box-shadow (composite-only) */
+.bot-face { position: relative; }
+.bot-face::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  z-index: -1;
+  box-shadow: 0 0 0 4px rgba(255, 205, 80, 0.28), 9px -9px 32px 9px rgba(255, 195, 45, 0.46), -6px 8px 16px 3px rgba(255, 170, 25, 0.20), 0 4px 14px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+}
+@keyframes bot-halo-pulse {
+  0%, 100% { opacity: 0; }
+  50%      { opacity: 1; }
+}
+/* نگاه به راست، برگشت، نگاه به چپ، برگشت، پلک */
+@keyframes bot-idle-eyes {
+  0%, 18% { transform: translateX(0); }
+  24%, 30% { transform: translateX(2.6px); }
+  36%, 48% { transform: translateX(0); }
+  54%, 60% { transform: translateX(-2.6px); }
+  66%, 88% { transform: translateX(0); }
+  91% { transform: scaleY(1); }
+  94% { transform: scaleY(0.12); }
+  97%, 100% { transform: scaleY(1); }
+}
+@keyframes bot-blink { 0%, 91%, 100% { transform: scaleY(1); } 94% { transform: scaleY(0.1); } 97% { transform: scaleY(1); } }
+@keyframes bot-listen-look { 0%, 100% { transform: scaleY(1.25) translateX(1.5px); } 50% { transform: scaleY(1.25) translateX(-1.5px); } }
+@keyframes bot-think-look { 0%, 100% { transform: translateY(-2px) translateX(-2px); } 50% { transform: translateY(-2px) translateX(2px); } }
+@keyframes bot-think-tilt { 0%, 100% { transform: rotate(-7deg); } 50% { transform: rotate(7deg); } }
+@keyframes bot-happy-jump { 0% { transform: translateY(0); } 40% { transform: translateY(-7px) scale(1.07); } 100% { transform: translateY(0); } }
+
+/* ─── پرواز اسکرول‌محور ربات به سمت چت‌باکس ─── */
+/* موقعیت با جاوااسکریپت و به‌صورت fixed تنظیم می‌شود؛ فقط شناور بودن و ورود به خانه اینجاست */
+.bot-flyer { position: fixed; z-index: 99998; pointer-events: none; transform: translate(-50%, -50%); will-change: transform; transition: opacity 0.22s ease; }
+/* تحویل نرم به جایگاه — فلایر روی صورت اصلی محو می‌شود */
+.bot-flyer.landing { opacity: 0; }
+.bot-flyer .bot-face { animation: bot-bob 2.4s ease-in-out infinite; }
+.bot-flyer .bot-eye { animation: bot-blink 3s ease-in-out infinite; }
+/* رسیدن به خانه: ربات وارد نماد چت می‌شود و محو می‌گردد */
+.bot-flyer.entering { animation: bot-enter-home 0.9s cubic-bezier(0.5, 0, 0.6, 1) forwards; }
+@keyframes bot-enter-home {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  35% { transform: translate(-50%, -50%) scale(1.15); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+}
+/* خروج از خانه: در باز می‌شود و ربات از داخل نماد چت بیرون می‌آید */
+.bot-flyer.exiting { animation: bot-exit-home 0.75s cubic-bezier(0.3, 1.3, 0.5, 1) forwards; }
+@keyframes bot-exit-home {
+  0% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+  55% { opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+/* درِ خانه — دایره‌ای روی نماد چت که باز می‌شود، ربات داخل می‌رود و دوباره بسته می‌شود */
+.bot-door { position: fixed; z-index: 99999; pointer-events: none; transform: translate(-50%, -50%); perspective: 140px; }
+.bot-door-panel {
+  position: absolute; left: -26px; top: -26px; width: 52px; height: 52px;
+  border-radius: 50%; background: var(--color-brand);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  transform-origin: left center;
+  animation: bot-door-swing 1.15s ease forwards;
+}
+@keyframes bot-door-swing {
+  0% { transform: rotateY(0); }
+  38% { transform: rotateY(-118deg); }
+  62% { transform: rotateY(-118deg); }
+  100% { transform: rotateY(0); }
+}
+/* حباب پیام بالای نماد چت بعد از ورود ربات به خانه — از سمت راست نماد باز می‌شود */
+.bot-home-bubble {
+  position: fixed; z-index: 99998; pointer-events: none;
+  transform: translate(0, calc(-100% - 16px));
+  background: var(--color-bg-elevated); border: 1px solid var(--color-brand);
+  color: var(--color-text-primary); padding: 8px 14px; border-radius: 14px;
+  font-size: 13px; font-weight: 700; white-space: nowrap;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  animation: bot-bubble-pop 0.5s cubic-bezier(0.2, 1.4, 0.4, 1), bot-bubble-fade 0.6s ease 4.6s forwards;
+}
+@keyframes bot-bubble-pop {
+  from { opacity: 0; transform: translate(0, calc(-100% - 4px)) scale(0.7); }
+  to { opacity: 1; transform: translate(0, calc(-100% - 16px)) scale(1); }
+}
+@keyframes bot-bubble-fade { to { opacity: 0; } }
+/* وقتی ربات در پرواز است، صورت داخل کادر پنهان می‌شود تا دو تا دیده نشود */
+.liquid-metal-frame .bot-face { transition: opacity 0.2s ease; }
+.liquid-metal-frame.bot-away .bot-face { opacity: 0; }
+
+/* حباب «در حال فکر کردن» که از سر ربات بیرون می‌زند (به سمت راست، داخل کادر) */
+.bot-thought {
+  position: absolute; bottom: calc(100% + 14px); left: 0;
+  background: var(--color-bg-secondary); border: 1px solid var(--color-border);
+  border-radius: 14px; padding: 6px 12px; font-size: 12px;
+  color: var(--color-text-secondary); white-space: nowrap; z-index: 5;
+  animation: bot-thought-pop 0.25s ease;
+}
+.bot-thought::before,
+.bot-thought::after {
+  content: ''; position: absolute; border-radius: 50%;
+  background: var(--color-bg-secondary); border: 1px solid var(--color-border);
+}
+.bot-thought::before { width: 9px; height: 9px; bottom: -8px; left: 16px; }
+.bot-thought::after { width: 5px; height: 5px; bottom: -16px; left: 8px; }
+@keyframes bot-thought-pop { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: scale(1); } }
+
+/* ─── کادر لیکویید متال دور باکس هیرو ─── */
+/* گرادیان مخروطی ثابت + تنفس هاله با opacity — چرخش زاویه‌ی conic-gradient
+   (@property) و ::before با filter:blur هر فریم repaint کامل می‌ساخت */
+.liquid-metal-frame {
+  position: relative;
+  border-radius: 24px;
+  padding: 3px;
+  background: conic-gradient(from 210deg,
+    #6b5310, #ffd54f 8%, #fff3c4 15%, #8a6d1f 26%, #5c4a12 38%, #ffe082 52%, #fff8e1 60%, #8a6d1f 74%, #fbc02d 88%, #6b5310);
+}
+/* هاله تار مذاب — تنفس نرم با opacity (composite-only) */
+.liquid-metal-frame::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 26px;
+  background: inherit;
+  filter: blur(9px);
+  opacity: 0.35;
+  z-index: -1;
+  animation: liquid-glow 3.2s ease-in-out infinite;
+  will-change: opacity;
+}
+@keyframes liquid-glow {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .liquid-metal-frame::before { animation: none; }
+}
+.liquid-metal-inner {
+  border-radius: 21.5px;
+  overflow: hidden;
+  /* تقریباً مات — نور چرخان قاب فقط روی حاشیه دیده شود، نه داخل باکس */
+  background: rgba(14, 12, 8, 0.97);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+/* حالت روشن — بدنه باکس چت سفید شود */
+[data-theme="light"] .liquid-metal-inner {
+  background: rgba(255, 255, 255, 0.96);
+}
+
+/* ─── موبایل/دستگاه کم‌توان — حذف blur شیشه‌ای ───────────────
+   backdrop-filter روی کارت‌های زیاد، روی CPU ضعیف موبایل چند ثانیه
+   کار رندر/paint می‌سازد (TBT). روی عرض ≤۷۶۸px blur حذف و شفافیت
+   پس‌زمینه کارت‌ها بیشتر می‌شود تا خوانایی حفظ شود. */
+@media (max-width: 768px) {
+  :root { --glass-bg: rgba(22, 22, 24, 0.92); }
+  [data-theme="light"] { --glass-bg: rgba(255, 255, 255, 0.94); }
+  *, *::before, *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
 }

@@ -40,6 +40,7 @@ export default function ProductsPage() {
     search:        searchParams.get('search') || '',
     in_stock:      searchParams.get('in_stock') || '',
     discounted:    searchParams.get('discounted') || '',
+    ordering:      searchParams.get('ordering') || '',
   })
   const [page, setPage] = useState(1)
   const [showFilter, setShowFilter] = useState(false)

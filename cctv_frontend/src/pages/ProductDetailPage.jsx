@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { catalogService } from '../services/catalog'
 import api from '../services/api'
 import { orderService } from '../services/orders'
@@ -60,28 +61,42 @@ function VariantSelector({ variants, selected, onSelect }) {
 
 
 
-// ─── نمودار تغییر قیمت ───────────────────────────────────────
-function PriceChart({ slug }) {
+// ─── نمودار تغییر قیمت (۹۰ روزه) ─────────────────────────────
+function PriceChart({ slug, variantId }) {
+  const [hover, setHover] = useState(null) // ایندکس نقطه زیر نشانگر
+  const svgRef = useRef(null)
   const { data: history = [] } = useQuery({
-    queryKey: ['price-history', slug],
-    queryFn: () => api.get(`/catalog/products/${slug}/price-history/`).then(r => r.data),
+    queryKey: ['price-history', slug, variantId],
+    queryFn: () => api.get(`/catalog/products/${slug}/price-history/`, {
+      params: variantId ? { variant: variantId } : {},
+    }).then(r => r.data),
     staleTime: 3600000,
   })
 
   if (history.length < 2) return null
 
   const prices = history.map(h => h.price)
-  const dates = history.map(h => formatDate(h.date, { short: true }))
+  const times = history.map(h => new Date(h.date).getTime())
   const min = Math.min(...prices)
   const max = Math.max(...prices)
   const range = max - min || 1
-  const W = 500, H = 120, PL = 10, PR = 10, PT = 10, PB = 30
+  const W = 500, H = 170, PL = 42, PR = 12, PT = 12, PB = 26
 
-  const points = prices.map((p, i) => {
-    const x = PL + (i / (prices.length - 1)) * (W - PL - PR)
-    const y = PT + (1 - (p - min) / range) * (H - PT - PB)
-    return [x, y]
-  })
+  // موقعیت X بر اساس تاریخ واقعی هر نقطه (نه فاصله مساوی)
+  const t0 = times[0], span = (times[times.length - 1] - t0) || 1
+  const points = prices.map((p, i) => [
+    PL + ((times[i] - t0) / span) * (W - PL - PR),
+    PT + (1 - (p - min) / range) * (H - PT - PB),
+  ])
+
+  // خطوط راهنمای محور عمودی (۴ سطح قیمت)
+  const ticks = [0, 1 / 3, 2 / 3, 1].map(t => ({
+    y: PT + t * (H - PT - PB),
+    v: max - t * range,
+  }))
+  const fmtAxis = v => v >= 1e6
+    ? (v / 1e6).toLocaleString('fa-IR', { maximumFractionDigits: 1 }) + ' م'
+    : v.toLocaleString('fa-IR')
 
   const polyline = points.map(p => p.join(',')).join(' ')
   const latest = prices[prices.length - 1]
@@ -89,49 +104,86 @@ function PriceChart({ slug }) {
   const change = ((latest - prev) / prev * 100).toFixed(1)
   const isUp = latest >= prev
 
+  const handleMove = (e) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const x = (e.clientX - rect.left) * (W / rect.width)
+    let best = 0, bd = Infinity
+    points.forEach((p, i) => { const d = Math.abs(p[0] - x); if (d < bd) { bd = d; best = i } })
+    setHover(best)
+  }
+
+  const labelIdx = [...new Set([0, Math.floor(times.length / 2), times.length - 1])]
+  const lastPoint = points[points.length - 1]
+
   return (
     <section className="mt-8">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="font-display font-bold text-xl text-white">📈 تغییر قیمت ۳۰ روزه</h2>
+        <h2 className="font-display font-bold text-xl text-white">📈 تغییر قیمت سه‌ماهه</h2>
         <span className={`text-sm font-bold px-3 py-1 rounded-full ${isUp ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}`}>
           {isUp ? '▲' : '▼'} {Math.abs(change)}%
         </span>
       </div>
-      <div className="card p-4">
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{height: 120}}>
-          {/* خط راهنما */}
-          {[0, 0.5, 1].map((t, i) => (
-            <line key={i}
-              x1={PL} x2={W-PR}
-              y1={PT + t*(H-PT-PB)}
-              y2={PT + t*(H-PT-PB)}
-              stroke="var(--color-border)" strokeWidth="1" />
-          ))}
-          {/* نمودار */}
-          <polyline points={polyline}
-            fill="none" stroke="#0066FF" strokeWidth="2"
-            strokeLinecap="round" strokeLinejoin="round" />
-          {/* سایه زیر نمودار */}
-          <polyline
-            points={`${points[0][0]},${H-PB} ${polyline} ${points[points.length-1][0]},${H-PB}`}
-            fill="url(#grad)" opacity="0.3" />
+      <div className="card p-4 relative">
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 180 }}
+          onPointerMove={handleMove} onPointerLeave={() => setHover(null)}>
           <defs>
-            <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#0066FF" />
-              <stop offset="100%" stopColor="#0066FF" stopOpacity="0" />
+            <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#FF7A1A" stopOpacity="0.35" />
+              <stop offset="100%" stopColor="#FF7A1A" stopOpacity="0" />
             </linearGradient>
           </defs>
-          {/* نقطه آخر */}
-          <circle cx={points[points.length-1][0]} cy={points[points.length-1][1]}
-            r="4" fill="#0066FF" />
-          {/* برچسب‌های تاریخ */}
-          {[0, Math.floor(dates.length/2), dates.length-1].map(i => (
-            <text key={i} x={points[i][0]} y={H-5}
+          {/* خطوط راهنمای افقی + برچسب قیمت روی محور عمودی */}
+          {ticks.map((t, i) => (
+            <g key={i}>
+              <line x1={PL} x2={W - PR} y1={t.y} y2={t.y}
+                stroke="var(--color-border)" strokeWidth="1"
+                strokeDasharray={i === 0 ? '' : '3 4'} opacity="0.6" />
+              <text x={PL - 6} y={t.y + 3} textAnchor="end"
+                fill="var(--color-text-secondary)" fontSize="9">{fmtAxis(t.v)}</text>
+            </g>
+          ))}
+          {/* سایه گرادیان زیر نمودار */}
+          <polygon
+            points={`${points[0][0]},${H - PB} ${polyline} ${lastPoint[0]},${H - PB}`}
+            fill="url(#priceGrad)" />
+          {/* خط نمودار */}
+          <polyline points={polyline}
+            fill="none" stroke="#FF7A1A" strokeWidth="2"
+            strokeLinecap="round" strokeLinejoin="round" />
+          {/* خط عمودی نمایش لحظه + نقطه هاور */}
+          {hover != null ? (
+            <g>
+              <line x1={points[hover][0]} x2={points[hover][0]} y1={PT} y2={H - PB}
+                stroke="#9ca3af" strokeWidth="1" strokeDasharray="4 4" />
+              <circle cx={points[hover][0]} cy={points[hover][1]}
+                r="4.5" fill="#FF7A1A" stroke="#0b0f19" strokeWidth="2" />
+            </g>
+          ) : (
+            <circle cx={lastPoint[0]} cy={lastPoint[1]} r="4" fill="#FF7A1A" />
+          )}
+          {/* برچسب‌های تاریخ شمسی */}
+          {labelIdx.map(i => (
+            <text key={i} x={points[i][0]} y={H - 8}
               textAnchor="middle" fill="var(--color-text-secondary)" fontSize="9">
-              {dates[i]}
+              {formatDate(history[i].date, { short: true })}
             </text>
           ))}
         </svg>
+        {/* تول‌تیپ قیمت لحظه‌ای */}
+        {hover != null && (
+          <div className="absolute pointer-events-none bg-gray-900 border border-white/10 rounded-lg px-3 py-2 text-xs shadow-xl z-10"
+            style={{
+              left: `${(points[hover][0] / W) * 100}%`,
+              top: 0,
+              transform: `translate(${points[hover][0] > W / 2 ? '-110%' : '15%'}, 8px)`,
+            }}>
+            <div className="text-gray-steel mb-0.5">{formatDate(history[hover].date)}</div>
+            <div className="font-bold text-orange-400 whitespace-nowrap">
+              {prices[hover].toLocaleString('fa-IR')} ریال
+            </div>
+          </div>
+        )}
         <div className="flex justify-between text-xs text-gray-steel mt-1">
           <span>کمترین: {min.toLocaleString('fa-IR')} ریال</span>
           <span>بیشترین: {max.toLocaleString('fa-IR')} ریال</span>
@@ -225,6 +277,7 @@ function SimilarProducts({ slug }) {
 
 export default function ProductDetailPage() {
   const { slug } = useParams()
+  const qc = useQueryClient()
   const { isAuthenticated, isPartner } = useAuthStore()
   const { increment } = useCartStore()
   const { add: addToCompare, remove: removeFromCompare, has: inCompare } = useCompareStore()
@@ -292,21 +345,24 @@ export default function ProductDetailPage() {
     if (!variant || !inStock) return
     setAdding(true)
     try {
-      // نحوه تسویه این قلم — پلاتینیوم همان گزینه انتخابی روی صفحه، بقیه بر اساس سطح
+      // نحوه تسویه این قلم — پلاتینیوم همان گزینه انتخابی روی صفحه؛ سیلور/گلد/عمومی همیشه نقدی
+      // (ستون یکماهه/توحسابی فقط مبنای قیمت آن‌هاست و در price_for_settlement لحاظ می‌شود)
       const tier = pricing?.tier
-      const settlement = tier === 'platinum' ? payOption
-        : tier === 'gold' ? 'credit'
-        : tier === 'silver' ? 'month1' : 'cash'
+      const settlement = tier === 'platinum' ? payOption : 'cash'
       if (isPartner()) {
         await orderService.addToInquiryCart(variant.id, qty, settlement)
+        // کش سبد استعلام باطل شود — وگرنه صفحه سبد تا ۵ دقیقه نسخه قدیمی (خالی) را نشان می‌دهد
+        qc.invalidateQueries(['inquiry-cart'])
       } else {
         await orderService.addToCart(variant.id, qty, settlement)
+        qc.invalidateQueries(['cart'])
       }
       increment()
       setAdded(true)
       setTimeout(() => setAdded(false), 2000)
     } catch (e) {
       console.error(e)
+      toast.error(e.response?.data?.error || 'خطا در افزودن به سبد. لطفاً دوباره تلاش کنید.')
     } finally {
       setAdding(false)
     }
@@ -503,6 +559,26 @@ export default function ProductDetailPage() {
               ) : availability === 'coming_soon' ? (
                 <div>
                   <div className="font-medium text-blue-500 dark:text-cyan">🔜 به‌زودی</div>
+                  {/* قیمت برای محصولات «به‌زودی» هم نمایش داده می‌شود — فقط افزودن به سبد غیرفعال است */}
+                  {displayPrice != null && (
+                    <div className="mt-2">
+                      <div className="text-xs text-gray-steel mb-1">{priceLabel}</div>
+                      <div className="text-2xl font-bold text-brand dark:text-cyan">
+                        {Number(displayPrice).toLocaleString('fa-IR')}
+                        <span className="text-sm font-normal text-gray-steel mr-1">ریال</span>
+                      </div>
+                      {pricing?.original_price && !isPlatinum && (
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          <span className="text-xs text-gray-steel line-through">
+                            {Number(pricing.original_price).toLocaleString('fa-IR')} ریال
+                          </span>
+                          <span className="text-xs bg-alert-red/10 text-alert-red px-2 py-0.5 rounded-full">
+                            ٪{Number(pricing.discount_percent).toLocaleString('fa-IR')} تخفیف
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div className="text-xs text-gray-steel mt-1">این محصول در راه است — برای اطلاع از موجود شدن با ما در تماس باشید.</div>
                 </div>
               ) : availability === 'discontinued' ? (
@@ -607,10 +683,10 @@ export default function ProductDetailPage() {
                 </div>
               )}
 
-              {/* هشدار پیش‌خرید — تعداد بیشتر از موجودی انبار */}
+              {/* هشدار موجودی — تعداد بیشتر از موجودی قابل فروش پذیرفته نمی‌شود */}
               {variant && qty > (variant.available_stock || 0) && (
-                <div className="text-[11px] text-yellow-500 bg-yellow-500/10 rounded-lg px-3 py-2 mt-2">
-                  ⏳ {(qty - (variant.available_stock || 0)).toLocaleString('fa-IR')} عدد از این سفارش بیشتر از موجودی انبار است و به‌صورت <b>پیش‌خرید</b> تامین می‌شود (زمان‌بر).
+                <div className="text-[11px] text-alert-red bg-alert-red/10 rounded-lg px-3 py-2 mt-2">
+                  ⚠️ درخواست شما بیشتر از موجودی است — حداکثر {(variant.available_stock || 0).toLocaleString('fa-IR')} عدد قابل سفارش است.
                 </div>
               )}
 
@@ -677,7 +753,7 @@ export default function ProductDetailPage() {
       <ProductPackages productId={product.id} />
 
       {/* نمودار قیمت */}
-      <PriceChart slug={product.slug} />
+      <PriceChart slug={product.slug} variantId={variant?.id} />
 
       {/* جایگزین‌های پیشنهادی */}
       <SimilarProducts slug={product.slug} />

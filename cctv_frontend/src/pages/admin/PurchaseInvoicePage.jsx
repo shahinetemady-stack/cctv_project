@@ -7,6 +7,8 @@ import AmountInput from '../../components/ui/AmountInput'
 import SearchSelect, { advanceFlow } from '../../components/ui/SearchSelect'
 import { printPurchaseInvoice } from '../../utils/purchasePrint'
 import { UserStamp } from '../../components/ui'
+import AddContactModal from '../../components/accounting/AddContactModal'
+import JalaliDateInput from '../../components/ui/JalaliDateInput'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 
@@ -264,7 +266,7 @@ function InvoiceDetail({ id, onClose, onEdit }) {
               )}
               <div>
                 <label className="label text-xs mb-1 block">تاریخ</label>
-                <input type="date" value={payForm.date} onChange={e => setPayForm(f => ({ ...f, date: e.target.value }))} className="input text-xs" />
+                <JalaliDateInput value={payForm.date} onChange={v => setPayForm(f => ({ ...f, date: v }))} className="input text-xs" />
               </div>
               <div>
                 <label className="label text-xs mb-1 block">نوع</label>
@@ -314,6 +316,10 @@ function InvoiceDetail({ id, onClose, onEdit }) {
 // ═══════════════════════════════════════════════════════════════
 function NewInvoiceForm({ onClose, onSuccess, editing }) {
   const [ptype, setPtype] = useState('domestic') // نوع خرید — داخلی (رسید مستقیم) | خارجی (دو مرحله‌ای)
+  const { creatableContactTypes } = usePermissions()
+  // مودال ساخت سریع طرف حساب — 'supplier' (تامین‌کننده) یا 'shipper' (شرکت حمل)
+  const [quickAdd, setQuickAdd] = useState(null)
+  const canQuickAdd = (t) => creatableContactTypes === null || creatableContactTypes.includes(t)
   // نرخ یوان مرجع — پیش‌پر کردن «نرخ یوان خرید» در خرید خارجی
   const { data: rateData } = useQuery({
     queryKey: ['exchange-rate'],
@@ -352,7 +358,7 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
     note: '',
   })
   const [items, setItems] = useState([{
-    variant_id: '', quantity: '', carton_count: '1',
+    variant_id: '', quantity: '',
     unit_price_cny: '', unit_price_irr: '', note: '',
   }])
   const [extras, setExtras] = useState([])
@@ -391,7 +397,7 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
       unit_price_cny: String(it.unit_price_cny ?? ''),
       unit_price_irr: String(it.unit_price_irr ?? ''),
       note: it.note || '',
-    })) : [{ variant_id: '', quantity: '', carton_count: '1', unit_price_cny: '', unit_price_irr: '', note: '' }])
+    })) : [{ variant_id: '', quantity: '', unit_price_cny: '', unit_price_irr: '', note: '' }])
     setExtras((editInv.extra_costs || []).map(e => ({
       cost_type: e.cost_type,
       amount_irr: String(e.amount_irr ?? ''),
@@ -428,7 +434,7 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
   const transitWarehouses = warehouses.filter(w => TRANSIT_TYPES.includes(w.warehouse_type))
   const otherWarehouses = warehouses.filter(w => !TRANSIT_TYPES.includes(w.warehouse_type))
 
-  function addItem() { setItems(i => [...i, { variant_id: '', quantity: '', carton_count: '1', unit_price_cny: '', unit_price_irr: '', note: '' }]) }
+  function addItem() { setItems(i => [...i, { variant_id: '', quantity: '', unit_price_cny: '', unit_price_irr: '', note: '' }]) }
   function removeItem(idx) { setItems(i => i.filter((_, j) => j !== idx)) }
   function updateItem(idx, key, val) {
     setItems(i => i.map((it, j) => j === idx ? { ...it, [key]: val } : it))
@@ -471,8 +477,8 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
       // ردیف‌های کاملاً خالی (مثل ردیف خودکار Enter) نادیده گرفته می‌شوند
       const filled = items.filter(it => it.variant_id || it.quantity || it.unit_price_cny)
       if (!filled.length) return setMsg({ type: 'error', text: 'حداقل یک قلم کالا وارد کنید' })
-      if (filled.some(it => !it.variant_id || !it.quantity || !it.unit_price_cny || !it.carton_count)) {
-        return setMsg({ type: 'error', text: 'تمام اقلام: کالا، تعداد، تعداد کارتن و قیمت یوان الزامی است' })
+      if (filled.some(it => !it.variant_id || !it.quantity || !it.unit_price_cny)) {
+        return setMsg({ type: 'error', text: 'تمام اقلام: کالا، تعداد و قیمت یوان الزامی است' })
       }
       createMut.mutate({
         supplier_id: hdr.supplier_id,
@@ -505,8 +511,8 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
         if (items.some(it => !it.variant_id || !it.quantity || !it.unit_price_irr)) {
           return setMsg({ type: 'error', text: 'تمام اقلام: کالا، تعداد و قیمت ریالی الزامی است' })
         }
-      } else if (items.some(it => !it.variant_id || !it.quantity || !it.unit_price_cny || !it.carton_count)) {
-        return setMsg({ type: 'error', text: 'تمام اقلام: کالا، تعداد، تعداد کارتن و قیمت یوان الزامی است' })
+      } else if (items.some(it => !it.variant_id || !it.quantity || !it.unit_price_cny)) {
+        return setMsg({ type: 'error', text: 'تمام اقلام: کالا، تعداد و قیمت یوان الزامی است' })
       }
       payload.items = items.map(it => ({
         variant_id: it.variant_id,
@@ -526,6 +532,21 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
 
   return (
     <div className="space-y-5">
+      {/* ساخت سریع طرف حساب — تامین‌کننده / شرکت حمل (مثل فاکتور فروش) */}
+      {quickAdd === 'supplier' && (
+        <AddContactModal
+          creatableTypes={['supplier_cn']}
+          onClose={() => setQuickAdd(null)}
+          onCreated={c => { qc.invalidateQueries(['contacts']); setHdr(h => ({ ...h, supplier_id: c.id })); setQuickAdd(null) }}
+        />
+      )}
+      {quickAdd === 'shipper' && (
+        <AddContactModal
+          creatableTypes={['shipping_co']}
+          onClose={() => setQuickAdd(null)}
+          onCreated={c => { qc.invalidateQueries(['contacts']); setHdr(h => ({ ...h, shipping_contact_id: c.id })); setQuickAdd(null) }}
+        />
+      )}
       {editing ? (
         <div className="bg-brand/10 border border-brand/30 rounded-xl p-4">
           <div className="text-brand text-sm font-bold mb-1">✏️ ویرایش فاکتور {editInv?.invoice_number || `#${editing}`}</div>
@@ -570,7 +591,13 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
         <h3 className="text-sm font-semibold text-white mb-4">اطلاعات سفارش</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="label text-xs mb-1 block">تامین‌کننده *</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="label text-xs block">تامین‌کننده *</label>
+              {canQuickAdd('supplier_cn') && (
+                <button type="button" onClick={() => setQuickAdd('supplier')}
+                  className="text-xs text-brand hover:text-brand/80 font-semibold">+ طرف حساب جدید</button>
+              )}
+            </div>
             <SearchSelect
               options={suppliers.map(c => ({ value: c.id, label: c.name, sub: c.phone }))}
               value={hdr.supplier_id}
@@ -581,7 +608,13 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
           </div>
           {ptype === 'foreign' && (
             <div>
-              <label className="label text-xs mb-1 block">شرکت حمل</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="label text-xs block">شرکت حمل</label>
+                {canQuickAdd('shipping_co') && (
+                  <button type="button" onClick={() => setQuickAdd('shipper')}
+                    className="text-xs text-brand hover:text-brand/80 font-semibold">+ طرف حساب جدید</button>
+                )}
+              </div>
               <SearchSelect
                 options={shippers.map(c => ({ value: c.id, label: c.name, sub: c.phone }))}
                 value={hdr.shipping_contact_id}
@@ -593,9 +626,8 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
           )}
           <div>
             <label className="label text-xs mb-1 block">تاریخ سفارش *</label>
-            <input type="date" value={hdr.date}
-              onChange={e => setHdr(h => ({ ...h, date: e.target.value }))}
-              className="input text-sm" />
+            <JalaliDateInput value={hdr.date}
+              onChange={v => setHdr(h => ({ ...h, date: v }))} />
           </div>
           {ptype === 'foreign' && (
             <div>
@@ -699,13 +731,7 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); advanceFlow('pi', e.target) } }}
                     className="input text-xs" disabled={!itemsEditable} />
                 </div>
-                {ptype === 'foreign' && (
-                  <div>
-                    <label className="label text-[10px] mb-1 block">تعداد کارتن</label>
-                    <AmountInput value={item.carton_count} onChange={e => updateItem(idx, 'carton_count', e.target.value)} className="input text-xs" disabled={!itemsEditable} />
-                  </div>
-                )}
-                <div className={ptype === 'domestic' ? 'col-span-2 md:col-span-2' : ''}>
+                <div>
                   <label className="label text-[10px] mb-1 block">{ptype === 'domestic' ? 'قیمت واحد (ریال) *' : 'قیمت واحد (¥) *'}</label>
                   <PriceWithLast
                     value={ptype === 'domestic' ? (item.unit_price_irr || '') : item.unit_price_cny}
@@ -725,20 +751,49 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
                     disabled={!itemsEditable}
                   />
                 </div>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="text-xs text-gray-steel">
-                  جمع: <span className="font-bold text-blue-400">
+                <div>
+                  <label className="label text-[10px] mb-1 block">قیمت کل</label>
+                  <div className="input text-xs bg-brand/10 text-gold font-bold flex items-center justify-center min-h-[38px]">
                     {fmt((Number(item.quantity) || 0) * (Number(ptype === 'domestic' ? item.unit_price_irr : item.unit_price_cny) || 0))} {ptype === 'domestic' ? 'ریال' : '¥'}
-                  </span>
+                  </div>
                 </div>
-                {itemsEditable && items.length > 1 && (
-                  <button onClick={() => removeItem(idx)} className="text-xs text-red-400 hover:text-red-300">× حذف</button>
-                )}
               </div>
+              {itemsEditable && items.length > 1 && (
+                <div className="flex justify-end">
+                  <button onClick={() => removeItem(idx)} className="text-xs text-red-400 hover:text-red-300">× حذف</button>
+                </div>
+              )}
             </div>
           ))}
         </div>
+        {(() => {
+          const itemsTotal = items.reduce((s, it) =>
+            s + (Number(it.quantity) || 0) * (Number(ptype === 'domestic' ? it.unit_price_irr : it.unit_price_cny) || 0), 0)
+          const extrasTotal = extras.reduce((s, e) => s + (Number(e.amount_irr) || 0), 0)
+          const rate = Number(hdr.rate_purchase_cny) || 0
+          return (
+            <div className="mt-4 pt-3 border-t border-white/10 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-white">جمع کل</span>
+                <span className="text-gold font-bold text-base">
+                  {fmt(itemsTotal)} {ptype === 'domestic' ? 'ریال' : '¥'}
+                </span>
+              </div>
+              {ptype === 'foreign' && rate > 0 && itemsTotal > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-steel">معادل ریالی (نرخ {fmt(rate)})</span>
+                  <span className="text-xs text-white">{fmt(itemsTotal * rate)} ریال</span>
+                </div>
+              )}
+              {ptype === 'domestic' && extrasTotal > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-steel">جمع با هزینه‌های جانبی</span>
+                  <span className="text-xs text-white">{fmt(itemsTotal + extrasTotal)} ریال</span>
+                </div>
+              )}
+            </div>
+          )
+        })()}
       </div>
 
       {editing && (
@@ -1077,7 +1132,7 @@ function PendingReceiveList({ onSelect }) {
               <td style={{ padding: '10px 12px', textAlign: 'center' }}>{inv.items_count}</td>
               <td style={{ padding: '10px 12px', color: '#0066FF' }}>{fmt(inv.total_cny)} ¥</td>
               <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                <UserStamp createdBy={inv.created_by} />
+                <UserStamp createdBy={inv.created_by} createdAt={inv.created_at} />
               </td>
               <td style={{ padding: '10px 12px' }}>
                 {can('purchase_edit') && (

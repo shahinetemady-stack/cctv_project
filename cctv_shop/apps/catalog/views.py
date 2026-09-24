@@ -102,7 +102,7 @@ class ProductListView(generics.ListAPIView):
                        is_featured, discounted, search + فیلترهای اختصاصی هر نوع
                        (board_system, sensor_name, lens_type, modem_type, ...)
                        + فیلترهای پویا: spec_<key> بر اساس ویژگی‌های دسته
-    مرتب‌سازی: ?ordering=name / -name / created_at / -created_at
+    مرتب‌سازی: ?ordering=name / -name / created_at / -created_at / price / -price
     """
     serializer_class = ProductListSerializer
     permission_classes = [AllowAny]
@@ -111,6 +111,29 @@ class ProductListView(generics.ListAPIView):
     search_fields = ["name", "brand", "model_number", "board_name", "sensor_name", "lens_name", "keywords"]
     ordering_fields = ["name", "created_at", "is_featured"]
     ordering = ["-is_featured", "-created_at"]
+
+    def filter_queryset(self, queryset):
+        queryset = super().filter_queryset(queryset)
+        ordering = self.request.query_params.get("ordering")
+        if ordering not in ("price", "-price"):
+            return queryset
+        # مرتب‌سازی بر اساس کمترین قیمت فرمول هر محصول (همان min_price کارت محصول).
+        # چون قیمت محاسباتی است و فیلد دیتابیس نیست، بعد از اعمال فیلترها در
+        # پایتون مرتب می‌شود؛ محصولات بدون قیمت همیشه آخر لیست می‌آیند.
+        from .pricing import formula_prices, user_price_key
+        key, _ = user_price_key(self.request.user)
+
+        def min_price(product):
+            # واریانتها با prefetch فقط فعال‌ها هستند
+            prices = [formula_prices(v)[key] for v in product.variants.all()]
+            return min(prices) if prices else None
+
+        priced, unpriced = [], []
+        for product in queryset:
+            price = min_price(product)
+            (priced if price is not None else unpriced).append((price, product))
+        priced.sort(key=lambda t: t[0], reverse=ordering.startswith("-"))
+        return [p for _, p in priced] + unpriced
 
     def get_queryset(self):
         # پرسنل (is_staff) با ?include_inactive=1 همه محصولات را می‌بینند — برای صفحه
@@ -127,7 +150,8 @@ class ProductListView(generics.ListAPIView):
                 # همه تصاویر prefetch شوند تا fallback سریالایزر (اولین تصویر
                 # در صورت نبود تصویر اصلی) درست کار کند؛ ترتیب مدل primary را اول می‌آورد
                 Prefetch("images", queryset=ProductImage.objects.all()),
-                Prefetch("variants", queryset=ProductVariant.objects.filter(is_active=True)),
+                Prefetch("variants", queryset=ProductVariant.objects.filter(is_active=True)
+                         .prefetch_related("warehouse_stocks__warehouse")),
             )
         )
         p = self.request.query_params
@@ -435,7 +459,8 @@ class ProductSearchView(APIView):
                 # همه تصاویر prefetch شوند تا fallback سریالایزر (اولین تصویر
                 # در صورت نبود تصویر اصلی) درست کار کند؛ ترتیب مدل primary را اول می‌آورد
                 Prefetch("images", queryset=ProductImage.objects.all()),
-                Prefetch("variants", queryset=ProductVariant.objects.filter(is_active=True)),
+                Prefetch("variants", queryset=ProductVariant.objects.filter(is_active=True)
+                         .prefetch_related("warehouse_stocks__warehouse")),
             )[:20]
         )
 
@@ -641,8 +666,8 @@ class SimilarProductsView(APIView):
         except Product.DoesNotExist:
             return Response([])
 
-        # بررسی موجودی
-        total_stock = sum(v.stock_quantity for v in product.variants.filter(is_active=True))
+        # بررسی موجودی (فقط انبارهای با تیک «نمایش به مشتری»)
+        total_stock = sum(v.sellable_stock for v in product.variants.filter(is_active=True))
 
         # همیشه محصولات مشابه برمی‌گردانیم (حتی اگر موجود باشد)
         filters = Q(is_active=True) & ~Q(id=product.id)
@@ -676,7 +701,8 @@ class SimilarProductsView(APIView):
         result = []
         for p in similar[:3]:
             variants = p.variants.filter(is_active=True)
-            stock = sum(v.stock_quantity for v in variants)
+            # موجودی نمایشی به مشتری = فقط انبارهای با تیک «نمایش به مشتری»
+            stock = sum(v.sellable_stock for v in variants)
             first_image = p.images.first()
             result.append({
                 'id': p.id,
@@ -802,30 +828,40 @@ class PackageDetailView(APIView):
 
 
 class ProductPriceHistoryView(APIView):
-    """GET /api/catalog/products/<slug>/price-history/ — تاریخچه قیمت ۳۰ روزه"""
+    """GET /api/catalog/products/<slug>/price-history/ — تاریخچه قیمت ۹۰ روزه"""
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
         from datetime import date, timedelta
         from .models import ProductPriceHistory, Product
+        from .pricing import formula_prices
         try:
             product = Product.objects.get(slug=slug)
         except Product.DoesNotExist:
             return Response([], status=404)
 
-        variant = product.variants.filter(is_active=True).first()
+        variants = product.variants.filter(is_active=True)
+        variant_id = request.query_params.get('variant')
+        variant = variants.filter(id=variant_id).first() if variant_id else variants.first()
         if not variant:
             return Response([])
 
-        # ذخیره قیمت امروز
-        today = date.today()
-        ProductPriceHistory.objects.get_or_create(
-            variant=variant, date=today,
-            defaults={'price_irr': variant.final_price, 'price_cny': variant.purchase_price_cny or 0}
-        )
+        # قیمت فرمول مشتری عمومی — همان قیمتی که در صفحه محصول نمایش داده می‌شود
+        # (نه final_price که فیلد قدیمی است و تخفیف/هزینه‌های دسته را لحاظ نمی‌کند)
+        price_irr = formula_prices(variant)['retail']
 
-        # ۳۰ روز اخیر
-        since = today - timedelta(days=30)
+        # ذخیره قیمت امروز — اگر رکورد امروز با مقدار قدیمی/متفاوت ثبت شده باشد، اصلاح می‌شود
+        today = date.today()
+        rec, created = ProductPriceHistory.objects.get_or_create(
+            variant=variant, date=today,
+            defaults={'price_irr': price_irr, 'price_cny': variant.purchase_price_cny or 0}
+        )
+        if not created and rec.price_irr != price_irr:
+            rec.price_irr = price_irr
+            rec.save(update_fields=['price_irr'])
+
+        # ۹۰ روز اخیر
+        since = today - timedelta(days=90)
         history = ProductPriceHistory.objects.filter(
             variant=variant, date__gte=since
         ).order_by('date')
@@ -1228,6 +1264,17 @@ class PricingOverviewView(APIView):
             **{k: float(getattr(c, k)) for k, _ in PROFIT_TYPES},
         } for c in Category.objects.filter(is_active=True).order_by("sort_order", "name")]
 
+        # موجودی به تفکیک انبار — یک کوئری برای همه واریانت‌ها
+        from apps.inventory.models import WarehouseStock
+        stocks_map = {}
+        for ws in (WarehouseStock.objects
+                   .filter(warehouse__is_active=True, quantity__gt=0)
+                   .select_related("warehouse")):
+            stocks_map.setdefault(ws.variant_id, []).append({
+                "warehouse": ws.warehouse.name, "quantity": ws.quantity,
+                "is_public": ws.warehouse.is_public,
+            })
+
         products = []
         qs = (Product.objects.filter(is_active=True)
               .select_related("category")
@@ -1243,7 +1290,10 @@ class PricingOverviewView(APIView):
                     "purchase_price_cny": float(v.purchase_price_cny),
                     "discount_percent": float(v.discount_percent),
                     "available_stock": v.available_stock,
+                    "stocks": stocks_map.get(v.id, []),
                     "month2_unavailable": v.month2_unavailable,
+                    "month1_unavailable": v.month1_unavailable,
+                    "credit_unavailable": v.credit_unavailable,
                 } for v in p.variants.filter(is_active=True)],
             })
 
@@ -1273,15 +1323,16 @@ def _patch_decimal(instance, data, fields):
 
 
 class PricingVariantView(APIView):
-    """PATCH /api/catalog/pricing/variants/<pk>/ — قیمت خرید یوان + درصد تخفیف + فروش دوماهه"""
+    """PATCH /api/catalog/pricing/variants/<pk>/ — قیمت خرید یوان + درصد تخفیف + «ندارد» انواع فروش"""
     permission_classes = [IsAdminUser]
 
     def patch(self, request, pk):
         v = ProductVariant.objects.filter(pk=pk).first()
         if v is None:
             return Response({"error": "واریانت یافت نشد"}, status=404)
-        if "month2_unavailable" in request.data:
-            v.month2_unavailable = bool(request.data["month2_unavailable"])
+        for flag in ("credit_unavailable", "month1_unavailable", "month2_unavailable"):
+            if flag in request.data:
+                setattr(v, flag, bool(request.data[flag]))
         try:
             _patch_decimal(v, request.data, ["purchase_price_cny", "discount_percent"])
         except ValueError as e:

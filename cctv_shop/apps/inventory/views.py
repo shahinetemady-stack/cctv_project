@@ -69,6 +69,7 @@ class WarehouseSummaryView(APIView):
                 "type": w.get_warehouse_type_display(),
                 "warehouse_type": w.warehouse_type,
                 "is_public": w.is_public, "total_quantity": total,
+                "address": w.address,
             })
         return Response(result)
 
@@ -98,8 +99,49 @@ class WarehouseSummaryView(APIView):
 
 
 class WarehouseDetailView(APIView):
-    """حذف انبار — فقط اگر موجودی و سابقه حرکت نداشته باشد"""
+    """حذف/ویرایش انبار — حذف فقط اگر موجودی و سابقه حرکت نداشته باشد"""
     permission_classes = [IsAdminUser]
+
+    def patch(self, request, pk):
+        """ویرایش مشخصات انبار — نام، کد، نوع، نمایش به مشتری، فعال/غیرفعال، آدرس"""
+        try:
+            w = Warehouse.objects.get(pk=pk)
+        except Warehouse.DoesNotExist:
+            return Response({"error": "انبار یافت نشد"}, status=404)
+
+        data = request.data
+        if "name" in data:
+            name = (data.get("name") or "").strip()
+            if not name:
+                return Response({"error": "نام انبار الزامی است"}, status=400)
+            w.name = name
+        if "code" in data:
+            code = (data.get("code") or "").strip()
+            if not code:
+                return Response({"error": "کد انبار الزامی است"}, status=400)
+            if Warehouse.objects.filter(code=code).exclude(pk=w.pk).exists():
+                return Response({"error": "این کد انبار قبلاً ثبت شده است"}, status=400)
+            w.code = code
+        if "warehouse_type" in data:
+            if data["warehouse_type"] not in Warehouse.Type.values:
+                return Response({"error": "نوع انبار نامعتبر است"}, status=400)
+            w.warehouse_type = data["warehouse_type"]
+        if "is_public" in data:
+            w.is_public = bool(data.get("is_public"))
+        if "is_active" in data:
+            w.is_active = bool(data.get("is_active"))
+        if "address" in data:
+            w.address = data.get("address") or ""
+
+        w.save()
+        return Response({
+            "id": w.id, "name": w.name, "code": w.code,
+            "type": w.get_warehouse_type_display(),
+            "warehouse_type": w.warehouse_type,
+            "is_public": w.is_public, "is_active": w.is_active,
+            "address": w.address,
+            "total_quantity": w.stocks.aggregate(t=Sum("quantity"))["t"] or 0,
+        })
 
     def delete(self, request, pk):
         try:

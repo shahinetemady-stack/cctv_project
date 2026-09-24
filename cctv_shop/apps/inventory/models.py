@@ -106,14 +106,20 @@ class StockTransfer(AuditMixin):
 
 def get_variant_cost_irr(variant):
     """بهای تمام‌شده ریالی یک کالا برای ارزش‌گذاری موجودی:
-    آخرین فاکتور خرید؛ اگر خریدی ثبت نشده بود، قیمتِ آخرین حرکت «موجودی اول دوره»."""
-    pi = variant.purchase_items.order_by('-invoice__date').first()
+    آخرین فاکتور خرید با هزینه ثبت‌شده؛ اگر خریدی ثبت نشده بود، قیمتِ آخرین حرکت «موجودی اول دوره»؛
+    و در نبود هر دو، برآورد از قیمت خرید یوان کاتالوگ × نرخ روز (تا بهای صفر گزارش نشود)."""
+    pi = variant.purchase_items.filter(unit_cost_irr__gt=0).order_by('-invoice__date').first()
     if pi:
         return pi.unit_cost_irr
     opening = StockMovement.objects.filter(
         variant=variant, movement_type='opening', unit_price__gt=0
     ).order_by('-created_at').first()
-    return opening.unit_price if opening else 0
+    if opening:
+        return opening.unit_price
+    from apps.catalog.models import ExchangeRateSetting
+    rate = float(ExchangeRateSetting.get_instance().rate_cny_to_irt or 0)
+    cny = float(variant.purchase_price_cny or 0) + float(variant.shipping_cost_cny or 0)
+    return int(cny * rate) if cny else 0
 
 
 class StockMovement(AuditMixin):

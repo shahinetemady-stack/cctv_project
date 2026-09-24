@@ -49,6 +49,11 @@ class Contact(AuditableModel):
         PLATINUM = "platinum", "همکار پلاتینیوم"
 
     name         = models.CharField(max_length=200, verbose_name="نام")
+    title        = models.CharField(max_length=10, blank=True,
+                        choices=[("mr", "آقای"), ("mrs", "خانم"), ("company", "شرکت"), ("shop", "فروشگاه")],
+                        verbose_name="عنوان")
+    legacy_purchase_total = models.PositiveBigIntegerField(default=0,
+                        verbose_name="سابقه خرید قبلی خارج از سایت (ریال)")
     contact_type = models.CharField(max_length=20, choices=ContactType.choices, verbose_name="نوع")
     currency     = models.CharField(max_length=5, choices=Currency.choices, default=Currency.CNY, verbose_name="ارز پیش‌فرض")
     phone        = models.CharField(max_length=50, blank=True, verbose_name="موبایل")
@@ -59,11 +64,17 @@ class Contact(AuditableModel):
                         verbose_name="سطح همکار",
                         help_text="فقط برای نوع «همکار» — سیلور/گلد/پلاتینیوم")
     note         = models.TextField(blank=True, verbose_name="توضیحات")
+    credit_limit_irr = models.PositiveBigIntegerField(default=0, verbose_name="سقف اعتبار (ریال)",
+                        help_text="۰ = نامحدود — سقف مجموع بدهی مجاز (حساب باز، چک وصول‌نشده و...)")
+    restriction_override = models.BooleanField(default=False, verbose_name="باز کردن دستی محدودیت",
+                        help_text="اگر فعال باشد، محدودیت‌های خودکار معوقات برای این طرف حساب (و حساب سایت لینک‌شده) اعمال نمی‌شود")
     opening_balance_irr = models.BigIntegerField(default=0, verbose_name="مانده اول دوره (ریال)",
                         help_text="مثبت = طرف حساب به ما بدهکار | منفی = ما به او بدهکاریم")
     opening_balance_cny = models.DecimalField(max_digits=18, decimal_places=2, default=0,
                         verbose_name="مانده اول دوره (یوان)",
                         help_text="مثبت = طرف حساب به ما بدهکار | منفی = ما به او بدهکاریم")
+    has_fx       = models.BooleanField(default=False, verbose_name="عملیات ارزی",
+                        help_text="اگر فعال باشد، ستون‌ها و فیلدهای ارزی (یوان) برای این طرف حساب نمایش داده می‌شود")
     is_active    = models.BooleanField(default=True, verbose_name="فعال")
     created_at   = models.DateTimeField(auto_now_add=True)
     updated_at   = models.DateTimeField(auto_now=True)
@@ -527,8 +538,10 @@ class Account(AuditableModel):
 
 class Payment(AuditMixin):
     class PaymentType(models.TextChoices):
-        CASH     = "cash",     "نقد"
-        TRANSFER = "transfer", "حواله بانکی"
+        CASH     = "cash",     "نقدی"
+        TRANSFER = "transfer", "واریز بانک"
+        CHEQUE   = "cheque",   "اسناد (چک)"
+        DISCOUNT = "discount", "تخفیف"
         INSTALLMENT = "installment", "قسط"
         OTHER    = "other",    "سایر"
 
@@ -557,6 +570,14 @@ class Payment(AuditMixin):
     date         = models.DateField()
     reference    = models.CharField(max_length=100, blank=True)
     note         = models.TextField(blank=True)
+    reversal_of  = models.ForeignKey('self', on_delete=models.SET_NULL,
+                      null=True, blank=True, related_name='reversals',
+                      verbose_name="برگشتِ سند",
+                      help_text="اگر این سند، برگشتِ سند دیگری است به آن لینک می‌شود — حذف انجام نمی‌شود، سند معکوس ثبت می‌شود تا سابقه حفظ شود")
+    paired_with  = models.ForeignKey('self', on_delete=models.SET_NULL,
+                      null=True, blank=True, related_name='paired_by',
+                      verbose_name="طرف مقابل سند انتقال",
+                      help_text="دو رکورد «سند انتقال بین دو طرف حساب» با این فیلد جفت می‌شوند — ویرایش مبلغ/برگشت/حذف همیشه دوطرفه اعمال می‌شود")
     created_by   = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
                       null=True, blank=True)
     created_at   = models.DateTimeField(auto_now_add=True)
@@ -579,6 +600,59 @@ class Payment(AuditMixin):
         if self.currency == 'IRR':
             return int(self.amount)
         return int(self.amount * self.rate_irr)
+
+
+class Cheque(models.Model):
+    """چک/سند — متعلق به یک تراکنش (Payment با روش «اسناد»).
+    چک دریافتی از مشتری (kind=received) وارد صندوق می‌شود (in_hand) و وقتی به
+    تأمین‌کننده واگذار شود (endorsed) به پرداخت مصرف‌کننده لینک می‌شود.
+    چک صادره از حساب خودمان (kind=issued) drawn_account دارد (حساب جاری مبدا)."""
+
+    class Kind(models.TextChoices):
+        RECEIVED = "received", "دریافتی از مشتری"
+        ISSUED   = "issued",   "صادره از حساب ما"
+
+    class Status(models.TextChoices):
+        IN_HAND  = "in_hand",  "در صندوق"
+        DEPOSITED = "deposited", "خوابانده به حساب بانکی"
+        ENDORSED = "endorsed", "واگذار شده"
+        RETURNED = "returned", "برگشت داده شده به مشتری"
+        BOUNCED  = "bounced",  "برگشتی از بانک"
+        ISSUED   = "issued",   "صادر شده"
+
+    payment        = models.ForeignKey(Payment, on_delete=models.CASCADE,
+                        related_name="cheques", verbose_name="تراکنش دریافت/صدور")
+    spent_payment  = models.ForeignKey(Payment, on_delete=models.SET_NULL,
+                        null=True, blank=True, related_name="spent_cheques",
+                        verbose_name="پرداخت مصرف‌کننده",
+                        help_text="اگر چک به تأمین‌کننده واگذار شده، سند پرداختی که با آن انجام شد")
+    drawn_account  = models.ForeignKey('Account', on_delete=models.SET_NULL,
+                        null=True, blank=True, related_name="issued_cheques",
+                        verbose_name="حساب جاری صادرکننده (چک صادره)")
+    deposited_account = models.ForeignKey('Account', on_delete=models.SET_NULL,
+                        null=True, blank=True, related_name="deposited_cheques",
+                        verbose_name="حساب بانکی خوابانده‌شده")
+    sale_invoice     = models.ForeignKey('SaleInvoice', on_delete=models.SET_NULL,
+                        null=True, blank=True, related_name="cheques",
+                        verbose_name="فاکتور فروش مرتبط",
+                        help_text="اگر چک بابت فاکتور مشخصی است — هنگام وصول خودکار به همان فاکتور تخصیص می‌یابد")
+    kind           = models.CharField(max_length=10, choices=Kind.choices, default=Kind.RECEIVED, verbose_name="نوع چک")
+    status         = models.CharField(max_length=10, choices=Status.choices, default=Status.IN_HAND, verbose_name="وضعیت")
+    serial_number  = models.CharField(max_length=50, verbose_name="شماره چک")
+    account_number = models.CharField(max_length=50, blank=True, verbose_name="شماره حساب چک")
+    bank_branch    = models.CharField(max_length=100, blank=True, verbose_name="شعبه بانک")
+    cheque_date    = models.DateField(verbose_name="تاریخ چک")
+    amount         = models.PositiveBigIntegerField(verbose_name="مبلغ چک (ریال)")
+    created_at     = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "accounting_cheque"
+        verbose_name = "چک"
+        verbose_name_plural = "چک‌ها"
+        ordering = ["cheque_date", "id"]
+
+    def __str__(self):
+        return f"چک {self.serial_number} | {self.amount:,} ریال | {self.cheque_date}"
 
 
 def generate_invoice_number():
@@ -635,6 +709,11 @@ class SaleInvoice(AuditMixin):
                     related_name='sale_invoices')
     customer_name = models.CharField(max_length=200, blank=True)
     customer_phone = models.CharField(max_length=20, blank=True)
+    seller = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name='sold_invoices',
+                    verbose_name="فروشنده",
+                    help_text="پرسنل فروشنده — مبنای پورسانت فروش شخصی؛ "
+                    "اگر خالی بماند، ثبت‌کننده فاکتور محسوب می‌شود")
     discount_amount = models.PositiveBigIntegerField(default=0)
     shipping_cost   = models.PositiveBigIntegerField(default=0)
     tax_amount      = models.PositiveBigIntegerField(default=0)
@@ -756,10 +835,21 @@ class SaleItem(models.Model):
 
     @property
     def unit_cost(self):
-        """میانگین وزنی بهای تمام شده از آخرین فاکتور خرید"""
-        items = self.variant.purchase_items.filter(unit_cost_irr__gt=0).order_by('-invoice__date')
-        item = items.first()
-        return item.unit_cost_irr if item else 0
+        """بهای تمام‌شده: آخرین فاکتور خرید با هزینه ثبت‌شده؛ در نبود آن، بهای «موجودی اول دوره»؛
+        و اگر هیچ‌کدام نبود، برآورد از قیمت خرید یوان کاتالوگ × نرخ روز (تا بهای صفر گزارش نشود)."""
+        item = self.variant.purchase_items.filter(unit_cost_irr__gt=0).order_by('-invoice__date').first()
+        if item:
+            return item.unit_cost_irr
+        from apps.inventory.models import StockMovement
+        opening = StockMovement.objects.filter(
+            variant=self.variant, movement_type='opening', unit_price__gt=0
+        ).order_by('-created_at').first()
+        if opening:
+            return opening.unit_price
+        from apps.catalog.models import ExchangeRateSetting
+        rate = float(ExchangeRateSetting.get_instance().rate_cny_to_irt or 0)
+        cny = float(self.variant.purchase_price_cny or 0) + float(self.variant.shipping_cost_cny or 0)
+        return int(cny * rate) if cny else 0
 
     @property
     def total_cost(self):
@@ -776,9 +866,14 @@ class SalePayment(AuditMixin):
         TRANSFER = "transfer", "حواله بانکی"
         CARD     = "card",     "کارت به کارت"
         ONLINE   = "online",   "پرداخت آنلاین"
+        CHEQUE   = "cheque",   "چک"
         CREDIT   = "credit",   "نسیه (حساب باز)"
 
     invoice    = models.ForeignKey(SaleInvoice, on_delete=models.CASCADE, related_name='sale_payments')
+    cheque     = models.ForeignKey('Cheque', on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name='sale_payments',
+                    verbose_name="چک مرتبط",
+                    help_text="اگر این دریافت از وصول یک چک آمده — برای برگشت خودکار هنگام برگشت چک")
     to_account = models.ForeignKey('Account', on_delete=models.SET_NULL,
                     null=True, blank=True, related_name='sale_receipts')
     method     = models.CharField(max_length=20, choices=PaymentMethod.choices)
@@ -947,10 +1042,12 @@ class PaymentReceipt(AuditMixin):
 
 
 class ReceiptAllocation(models.Model):
-    """تخصیص مبلغی از یک فیش تأییدشده به یک ردیف تسویه."""
+    """تخصیص مبلغی از یک فیش تأییدشده به یک ردیف تسویه.
+    receipt=None یعنی تخصیص از «بستانکاری نقدی» مشتری (اضافه‌واریزی قبلی)."""
 
     receipt = models.ForeignKey(
         PaymentReceipt, on_delete=models.CASCADE,
+        null=True, blank=True,
         related_name="allocations", verbose_name="فیش واریزی",
     )
     settlement_line = models.ForeignKey(

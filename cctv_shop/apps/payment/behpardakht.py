@@ -26,6 +26,7 @@ apps/payment/behpardakht.py
 import logging
 from typing import Optional
 from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape
 
 import requests
 from django.conf import settings
@@ -59,7 +60,7 @@ _SOAP_HEADERS = {
 
 
 def _param(name: str, value) -> str:
-    return f"<{name}>{value}</{name}>"
+    return f"<{name}>{escape(str(value))}</{name}>"
 
 
 def _soap_call(method: str, params: dict) -> Optional[str]:
@@ -100,21 +101,20 @@ def _soap_call(method: str, params: dict) -> Optional[str]:
 # ─── Gateway Methods ──────────────────────────────────────────────────────────
 
 def bp_pay_request(
-    amount_toman: int,
-    order_id: str,
+    amount_rial: int,
+    order_id: int,
     local_date: str,
     local_time: str,
     additional_data: str = "",
-    payer_email: str = "",
     payer_id: str = "",
 ) -> dict:
     """
     مرحله ۱ — دریافت توکن پرداخت از بانک.
 
-    amount_toman: مبلغ به تومان — داخلاً به ریال تبدیل می‌شود (× ۱۰)
-    order_id    : شماره سفارش ما (order_number)
-    local_date  : تاریخ شمسی YYYYMMDD
-    local_time  : ساعت HHMMSS
+    amount_rial: مبلغ به ریال (قرارداد کل پروژه ریال است — هیچ تبدیلی اینجا انجام نمی‌شود)
+    order_id   : شناسه عددی یکتای تراکنش — بانک فقط عدد (long) قبول می‌کند
+    local_date : تاریخ میلادی سرور YYYYMMDD
+    local_time : ساعت HHMMSS
 
     Returns:
       {"success": True,  "token": 1234567890, "amount_rial": 150000}
@@ -129,14 +129,12 @@ def bp_pay_request(
         logger.error("[BANK] Behpardakht credentials not configured.")
         return {"success": False, "error": "اعتبارنامه درگاه پیکربندی نشده است."}
 
-    amount_rial = amount_toman * 10
-
     params = {
         "terminalId":     terminal_id,
         "userName":       username,
         "userPassword":   password,
-        "orderId":        order_id,
-        "amount":         amount_rial,
+        "orderId":        int(order_id),
+        "amount":         int(amount_rial),
         "localDate":      local_date,
         "localTime":      local_time,
         "additionalData": additional_data or "",
@@ -162,9 +160,9 @@ def bp_pay_request(
         logger.error(f"[BANK] bpPayRequest: no token in response: {result}")
         return {"success": False, "error": "توکن معتبر از بانک دریافت نشد."}
 
-    token = int(parts[1].strip())
+    token = parts[1].strip()  # RefId — رشته هگز است، نه عدد
     logger.info(f"[BANK] Token received: {token} for order {order_id}")
-    return {"success": True, "token": token, "amount_rial": amount_rial}
+    return {"success": True, "token": token, "amount_rial": int(amount_rial)}
 
 
 def bp_verify_request(
@@ -205,15 +203,13 @@ def bp_verify_request(
         logger.info(f"[BANK] Verify OK: order={order_id}")
         return {"success": True, "res_code": res_code}
 
-    # کد ۴۳ = قبلاً verify شده → باید برگشت داده شود
+    # کد ۴۳ = قبلاً verify شده — یعنی پول مشتری یک بار گرفته شده و verify اول موفق بوده
+    # (معمولاً یعنی callback اول بعد از verify کرش کرده). این را موفق حساب می‌کنیم تا
+    # جریان settle/ثبت سفارش ادامه پیدا کند — reverse خودکار اینجا اشتباه است چون
+    # پرداخت قانونی مشتری را برمی‌گرداند.
     if res_code == "43":
-        logger.warning(f"[BANK] Already verified (43): order={order_id}")
-        bp_reverse_request(order_id, sale_order_id, sale_reference_id)
-        return {
-            "success": False,
-            "error": "تراکنش قبلاً تأیید شده بود و برگشت داده شد.",
-            "res_code": res_code,
-        }
+        logger.warning(f"[BANK] Already verified (43) — treating as success: order={order_id}")
+        return {"success": True, "res_code": res_code}
 
     msg = _res_code_message(res_code)
     logger.warning(f"[BANK] Verify failed: resCode={res_code} order={order_id}")
@@ -285,7 +281,7 @@ def bp_reverse_request(
 
 # ─── Payment URL ──────────────────────────────────────────────────────────────
 
-def get_payment_url(token: int) -> str:
+def get_payment_url(token: str) -> str:
     """URL کامل صفحه پرداخت بانک برای هدایت کاربر."""
     return f"{PAYMENT_PAGE_URL}?RefId={token}"
 

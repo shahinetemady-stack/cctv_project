@@ -17,7 +17,14 @@ export function LoginPage() {
   const [code, setCode] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState(startForgot ? 'حساب این شماره از قبل ساخته شده است؛ کد تأیید را بگیرید و رمز خود را تعیین کنید' : '')
+  const [notice, setNotice] = useState(() => {
+    // نشست منقضی‌شده — api.js قبل از ریدایرکت به ورود این پرچم را می‌گذارد
+    if (sessionStorage.getItem('auth_notice') === 'expired') {
+      sessionStorage.removeItem('auth_notice')
+      return 'نشست شما به دلیل گذشت زمان منقضی شده است؛ لطفاً دوباره وارد شوید'
+    }
+    return startForgot ? 'حساب این شماره از قبل ساخته شده است؛ کد تأیید را بگیرید و رمز خود را تعیین کنید' : ''
+  })
   const [loading, setLoading] = useState(false)
   const from = location.state?.from?.pathname || '/'
 

@@ -96,6 +96,9 @@ function ReturnDetail({ id, onBack }) {
         <div>
           <div className="text-[10px] text-gray-steel mb-0.5">ثبت‌کننده</div>
           <div className="text-white text-xs">{inv.created_by || '—'}</div>
+          {inv.created_at && (
+            <div className="text-[10px] text-gray-steel">{formatDate(inv.created_at, { withTime: true })}</div>
+          )}
         </div>
         {inv.note && (
           <div className="col-span-2">
@@ -176,7 +179,7 @@ function NewReturnForm({ onSuccess }) {
   const { data: sourceInvoices = [] } = useQuery({
     queryKey: ['return-source-invoices', returnType],
     queryFn: () => api.get(returnType === 'sale'
-      ? '/accounting/sale-invoices/'
+      ? '/accounting/sale-invoices/?status=all'
       : '/accounting/purchase-invoices/').then(r => r.data),
   })
 

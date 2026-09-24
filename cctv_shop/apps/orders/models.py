@@ -52,7 +52,7 @@ class Settlement(models.TextChoices):
 # فاصله موعد تسویه (روز) از تاریخ ثبت برای هر نوع
 SETTLEMENT_DUE_DAYS = {
     Settlement.CASH: 0,
-    Settlement.CREDIT: 18,
+    Settlement.CREDIT: 14,
     Settlement.MONTH1: 30,
     Settlement.MONTH2: 60,
 }

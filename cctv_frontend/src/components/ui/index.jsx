@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { formatDate } from '../../utils/date'
 
 // ─── PasswordInput (فیلد رمز با دکمه چشم نمایش/پنهان) ─────────────────────────
 export function PasswordInput({ className = '', style, ...props }) {
@@ -76,7 +77,14 @@ export function UserStamp({ createdBy, updatedBy, createdAt, updatedAt, inline =
   if (!createdBy && !updatedBy) return <span className="text-gray-steel">—</span>
   return (
     <div className={inline ? 'inline-flex gap-2' : 'space-y-0.5'} style={{ fontSize: 10, color: 'var(--color-text-muted)' }}>
-      {createdBy && <div title={createdAt || ''}>📝 {createdBy}</div>}
+      {createdBy && (
+        <div title={createdAt || ''}>
+          📝 {createdBy}
+          {!inline && createdAt && (
+            <div className="text-[10px] text-gray-steel">{formatDate(createdAt, { withTime: true })}</div>
+          )}
+        </div>
+      )}
       {updatedBy && updatedBy !== createdBy && <div title={updatedAt || ''}>✏️ {updatedBy}</div>}
     </div>
   )
@@ -102,58 +110,3 @@ export function ErrorMessage({ message = 'خطایی رخ داد', retry }) {
   )
 }
 
-// ─── Modal ────────────────────────────────────────────────────────────────────
-export function Modal({ open, onClose, title, children }) {
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative card w-full max-w-md max-h-[90vh] overflow-y-auto animate-slide-up">
-        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-white/5">
-          <h2 className="font-bold text-lg">{title}</h2>
-          <button onClick={onClose} className="btn-ghost p-1 rounded-lg">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        <div className="p-6">{children}</div>
-      </div>
-    </div>
-  )
-}
-
-// ─── Toast ────────────────────────────────────────────────────────────────────
-let _setToasts
-export function ToastContainer() {
-  const [toasts, setToasts] = [[], () => {}]
-  _setToasts = setToasts
-  if (!toasts.length) return null
-  return (
-    <div className="fixed bottom-4 left-4 z-50 flex flex-col gap-2">
-      {toasts.map(t => (
-        <div key={t.id}
-          className={`px-4 py-3 rounded-xl shadow-lg text-sm font-medium animate-slide-up
-            ${t.type === 'success' ? 'bg-alert-green text-white' : ''}
-            ${t.type === 'error' ? 'bg-alert-red text-white' : ''}
-            ${t.type === 'info' ? 'bg-brand text-white' : ''}`}>
-          {t.message}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// سیستم toast ساده — از React state خارج
-let toastId = 0
-export const toast = {
-  success: (msg) => _showToast(msg, 'success'),
-  error:   (msg) => _showToast(msg, 'error'),
-  info:    (msg) => _showToast(msg, 'info'),
-}
-function _showToast(message, type) {
-  if (!_setToasts) { console.log(`[${type}] ${message}`); return }
-  const id = ++toastId
-  _setToasts(prev => [...prev, { id, message, type }])
-  setTimeout(() => _setToasts(prev => prev.filter(t => t.id !== id)), 3000)
-}

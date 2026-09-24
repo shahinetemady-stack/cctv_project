@@ -1,12 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { motion, AnimatePresence, useScroll, useMotionValueEvent } from 'framer-motion'
 import useAuthStore from '../../store/useAuthStore'
 import useCartStore from '../../store/useCartStore'
 import useCompareStore from '../../store/useCompareStore'
 import api from '../../services/api'
-import { filterAdminMenu } from '../../config/adminMenu'
 import TopBar from './header/TopBar'
 import MainNav from './header/MainNav'
 import UserMenu from './header/UserMenu'
@@ -21,15 +19,12 @@ import {
   CameraIcon,
   WhatsAppIcon,
   InstagramIcon,
+  GaugeIcon,
 } from './header/icons'
 
-const SPRING_SNAPPY = { type: 'spring', stiffness: 500, damping: 35 }
-const SPRING_GENTLE = { type: 'spring', stiffness: 200, damping: 25 }
-const SPRING_BOUNCE = { type: 'spring', stiffness: 400, damping: 17 }
-
-// دکمه آیکونی مشترک هدر
+// دکمه آیکونی مشترک هدر — مدل Modern Header: قاب‌دار با glow طلایی روی هاور
 const iconBtn =
-  'w-10 h-10 rounded-xl flex items-center justify-center text-[var(--color-text-secondary)] hover:text-gold hover:bg-white/5 transition-colors'
+  'w-10 h-10 rounded-xl flex items-center justify-center text-[var(--color-text-secondary)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/70 hover:text-gold hover:border-[rgba(var(--color-brand-rgb),0.45)] hover:shadow-[0_0_16px_rgba(var(--color-brand-rgb),0.18)] transition-all'
 
 // ─── هدر اصلی سایت ────────────────────────────────────────────
 export default function Header() {
@@ -44,28 +39,18 @@ export default function Header() {
   const isStaff = user?.is_staff || user?.profile?.user_type === 'staff' || user?.is_superuser || false
   const isPartnerUser = user?.is_partner === true
 
-  const { scrollY } = useScroll()
-  useMotionValueEvent(scrollY, 'change', (v) => setScrolled(v > 8))
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8)
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
 
   const { data: settings } = useQuery({
     queryKey: ['site-settings'],
     queryFn: () => api.get('/core/settings/').then((r) => r.data),
-    staleTime: 0,
+    staleTime: 5 * 60 * 1000,
   })
-
-  // ─── دسترسی‌ها برای منوی ادمین (موبایل) ───
-  const { data: permsData } = useQuery({
-    queryKey: ['my-permissions'],
-    queryFn: () => api.get('/accounting/my-permissions/').then((r) => r.data),
-    staleTime: 60000,
-    enabled: !!user?.is_staff,
-    retry: 1,
-  })
-  const isSuperuser = permsData?.is_superuser || user?.is_superuser || false
-  const perms = permsData?.permissions || []
-  // منوی کاشی‌ای موبایل لینک‌های flat می‌خواهد — گروه‌های تاشو باز می‌شوند
-  const visibleAdminMenu = filterAdminMenu(perms, isSuperuser)
-    .flatMap((item) => (item.children ? item.children : [item]))
 
   // ─── بستن منو با تغییر مسیر ───
   useEffect(() => {
@@ -106,14 +91,12 @@ export default function Header() {
 
   return (
     <>
-      <AnimatePresence>
-        {showLogoUpload && (
-          <LogoUploadModal
-            onClose={() => setShowLogoUpload(false)}
-            onUploaded={(url) => console.log('Logo uploaded:', url)}
-          />
-        )}
-      </AnimatePresence>
+      {showLogoUpload && (
+        <LogoUploadModal
+          onClose={() => setShowLogoUpload(false)}
+          onUploaded={(url) => console.log('Logo uploaded:', url)}
+        />
+      )}
 
       {/* نوار اطلاع‌رسانی */}
       <TopBar settings={settings} />
@@ -124,33 +107,27 @@ export default function Header() {
         onCloseMenu={() => setMobileMenuOpen(false)}
         user={user}
         isStaff={isStaff}
-        adminMenu={visibleAdminMenu}
         onLogout={handleLogout}
       />
 
-      {/* ─── نوار هدر ─────────────────────────────────────────── */}
-      <motion.header
-        className={`sticky top-0 z-50 glass pt-safe transition-shadow ${
-          scrolled ? 'shadow-[var(--shadow-header)]' : ''
-        }`}
-        initial={{ y: -20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={SPRING_GENTLE}
+      {/* ─── نوار هدر — پیل شناور (مدل Modern Header) ────────── */}
+      <header
+        className={`site-header pt-safe animate-header-in ${scrolled ? 'scrolled' : ''}`}
       >
+        {/* خط اسکن متحرک روی لبه بالا */}
+        <div className="hd-scan" aria-hidden="true" />
         <div className="container-site flex items-center gap-2 h-16 relative">
           {/* منوی همبرگری (موبایل) */}
-          <motion.button
+          <button
             onClick={() => setMobileMenuOpen(true)}
-            className={`${iconBtn} md:hidden`}
+            className={`${iconBtn} md:hidden transition-transform active:scale-[0.92]`}
             aria-label="منو"
-            whileTap={{ scale: 0.92 }}
-            transition={SPRING_SNAPPY}
           >
             <MenuIcon />
-          </motion.button>
+          </button>
 
           {/* لوگو */}
-          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} transition={SPRING_SNAPPY}>
+          <div className="transition-transform hover:scale-[1.02] active:scale-[0.98]">
             <Link to="/" className="flex items-center gap-2.5 group flex-shrink-0">
               {settings?.site_logo ? (
                 <div className="relative">
@@ -178,14 +155,18 @@ export default function Header() {
                 </div>
               ) : (
                 <div className="relative">
-                  <motion.div
-                    whileHover={{ rotate: -8, scale: 1.05 }}
-                    transition={SPRING_SNAPPY}
-                    className="w-9 h-9 rounded-xl flex items-center justify-center"
-                    style={{ background: 'var(--gradient-gold)', boxShadow: 'var(--shadow-gold)' }}
+                  <div
+                    className="w-10 h-10 rounded-[13px] flex items-center justify-center transition-transform duration-500 group-hover:rotate-[-8deg] group-hover:scale-105"
+                    style={{
+                      background: 'var(--color-brand-soft)',
+                      border: '1px solid rgba(var(--color-brand-rgb), 0.35)',
+                      color: 'var(--color-brand)',
+                      boxShadow: '0 0 22px rgba(var(--color-brand-rgb), 0.22)',
+                    }}
                   >
-                    <CameraIcon style={{ color: 'var(--color-brand-contrast)' }} />
-                  </motion.div>
+                    <CameraIcon />
+                  </div>
+                  <span className="brand-dot" aria-hidden="true" />
                   {isStaff && (
                     <button
                       onClick={(e) => {
@@ -210,108 +191,93 @@ export default function Header() {
                 </span>
               </div>
             </Link>
-          </motion.div>
+          </div>
 
           {/* دکمه‌های سمت چپ */}
           <div className="flex items-center gap-1 md:gap-1.5 flex-shrink-0 mr-auto">
             {/* سوشیال مدیا (دسکتاپ) — با رنگ رسمی هر برند، هم‌سبک فوتر */}
             <div className="hidden lg:flex items-center gap-1.5">
               {settings?.whatsapp_number && (
-                <motion.a
+                <a
                   href={`https://wa.me/${settings.whatsapp_number.replace(/[^0-9]/g, '')}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   title="واتساپ"
-                  className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:scale-110"
+                  className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:scale-110 active:scale-[0.92]"
                   style={{ background: '#25D36620', color: '#25D366', border: '1px solid #25D36640' }}
-                  whileTap={{ scale: 0.92 }}
                 >
                   <WhatsAppIcon />
-                </motion.a>
+                </a>
               )}
               {settings?.instagram_username && (
-                <motion.a
+                <a
                   href={`https://instagram.com/${settings.instagram_username}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   title="اینستاگرام"
-                  className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:scale-110"
+                  className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:scale-110 active:scale-[0.92]"
                   style={{ background: '#E1306C20', color: '#E1306C', border: '1px solid #E1306C40' }}
-                  whileTap={{ scale: 0.92 }}
                 >
                   <InstagramIcon />
-                </motion.a>
+                </a>
               )}
               {settings?.bale_username && (
-                <motion.a
+                <a
                   href={`https://ble.ir/${settings.bale_username}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   title="بله"
-                  className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:scale-110 text-[10px] font-bold"
+                  className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:scale-110 active:scale-[0.92] text-[10px] font-bold"
                   style={{ background: '#0088cc20', color: '#0088cc', border: '1px solid #0088cc40' }}
-                  whileTap={{ scale: 0.92 }}
                 >
                   بله
-                </motion.a>
+                </a>
               )}
             </div>
 
             {/* دکمه پنل مدیریت (موبایل) */}
             {isStaff && (
-              <motion.div whileTap={{ scale: 0.92 }} transition={SPRING_SNAPPY}>
+              <div className="transition-transform active:scale-[0.92]">
                 <Link to="/admin/dashboard" className={`${iconBtn} md:hidden`} title="پنل مدیریت">
                   <GridIcon />
                 </Link>
-              </motion.div>
+              </div>
             )}
 
             {/* تعویض تم دارک/لایت */}
             <ThemeToggle className={iconBtn} />
 
             {/* مقایسه محصولات */}
-            <motion.div whileTap={{ scale: 0.92 }} transition={SPRING_SNAPPY} className="relative">
+            <div className="relative transition-transform active:scale-[0.92]">
               <Link to="/compare" className={`${iconBtn} relative`} aria-label="مقایسه محصولات" title="مقایسه محصولات">
-                <span className="text-lg leading-none">⚖</span>
-                <AnimatePresence>
-                  {compareCount > 0 && (
-                    <motion.span
-                      key={compareCount}
-                      initial={{ scale: 0, rotate: -45 }}
-                      animate={{ scale: 1, rotate: 0 }}
-                      exit={{ scale: 0, rotate: 45 }}
-                      transition={SPRING_BOUNCE}
-                      className="absolute -top-0.5 -left-0.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center"
-                      style={{ background: 'var(--gradient-gold)', color: 'var(--color-brand-contrast)' }}
-                    >
-                      {compareCount}
-                    </motion.span>
-                  )}
-                </AnimatePresence>
+                <GaugeIcon />
+                {compareCount > 0 && (
+                  <span
+                    key={compareCount}
+                    className="animate-badge-pop absolute -top-0.5 -left-0.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center"
+                    style={{ background: 'var(--gradient-gold)', color: 'var(--color-brand-contrast)' }}
+                  >
+                    {compareCount}
+                  </span>
+                )}
               </Link>
-            </motion.div>
+            </div>
 
             {/* سبد خرید */}
-            <motion.div whileTap={{ scale: 0.92 }} transition={SPRING_SNAPPY} className="relative">
+            <div className="relative transition-transform active:scale-[0.92]">
               <Link to={isPartnerUser ? '/inquiry-cart' : '/cart'} className={`${iconBtn} relative`} aria-label="سبد خرید">
                 <CartIcon />
-                <AnimatePresence>
-                  {itemCount > 0 && (
-                    <motion.span
-                      key={itemCount}
-                      initial={{ scale: 0, rotate: -45 }}
-                      animate={{ scale: 1, rotate: 0 }}
-                      exit={{ scale: 0, rotate: 45 }}
-                      transition={SPRING_BOUNCE}
-                      className="absolute -top-0.5 -left-0.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center"
-                      style={{ background: 'var(--gradient-gold)', color: 'var(--color-brand-contrast)' }}
-                    >
-                      {itemCount}
-                    </motion.span>
-                  )}
-                </AnimatePresence>
+                {itemCount > 0 && (
+                  <span
+                    key={itemCount}
+                    className="animate-badge-pop absolute -top-0.5 -left-0.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center"
+                    style={{ background: 'var(--gradient-gold)', color: 'var(--color-brand-contrast)' }}
+                  >
+                    {itemCount}
+                  </span>
+                )}
               </Link>
-            </motion.div>
+            </div>
 
             {/* کاربر (دسکتاپ) */}
             <div className="hidden md:flex items-center gap-2">
@@ -320,18 +286,18 @@ export default function Header() {
 
             {/* ورود (موبایل، حالت مهمان) */}
             {!user && (
-              <motion.div whileTap={{ scale: 0.92 }} transition={SPRING_SNAPPY}>
+              <div className="transition-transform active:scale-[0.92]">
                 <Link to="/auth/login" className={`${iconBtn} md:hidden`} aria-label="ورود">
                   <UserIcon />
                 </Link>
-              </motion.div>
+              </div>
             )}
           </div>
         </div>
 
         {/* ناوبری دسکتاپ + مگامنو */}
         <MainNav />
-      </motion.header>
+      </header>
     </>
   )
 }

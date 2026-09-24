@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import api from '../services/api'
 import useAuthStore from '../store/useAuthStore'
+import Globe from '../components/Globe'
 
 export default function ChinaOrderPage() {
   const { user } = useAuthStore()
@@ -49,14 +50,24 @@ export default function ChinaOrderPage() {
   )
 
   return (
-    <div className="container-main py-12 max-w-2xl">
-      {/* هدر */}
-      <div className="text-center mb-10">
-        <div className="text-5xl mb-4">🇨🇳</div>
-        <h1 className="font-display font-bold text-3xl text-white mb-3">سفارش مستقیم از چین</h1>
-        <p className="text-gray-steel text-sm max-w-md mx-auto">
-          کالایی که در سایت ما موجود نیست؟ درخواست خود را ثبت کنید تا کارشناسان ما آن را مستقیماً از چین تهیه کنند.
-        </p>
+    <div className="container-main py-12 max-w-4xl">
+      {/* هدر — متن سمت راست، کره زمین سمت چپ (روی موبایل: متن بالا، کره پایین) */}
+      <div className="china-hero" style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'clamp(4px, 2vw, 20px)',
+        flexWrap: 'wrap', marginBottom: '2.5rem', direction: 'rtl',
+      }}>
+        <div style={{ flex: '0 1 420px', textAlign: 'right' }}>
+          <div className="text-5xl mb-4">🇨🇳</div>
+          <h1 className="font-display font-bold text-5xl mb-4" style={{ color: 'var(--color-text-primary)' }}>
+            سفارش مستقیم از چین
+          </h1>
+          <p className="text-xl" style={{ color: 'var(--color-text-secondary)', lineHeight: 2 }}>
+            کالایی که در سایت ما موجود نیست؟ درخواست خود را ثبت کنید تا کارشناسان ما آن را مستقیماً از چین تهیه کنند.
+          </p>
+        </div>
+        <div style={{ flex: '0 0 auto', width: 'min(450px, 88vw)' }}>
+          <Globe size={450} />
+        </div>
       </div>
 
       {/* مزایا */}

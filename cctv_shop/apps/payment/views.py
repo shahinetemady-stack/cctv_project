@@ -9,6 +9,8 @@ GET  /api/payment/admin/transactions/ → همه تراکنش‌ها (ادمین
 """
 
 import logging
+from urllib.parse import urlencode
+
 from django.conf import settings
 from django.http import HttpResponseRedirect
 from rest_framework import status
@@ -31,7 +33,7 @@ class PaymentRequestView(APIView):
     """
     POST /api/payment/bank/request/
     Body: { "order_number": "ORD-20240101-ABC123" }
-    → { redirect_url, token, amount_toman, transaction_id }
+    → { redirect_url, token, amount_rial, transaction_id }
     """
     permission_classes = [IsAuthenticated]
 
@@ -54,7 +56,7 @@ class PaymentRequestView(APIView):
         return Response({
             "redirect_url":   result["redirect_url"],
             "token":          result["token"],
-            "amount_toman":   result["amount_toman"],
+            "amount_rial":    result["amount_rial"],
             "transaction_id": result["transaction_id"],
             "order_number":   order.order_number,
         })
@@ -76,9 +78,11 @@ class PaymentCallbackView(APIView):
         order_num = order.order_number if order else post_data.get("SaleOrderId", "")
 
         if result["success"]:
-            url = f"{FRONTEND_SUCCESS_URL}?order={order_num}&ref={result.get('ref_id', '')}"
+            query = urlencode({"order": order_num, "ref": result.get("ref_id", "")})
+            url = f"{FRONTEND_SUCCESS_URL}?{query}"
         else:
-            url = f"{FRONTEND_FAILURE_URL}?order={order_num}&error={result.get('error', 'خطا')}"
+            query = urlencode({"order": order_num, "error": result.get("error", "خطا")})
+            url = f"{FRONTEND_FAILURE_URL}?{query}"
 
         return HttpResponseRedirect(url)
 
@@ -98,7 +102,7 @@ class PaymentStatusView(APIView):
             "order_number":         order.order_number,
             "order_status":         order.status,
             "order_status_display": order.get_status_display(),
-            "amount_toman":         order.effective_amount,
+            "amount_rial":          order.effective_amount,
             "payment_link":         order.payment_link,
             "is_paid":              order.status == Order.Status.PAID,
             "latest_transaction":   PaymentTransactionSerializer(txn).data if txn else None,

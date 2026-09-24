@@ -1,0 +1,117 @@
+from django.db import models
+from django.utils import timezone
+
+
+class ArticleCategory(models.Model):
+    name  = models.CharField(max_length=100, verbose_name="نام دسته‌بندی")
+    slug  = models.SlugField(max_length=120, unique=True, allow_unicode=True)
+    order = models.PositiveSmallIntegerField(default=0, verbose_name="ترتیب")
+
+    class Meta:
+        db_table = "education_article_category"
+        verbose_name = "دسته‌بندی مقاله"
+        verbose_name_plural = "دسته‌بندی‌های مقاله"
+        ordering = ["order", "name"]
+
+    def __str__(self):
+        return self.name
+
+
+class Video(models.Model):
+    class VideoType(models.TextChoices):
+        MONTAJ          = "montaj",          "نصب و راه‌اندازی"
+        TROUBLESHOOTING = "troubleshooting", "عیب‌یابی"
+        PART_SELECTION  = "part_selection",  "انتخاب قطعه"
+        GENERAL         = "general",         "عمومی"
+
+    title            = models.CharField(max_length=300, verbose_name="عنوان")
+    slug             = models.SlugField(max_length=320, unique=True, allow_unicode=True, verbose_name="نامک")
+    description      = models.TextField(blank=True, verbose_name="توضیحات")
+    video_url        = models.URLField(verbose_name="لینک ویدیو (آپارات/یوتیوب)")
+    video_type       = models.CharField(max_length=20, choices=VideoType.choices,
+                         default=VideoType.GENERAL, verbose_name="نوع ویدیو", db_index=True)
+    related_products = models.ManyToManyField('catalog.Product', blank=True,
+                         related_name='videos', verbose_name="محصولات مرتبط")
+    duration         = models.PositiveSmallIntegerField(default=0, verbose_name="مدت (دقیقه)")
+    thumbnail        = models.ImageField(upload_to='education/videos/', null=True, blank=True,
+                         verbose_name="تصویر بندانگشتی")
+    views_count      = models.PositiveIntegerField(default=0, verbose_name="بازدید")
+    order            = models.PositiveSmallIntegerField(default=0, verbose_name="ترتیب")
+    is_published     = models.BooleanField(default=True, verbose_name="منتشر شده")
+    created_at       = models.DateTimeField(auto_now_add=True)
+    updated_at       = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "education_video"
+        verbose_name = "ویدیو"
+        verbose_name_plural = "ویدیوها"
+        ordering = ["order", "-created_at"]
+
+    def __str__(self):
+        return self.title
+
+    def get_embed_url(self):
+        url = self.video_url
+        if 'youtu.be' in url:
+            vid = url.split('/')[-1].split('?')[0]
+            return f"https://www.youtube.com/embed/{vid}"
+        if 'youtube.com/watch' in url:
+            import urllib.parse
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            vid = params.get('v', [''])[0]
+            return f"https://www.youtube.com/embed/{vid}"
+        if 'aparat.com' in url:
+            return url.replace('/v/', '/embed/').rstrip('/') + '/true'
+        return url
+
+
+class Article(models.Model):
+    title            = models.CharField(max_length=300, verbose_name="عنوان")
+    slug             = models.SlugField(max_length=320, unique=True, allow_unicode=True, verbose_name="نامک")
+    description      = models.TextField(blank=True, verbose_name="خلاصه")
+    content          = models.TextField(blank=True, verbose_name="محتوا (HTML)")
+    category         = models.ForeignKey(ArticleCategory, on_delete=models.SET_NULL,
+                         null=True, blank=True, related_name='articles', verbose_name="دسته‌بندی")
+    tags             = models.JSONField(default=list, blank=True, verbose_name="تگ‌ها")
+    author           = models.CharField(max_length=100, blank=True, verbose_name="نویسنده")
+    related_products = models.ManyToManyField('catalog.Product', blank=True,
+                         related_name='articles', verbose_name="محصولات مرتبط")
+    thumbnail        = models.ImageField(upload_to='education/articles/', null=True, blank=True,
+                         verbose_name="تصویر شاخص")
+    views_count      = models.PositiveIntegerField(default=0, verbose_name="بازدید")
+    likes_count      = models.PositiveIntegerField(default=0, verbose_name="لایک")
+    is_published     = models.BooleanField(default=True, verbose_name="منتشر شده")
+    legacy_id        = models.PositiveIntegerField(
+        null=True, blank=True, unique=True, db_index=True,
+        verbose_name="Ø´ÙØ§Ø³Ù Ø¯Ø± Ø³Ø§ÛØª ÙØ¯ÛÙÛ",
+        help_text="Ø¨Ø±Ø§Û Ø±ÛØ¯Ø§ÛØ±Ú©Øª Û³Û°Û± Ø§Ø² doorbinkar.com",
+    )
+    created_at       = models.DateTimeField(auto_now_add=True)
+    updated_at       = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "education_article"
+        verbose_name = "مقاله"
+        verbose_name_plural = "مقالات"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.title
+
+    def save(self, *args, **kwargs):
+        if self.pk and self.slug:
+            old_slug = (Article.objects.filter(pk=self.pk)
+                        .values_list('slug', flat=True).first())
+            if old_slug and old_slug != self.slug:
+                from apps.catalog.models import SlugRedirect
+                SlugRedirect.record(f'/blog/{old_slug}', f'/blog/{self.slug}')
+        super().save(*args, **kwargs)
+
+    @property
+    def read_time(self):
+        """تخمین زمان مطالعه بر اساس طول محتوا (حدود ۳۰۰ کلمه در دقیقه)"""
+        if not self.content:
+            return 0
+        word_count = len(self.content.split())
+        minutes = max(1, round(word_count / 300))
+        return minutes

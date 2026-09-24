@@ -21,6 +21,8 @@ const PurchaseInvoicePage = lazy(() => import('./pages/admin/PurchaseInvoicePage
 const BalancePage = lazy(() => import('./pages/admin/BalancePage'))
 const InvoicePrintPage = lazy(() => import('./pages/admin/InvoicePrintPage'))
 const SaleInvoicePage = lazy(() => import('./pages/admin/SaleInvoicePage'))
+const PayrollPage = lazy(() => import('./pages/admin/PayrollPage'))
+const ExpensesPage = lazy(() => import('./pages/admin/ExpensesPage'))
 const PaymentsPage = lazy(() => import('./pages/admin/PaymentsPage'))
 const AdminBanksPage = lazy(() => import('./pages/admin/AdminBanksPage'))
 const FinancialReportsPage = lazy(() => import('./pages/admin/FinancialReportsPage'))
@@ -34,7 +36,10 @@ const ShortageReportPage = lazy(() => import('./pages/admin/ShortageReportPage')
 const RejectReportPage = lazy(() => import('./pages/admin/RejectReportPage'))
 const ReturnsPage = lazy(() => import('./pages/admin/ReturnsPage'))
 const SmsSettingsPage = lazy(() => import('./pages/admin/SmsSettingsPage'))
+const ClubSettingsPage = lazy(() => import('./pages/admin/ClubSettingsPage'))
 const SmsCampaignPage = lazy(() => import('./pages/admin/SmsCampaignPage'))
+const AssistantSettingsPage = lazy(() => import('./pages/admin/AssistantSettingsPage'))
+const LeadsPage = lazy(() => import('./pages/admin/LeadsPage'))
 // AccountPage سنگین است (recharts) — lazy تا وارد باندل اصلی نشود
 const AccountPage = lazy(() => import('./pages/AccountPage'))
 
@@ -48,6 +53,7 @@ const DownloadsPage = lazy(() => import('./pages/DownloadsPage'))
 const TermsPage = lazy(() => import('./pages/TermsPage'))
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'))
 const AboutPage = lazy(() => import('./pages/AboutPage'))
+const ClubPage = lazy(() => import('./pages/ClubPage'))
 const ContactPage = lazy(() => import('./pages/ContactPage'))
 const TrackingPage = lazy(() => import('./pages/TrackingPage'))
 const ChinaOrderPage = lazy(() => import('./pages/ChinaOrderPage'))
@@ -121,6 +127,7 @@ export default function App() {
         <Route path="terms" element={<TermsPage />} />
         <Route path="privacy" element={<PrivacyPage />} />
         <Route path="about" element={<AboutPage />} />
+        <Route path="club" element={<ClubPage />} />
         <Route path="contact" element={<ContactPage />} />
         <Route path="track" element={<TrackingPage />} />
         <Route path="track/:orderNumber" element={<TrackingPage />} />
@@ -146,6 +153,8 @@ export default function App() {
         <Route path="admin/balance" element={<RequireAuth><BalancePage /></RequireAuth>} />
         <Route path="admin/sales" element={<RequireAuth><SaleInvoicePage /></RequireAuth>} />
         <Route path="admin/payments" element={<RequireAuth><PaymentsPage /></RequireAuth>} />
+        <Route path="admin/payroll" element={<RequireAuth><PayrollPage /></RequireAuth>} />
+        <Route path="admin/expenses" element={<RequireAuth><ExpensesPage /></RequireAuth>} />
         <Route path="admin/returns" element={<RequireAuth><ReturnsPage /></RequireAuth>} />
         <Route path="admin/banks" element={<RequireAuth><AdminBanksPage /></RequireAuth>} />
         <Route path="admin/financial" element={<RequireAuth><FinancialReportsPage /></RequireAuth>} />
@@ -162,7 +171,10 @@ export default function App() {
         <Route path="admin/category-fields" element={<RequireAuth><AdminCategoryFieldsPage /></RequireAuth>} />
         <Route path="admin/backup" element={<RequireAuth><BackupPage /></RequireAuth>} />
         <Route path="admin/sms-settings" element={<RequireAuth><SmsSettingsPage /></RequireAuth>} />
+        <Route path="admin/assistant-settings" element={<RequireAuth><AssistantSettingsPage /></RequireAuth>} />
+        <Route path="admin/club-settings" element={<RequireAuth><ClubSettingsPage /></RequireAuth>} />
         <Route path="admin/sms-campaign" element={<RequireAuth><SmsCampaignPage /></RequireAuth>} />
+        <Route path="admin/leads" element={<RequireAuth><LeadsPage /></RequireAuth>} />
         <Route path="admin/receipts" element={<RequireAuth><ReceiptsPage /></RequireAuth>} />
         <Route path="admin/aging" element={<RequireAuth><AgingReportPage /></RequireAuth>} />
         <Route path="admin/shortage" element={<RequireAuth><ShortageReportPage /></RequireAuth>} />
@@ -177,7 +189,10 @@ export default function App() {
           <div className="container-main py-20 text-center max-w-sm">
             <div className="text-5xl mb-4">⏳</div>
             <h2 className="font-display font-bold text-xl text-white mb-3">در انتظار تأیید ادمین</h2>
-            <p className="text-gray-steel text-sm">درخواست همکاری شما ثبت شد.</p>
+            <p className="text-gray-steel text-sm leading-7">
+              درخواست همکاری شما ثبت شد و پس از بررسی مدارک/کانال کاری، سطح سیلور شما فعال خواهد شد.
+              نتیجه را با پیامک اطلاع می‌دهیم.
+            </p>
           </div>
         } />
 

@@ -16,6 +16,15 @@
   <meta property="og:url" content="{{ page_url }}">
   {% if image_url %}<meta property="og:image" content="{{ image_url }}">{% endif %}
 
+  <!-- متا تگ‌های ترب (torob.com) — خزنده‌اش JS اجرا نمی‌کند -->
+  {% if kind == "products" %}
+  <meta name="product_id" content="{{ obj.pk }}">
+  <meta name="product_name" content="{{ obj.name }}">
+  {% if torob_price is not None %}<meta name="product_price" content="{{ torob_price }}">{% endif %}
+  {% if torob_old_price is not None %}<meta name="product_old_price" content="{{ torob_old_price }}">{% endif %}
+  {% if torob_availability %}<meta name="availability" content="{{ torob_availability }}">{% endif %}
+  {% endif %}
+
   {% if json_ld %}<script type="application/ld+json">{{ json_ld|safe }}</script>{% endif %}
 </head>
 <body>

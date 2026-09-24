@@ -1,5 +1,6 @@
 import { Link, useSearchParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import api from '../services/api'
 import useCompareStore from '../store/useCompareStore'
 import useAuthStore from '../store/useAuthStore'
@@ -15,6 +16,7 @@ export default function ComparePage() {
   const { items, remove, clear } = useCompareStore()
   const { isAuthenticated, isPartner } = useAuthStore()
   const { increment } = useCartStore()
+  const qc = useQueryClient()
   const [addingSlug, setAddingSlug] = useState(null)
   const [searchParams] = useSearchParams()
 
@@ -34,14 +36,17 @@ export default function ComparePage() {
     setAddingSlug(product.slug)
     try {
       if (isPartner()) {
-        const tier = useAuthStore.getState().user?.profile?.partner_tier
-        await orderService.addToInquiryCart(variant.id, 1, tier === 'silver' ? 'month1' : 'credit')
+        // سیلور/گلد تسویه نقدی دارند — ستون قیمتشان در بک‌اند از سطحشان تشخیص داده می‌شود
+        await orderService.addToInquiryCart(variant.id, 1, 'cash')
+        qc.invalidateQueries(['inquiry-cart'])
       } else {
         await orderService.addToCart(variant.id)
+        qc.invalidateQueries(['cart'])
       }
       increment()
     } catch (e) {
       console.error(e)
+      toast.error(e.response?.data?.error || 'خطا در افزودن به سبد. لطفاً دوباره تلاش کنید.')
     } finally {
       setAddingSlug(null)
     }

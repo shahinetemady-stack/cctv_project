@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
 import { useQuery } from '@tanstack/react-query'
 import { navGroups, isActivePath } from './navGroups'
 import { catalogService } from '../../../services/catalog'
 import { ChevronDownIcon } from './icons'
-
-const SPRING_SNAPPY = { type: 'spring', stiffness: 500, damping: 35 }
 
 // زیرعنوان هر گروه در ستون برند مگامنو
 const GROUP_SUBTITLES = {
@@ -113,40 +110,32 @@ export default function MainNav() {
                 if (openTimeoutRef.current) clearTimeout(openTimeoutRef.current)
               }}
             >
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                transition={SPRING_SNAPPY}
-                className={`relative flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-[13px] font-medium transition-colors ${
+              <button
+                className={`relative flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-[13px] font-medium transition-all active:scale-[0.96] ${
                   isHovered || hasActive
-                    ? 'text-gold'
-                    : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                    ? 'text-gold bg-[var(--color-brand-softer)]'
+                    : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover-bg-soft'
                 }`}
               >
                 <span className="text-sm">{group.icon}</span>
                 <span>{group.label}</span>
-                <motion.span animate={{ rotate: isHovered ? 180 : 0 }} transition={SPRING_SNAPPY}>
+                <span className={`inline-flex transition-transform duration-300 ${isHovered ? 'rotate-180' : ''}`}>
                   <ChevronDownIcon />
-                </motion.span>
+                </span>
                 {hasActive && (
                   <span
                     className="absolute -bottom-[9px] right-3 left-3 h-0.5 rounded-full"
                     style={{ background: 'var(--gradient-gold)' }}
                   />
                 )}
-              </motion.button>
+              </button>
 
-              {/* key بر اساس مسیر: با ناوبری پنل باز فوراً آن‌مانت می‌شود —
-                  انیمیشن خروج framer-motion در برخی مسیرها گیر می‌کند و پنل باز می‌ماند */}
-              <AnimatePresence key={location.pathname}>
-                {isHovered && (
-                  <motion.div
-                    className="absolute top-full right-0 pt-3 z-50"
-                    initial={{ opacity: 0, y: 10, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                    transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-                    style={{ transformOrigin: 'top right' }}
-                  >
+              {/* رندر شرطی + انیمیشن ورود CSS — بدون انیمیشن خروج تا پنل
+                  روی هیچ مسیری گیر نکند و باز نماند (باگ قبلی انیمیشن خروج JS) */}
+              {isHovered && (
+                <div
+                  className="absolute top-full right-0 pt-3 z-50 animate-mega-in"
+                >
                     <div
                       className="rounded-2xl overflow-hidden max-h-[calc(100vh-120px)] flex flex-col"
                       style={{
@@ -187,11 +176,10 @@ export default function MainNav() {
                         {/* آیتم‌ها */}
                         <div className="flex-1 p-3 space-y-1 overflow-y-auto min-h-0">
                           {group.items.map((item, idx) => (
-                            <motion.div
+                            <div
                               key={item.href}
-                              initial={{ opacity: 0, x: 10 }}
-                              animate={{ opacity: 1, x: 0 }}
-                              transition={{ type: 'spring', stiffness: 320, damping: 26, delay: 0.04 + idx * 0.05 }}
+                              className="animate-mega-item"
+                              style={{ animationDelay: `${0.04 + idx * 0.05}s` }}
                             >
                               <Link
                                 to={item.href}
@@ -236,38 +224,16 @@ export default function MainNav() {
                                   ))}
                                 </div>
                               )}
-                            </motion.div>
+                            </div>
                           ))}
                         </div>
                       </div>
                     </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                </div>
+              )}
             </div>
           )
         })}
-
-        {/* لینک مستقیم: رهگیری */}
-        <motion.div whileTap={{ scale: 0.96 }} transition={SPRING_SNAPPY} className="mr-auto">
-          <Link
-            to="/track"
-            className={`relative flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-[13px] font-medium transition-colors ${
-              isActive('/track')
-                ? 'text-gold'
-                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-            }`}
-          >
-            <span className="text-sm">🔍</span>
-            <span>رهگیری</span>
-            {isActive('/track') && (
-              <span
-                className="absolute -bottom-[9px] right-3 left-3 h-0.5 rounded-full"
-                style={{ background: 'var(--gradient-gold)' }}
-              />
-            )}
-          </Link>
-        </motion.div>
       </div>
     </nav>
   )

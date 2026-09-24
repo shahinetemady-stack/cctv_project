@@ -43,10 +43,10 @@ class PaymentTransaction(TimeStampedModel):
 
     # ── فیلدهای به‌پرداخت ────────────────────────────────────────────
     # درخواست پرداخت
-    bank_token = models.BigIntegerField(
-        null=True, blank=True,
+    bank_token = models.CharField(
+        max_length=64, blank=True, default="",
         verbose_name="توکن بانکی",
-        help_text="عدد دریافتی از bpPayRequest",
+        help_text="RefId دریافتی از bpPayRequest (رشته هگز)",
     )
     amount = models.PositiveBigIntegerField(
         verbose_name="مبلغ (ریال)",

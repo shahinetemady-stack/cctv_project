@@ -33,6 +33,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.users.permissions import IsPartner, IsVerifiedUser
+from apps.users.models import accessible_user_ids, effective_user
 
 from .models import Cart, CartItem, InquiryCart, InquiryCartItem, Order
 from .serializers import (
@@ -50,13 +51,48 @@ logger = logging.getLogger(__name__)
 
 
 def _overdue_warning(user):
-    """هشدار تسویه‌های سررسیدگذشته کاربر — هرگز جلوی ثبت سفارش را نمی‌گیرد."""
+    """هشدار تسویه‌های سررسیدگذشته کاربر + سطح محدودیت فعلی."""
     try:
+        from apps.users.services import partner_restriction
+        restriction = partner_restriction(user)
         count = user.overdue_count()
         if count > 0:
-            return {"count": count, "total": user.overdue_total()}
+            return {
+                "count": count,
+                "total": user.overdue_total(),
+                "level": restriction["level"] if restriction else "warning",
+            }
     except Exception as e:
         logger.warning(f"[ORDER] overdue check failed for user {user.pk}: {e}")
+    return None
+
+
+def _restriction_block_response(user, *, inquiry=False):
+    """
+    اگر کاربر در مرحله «مسدود» است → 403 برای هر نوع سفارش.
+    اگر در مرحله «فقط نقدی» است → برای سفارش استعلامی، اقلام غیرنقدی رد می‌شوند.
+    وگرنه None.
+    """
+    try:
+        from apps.users.services import partner_restriction
+        restriction = partner_restriction(user)
+    except Exception as e:
+        logger.warning(f"[ORDER] restriction check failed for user {user.pk}: {e}")
+        return None
+    if not restriction:
+        return None
+    if restriction["level"] == "blocked":
+        return Response(
+            {"error": "به دلیل معوقات تسویه‌نشده، امکان ثبت سفارش جدید موقتاً برای شما غیرفعال است. لطفاً ابتدا تسویه کنید یا با فروشگاه تماس بگیرید."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if inquiry and restriction["level"] == "cash_only":
+        cart = InquiryCart.objects.filter(user=user).first()
+        if cart and cart.items.exclude(settlement_type="cash").exists():
+            return Response(
+                {"error": "به دلیل معوقات تسویه‌نشده، فعلاً فقط خرید نقدی برای شما فعال است؛ اقلام با تسویه اعتباری را از سبد حذف کنید."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
     return None
 
 
@@ -67,7 +103,7 @@ class CartView(APIView):
     permission_classes = [IsAuthenticated]
 
     def _get_cart(self, request):
-        cart, _ = Cart.objects.get_or_create(user=request.user)
+        cart, _ = Cart.objects.get_or_create(user=effective_user(request.user))
         return cart
 
     def get(self, request):
@@ -94,6 +130,16 @@ class CartView(APIView):
                     {"error": f"حداقل تعداد سفارش این پکیج {pkg.min_quantity} بسته است."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # سقف تعداد پکیج = کمترین موجودی قابل فروش (انبارهای عمومی) اقلام داخل آن
+            max_pkg = min(
+                (pi.variant.sellable_stock // pi.quantity for pi in pkg.package_items.select_related("variant")),
+                default=0,
+            )
+            if quantity > max_pkg:
+                return Response(
+                    {"error": f"درخواست شما بیشتر از موجودی است — حداکثر موجودی قابل فروش این پکیج {max_pkg} بسته است."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             item, created = CartItem.objects.get_or_create(
                 cart=cart, package=pkg, variant=None,
                 defaults={"quantity": quantity},
@@ -114,7 +160,14 @@ class CartView(APIView):
             return Response({"error": "این نوع تسویه برای شما مجاز نیست."},
                             status=status.HTTP_400_BAD_REQUEST)
 
-        # سقف تعداد نداریم — موجودی نمادین است و سفارش‌های عمده (حتی بیشتر از موجودی) پذیرفته می‌شود
+        # سقف تعداد = موجودی قابل فروش (فقط انبارهای با تیک «نمایش به مشتری»، منهای رزروشده)
+        available = variant.sellable_stock
+        if quantity > available:
+            return Response(
+                {"error": f"درخواست شما بیشتر از موجودی است — حداکثر موجودی قابل فروش این کالا {available} عدد است."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         item, created = CartItem.objects.get_or_create(
             cart=cart, variant=variant, settlement_type=settlement,
             defaults={"quantity": quantity},
@@ -148,16 +201,20 @@ def cart_checkout(request):
     تبدیل سبد به سفارش + رزرو موجودی + لینک پرداخت
     """
     try:
-        cart = Cart.objects.get(user=request.user)
+        cart = Cart.objects.get(user=effective_user(request.user))
     except Cart.DoesNotExist:
         return Response({"error": "سبد خرید خالی است."}, status=status.HTTP_400_BAD_REQUEST)
+
+    blocked = _restriction_block_response(request.user)
+    if blocked is not None:
+        return blocked
 
     shipping_address = request.data.get("shipping_address", "")
     shipping_method = request.data.get("shipping_method", "")
     freight_company = request.data.get("freight_company", "")
 
     try:
-        orders = create_direct_order(request.user, cart)
+        orders = create_direct_order(effective_user(request.user), cart)
         for o in orders:
             o.shipping_address = shipping_address
             o.shipping_method = shipping_method
@@ -184,7 +241,7 @@ class InquiryCartView(APIView):
     permission_classes = [IsPartner]
 
     def _get_cart(self, request):
-        cart, _ = InquiryCart.objects.get_or_create(user=request.user)
+        cart, _ = InquiryCart.objects.get_or_create(user=effective_user(request.user))
         return cart
 
     def get(self, request):
@@ -207,6 +264,14 @@ class InquiryCartView(APIView):
         if settlement not in allowed_settlements(request.user, variant):
             return Response({"error": "این نوع تسویه برای شما مجاز نیست."},
                             status=status.HTTP_400_BAD_REQUEST)
+
+        # سقف تعداد = موجودی قابل فروش (فقط انبارهای با تیک «نمایش به مشتری»، منهای رزروشده)
+        available = variant.sellable_stock
+        if quantity > available:
+            return Response(
+                {"error": f"درخواست شما بیشتر از موجودی است — حداکثر موجودی قابل فروش این کالا {available} عدد است."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         item, created = InquiryCartItem.objects.get_or_create(
             cart=cart, variant=variant, settlement_type=settlement,
@@ -238,16 +303,20 @@ def inquiry_cart_submit(request):
     """
 
     try:
-        cart = InquiryCart.objects.get(user=request.user)
+        cart = InquiryCart.objects.get(user=effective_user(request.user))
     except InquiryCart.DoesNotExist:
         return Response({"error": "سبد استعلام خالی است."}, status=status.HTTP_400_BAD_REQUEST)
+
+    blocked = _restriction_block_response(request.user, inquiry=True)
+    if blocked is not None:
+        return blocked
 
     notes = request.data.get("notes", "")
     cart.notes = notes
     cart.save()
 
     try:
-        orders = create_inquiry_order(request.user, cart)
+        orders = create_inquiry_order(effective_user(request.user), cart)
         orders_data = OrderSerializer(orders, many=True).data
         data = dict(orders_data[0])
         data["orders"] = orders_data
@@ -265,7 +334,7 @@ class OrderListView(APIView):
 
     def get(self, request):
         orders = (
-            Order.objects.filter(user=request.user)
+            Order.objects.filter(user__in=accessible_user_ids(request.user))
             .prefetch_related("items__variant__product")
             .order_by("-created_at")
         )
@@ -276,12 +345,11 @@ class OrderDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get_object(self, request, order_number):
-        try:
-            return Order.objects.prefetch_related("items__variant__product").get(
-                order_number=order_number, user=request.user
-            )
-        except Order.DoesNotExist:
-            return None
+        return (
+            Order.objects.prefetch_related("items__variant__product")
+            .filter(order_number=order_number, user__in=accessible_user_ids(request.user))
+            .first()
+        )
 
     def get(self, request, order_number):
         order = self.get_object(request, order_number)
@@ -294,7 +362,7 @@ class OrderDetailView(APIView):
 @permission_classes([IsAuthenticated])
 def cancel_order_view(request, order_number):
     try:
-        order = Order.objects.get(order_number=order_number, user=request.user)
+        order = Order.objects.get(order_number=order_number, user__in=accessible_user_ids(request.user))
     except Order.DoesNotExist:
         return Response({"error": "سفارش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -584,6 +652,7 @@ class AdminOrderDetailView(APIView):
             'sku': it.variant.sku,
             'quantity': it.quantity,
             'available_stock': it.variant.available_stock,
+            'stocks': it.variant.stock_by_warehouse(),
             'unit_price': it.unit_price,
             'confirmed_unit_price': it.confirmed_unit_price,
             'subtotal': it.subtotal,
@@ -754,6 +823,11 @@ class AdminOrderUpdateView(APIView):
                 except ValueError:
                     return Response({'error': 'فرمت موعد تسویه نامعتبر است (YYYY-MM-DD)'}, status=400)
 
+        # تو حسابی بدون موعد دستی → موعد خودکار ۱۴ روزه (انتخاب تقویم برای تو حسابی حذف شده)
+        if d.get('settlement_type') == 'credit' and 'settlement_due_date' not in d:
+            from .models import settlement_due_for
+            order.settlement_due_date = settlement_due_for('credit')
+
         # تنظیم خودکار تاریخ ارسال
         if d.get('delivery_status') == 'shipped' and not getattr(order, 'shipped_at', None):
             order.shipped_at = timezone.now()
@@ -921,7 +995,7 @@ class OrderReceiptCreateView(APIView):
 
     def post(self, request, order_number):
         try:
-            order = Order.objects.get(order_number=order_number, user=request.user)
+            order = Order.objects.get(order_number=order_number, user__in=accessible_user_ids(request.user))
         except Order.DoesNotExist:
             return Response({"error": "سفارش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -959,7 +1033,7 @@ class MyReceiptsView(APIView):
     def get(self, request):
         from apps.accounting.models import PaymentReceipt
         receipts = (
-            PaymentReceipt.objects.filter(customer=request.user)
+            PaymentReceipt.objects.filter(customer__in=accessible_user_ids(request.user))
             .select_related("order", "customer", "uploaded_by")
         )
         return Response(
@@ -1015,17 +1089,15 @@ class AdminReceiptListCreateView(APIView):
 class AdminReceiptApproveView(APIView):
     """
     POST /api/orders/admin/receipts/<pk>/approve/
-    تأیید فیش — تخصیص FIFO مبلغ فیش به ردیف‌های تسویهٔ باز مشتری (به ترتیب موعد)،
-    ثبت SalePayment برای هر فاکتور دست‌خورده، و بستن فاکتور/سفارش در صورت تسویه کامل.
+    تأیید فیش — تخصیص FIFO مبلغ فیش به فاکتورهای باز مشتری (به ترتیب موعد مؤثر،
+    از طریق apps.accounting.services.settle_customer_fifo که فاکتور/سفارش
+    تسویه‌شده را هم می‌بندد و مازاد را به بستانکاری نقدی می‌برد).
     """
     permission_classes = [IsAdminUser]
 
     @transaction.atomic
     def post(self, request, pk):
-        from django.db.models import Sum
-        from apps.accounting.models import (
-            PaymentReceipt, SettlementLine, SaleInvoice, SalePayment, ReceiptAllocation,
-        )
+        from apps.accounting.models import PaymentReceipt
         try:
             receipt = PaymentReceipt.objects.select_related("order", "customer").get(pk=pk)
         except PaymentReceipt.DoesNotExist:
@@ -1034,70 +1106,40 @@ class AdminReceiptApproveView(APIView):
             return Response({"error": "این فیش قبلاً بررسی شده است."},
                             status=status.HTTP_400_BAD_REQUEST)
 
-        # ردیف‌های تسویهٔ باز مشتری — فاکتور لغونشده، مانده > ۰، مرتب بر اساس موعد
-        open_lines = (
-            SettlementLine.objects
-            .filter(invoice__customer=receipt.customer, is_active=True)
-            .exclude(invoice__status=SaleInvoice.Status.CANCELLED)
-            .select_related("invoice")
-            .annotate(paid=Sum("allocations__amount"))
-            .order_by("due_date", "id")
+        # فیش تأییدشده یعنی پرداخت انجام شده — سفارش‌های تأیید خودکار هنوز فاکتور
+        # ندارند (فاکتور فقط بعد از پرداخت ساخته می‌شود)؛ اینجا ساخته می‌شود تا
+        # تخصیص FIFO به همان فاکتور بخورد، نه اینکه مبلغ برود به بستانکاری.
+        from apps.orders.services import _create_sale_invoice_for_order
+        order_invoice = getattr(receipt.order, "sale_invoice", None)
+        if order_invoice is None:
+            order_invoice = _create_sale_invoice_for_order(receipt.order, created_by=request.user)
+
+        # اول بستانکاری قبلی مشتری (اضافه‌واریزی‌ها) به بدهی‌های باز تخصیص می‌یابد
+        from apps.orders.services import apply_customer_credit
+        apply_customer_credit(receipt.customer, actor=request.user)
+
+        # تخصیص FIFO مبلغ فیش به فاکتورهای باز مشتری (به ترتیب موعد مؤثر) —
+        # هم فاکتورهای سفارش سایت و هم فاکتورهای دستی. مازاد → بستانکاری نقدی (داخل سرویس)
+        from apps.accounting.services import settle_customer_fifo
+        result = settle_customer_fifo(
+            receipt.customer, receipt.amount,
+            date=receipt.paid_at, actor=request.user,
+            method="transfer", reference=receipt.tracking_code,
+            note=f"فیش واریزی #{receipt.id} — صراف: {receipt.order.sarraf_account_holder}",
+            receipt=receipt,
         )
 
-        remaining_receipt = receipt.amount
-        per_invoice = {}  # invoice_id → [invoice, allocated_sum] — به ترتیب تخصیص
-        for line in open_lines:
-            if remaining_receipt <= 0:
-                break
-            line_remaining = line.amount - (line.paid or 0)
-            if line_remaining <= 0:
-                continue
-            alloc = min(remaining_receipt, line_remaining)
-            ReceiptAllocation.objects.create(
-                receipt=receipt, settlement_line=line, amount=alloc,
-            )
-            entry = per_invoice.setdefault(line.invoice_id, [line.invoice, 0])
-            entry[1] += alloc
-            remaining_receipt -= alloc
-
-        first_payment = None
-        own_payment = None
-        for invoice, alloc_sum in per_invoice.values():
-            payment = SalePayment.objects.create(
-                invoice=invoice,
-                method=SalePayment.PaymentMethod.TRANSFER,
-                amount=alloc_sum,
-                date=receipt.paid_at,
-                reference=receipt.tracking_code,
-                note=f"فیش واریزی #{receipt.id} — صراف: {receipt.order.sarraf_account_holder}",
-                created_by=request.user,
-            )
-            if first_payment is None:
-                first_payment = payment
-            if invoice.order_id == receipt.order_id:
-                own_payment = payment
-            if invoice.remaining_amount <= 0:
-                invoice.status = SaleInvoice.Status.PAID
-                invoice.save(update_fields=["status", "updated_at"])
-
-        receipt.sale_payment = own_payment or first_payment
+        # فیش به SalePayment فاکتورِ همین سفارش (یا اولین تخصیص) لینک می‌شود
+        payments_by_invoice = {a["invoice_id"]: a["payment_id"] for a in result["allocated"]}
+        receipt.sale_payment_id = (
+            payments_by_invoice.get(order_invoice.id) if order_invoice else None
+        ) or (result["allocated"][0]["payment_id"] if result["allocated"] else None)
         receipt.status = PaymentReceipt.Status.APPROVED
         receipt.reviewed_by = request.user
         receipt.reviewed_at = timezone.now()
         receipt.save(update_fields=[
             "sale_payment", "status", "reviewed_by", "reviewed_at",
         ])
-
-        # اگر همه ردیف‌های تسویه فاکتور این سفارش تسویه شده، سفارش پرداخت‌شده می‌شود
-        order = receipt.order
-        if order.status in (Order.Status.AWAITING_PAYMENT, Order.Status.CONFIRMED):
-            invoice = getattr(order, "sale_invoice", None)
-            if invoice is not None and all(
-                line.remaining_amount <= 0 for line in invoice.settlement_lines.all()
-            ):
-                order.status = Order.Status.PAID
-                order.paid_at = timezone.now()
-                order.save(update_fields=["status", "paid_at", "updated_at"])
 
         # اطلاع‌رسانی به مشتری — best-effort، خرابی آن جریان اصلی را نشکند
         try:
@@ -1206,7 +1248,11 @@ class MyOverdueView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from apps.users.services import partner_restriction
+        restriction = partner_restriction(request.user)
         return Response({
             "count": request.user.overdue_count(),
             "total": request.user.overdue_total(),
+            "level": restriction["level"] if restriction else None,
+            "days_overdue": restriction["days_overdue"] if restriction else 0,
         })

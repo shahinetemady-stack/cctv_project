@@ -31,6 +31,12 @@ const icons = {
   payments: (
     <I><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/><path d="M5 15h4"/></I>
   ),
+  payroll: (
+    <I><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></I>
+  ),
+  expenses: (
+    <I><rect x="2" y="7" width="20" height="12" rx="2"/><circle cx="12" cy="13" r="2.5"/><path d="M12 1v4"/><path d="M9.5 3.5L12 1l2.5 2.5"/></I>
+  ),
   bank: (
     <I><path d="M12 3l9 6H3z"/><path d="M5 9v9"/><path d="M9.5 9v9"/><path d="M14.5 9v9"/><path d="M19 9v9"/><path d="M3 21h18"/></I>
   ),
@@ -39,9 +45,6 @@ const icons = {
   ),
   balance: (
     <I><path d="M12 3v18"/><path d="M5 7l7-4 7 4"/><path d="M5 7l-3 7a4 4 0 0 0 6 0z"/><path d="M19 7l-3 7a4 4 0 0 0 6 0z"/></I>
-  ),
-  excel: (
-    <I><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M12 11v6"/><path d="M9 14h6"/></I>
   ),
   roles: (
     <I><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></I>
@@ -63,6 +66,12 @@ const icons = {
   ),
   sms: (
     <I><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></I>
+  ),
+  bot: (
+    <I><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><circle cx="9" cy="13" r="1"/><circle cx="15" cy="13" r="1"/><path d="M9 17h6"/></I>
+  ),
+  leads: (
+    <I><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></I>
   ),
 }
 
@@ -103,15 +112,20 @@ const ADMIN_MENU = [
     label: 'پنل ادمین',
     icon: icons.roles,
     children: [
+      { label: 'حقوق و دستمزد',      path: '/admin/payroll',           perm: 'payroll_view',  icon: icons.payroll },
+      { label: 'هزینه‌ها',           path: '/admin/expenses',          perm: 'expenses_view', icon: icons.expenses },
       { label: 'لاگ فعالیت‌ها',      path: '/admin/logs',            perm: 'users_view',    icon: icons.roles },
       { label: 'بک‌آپ سیستم',        path: '/admin/backup',          perm: 'reports_view',  icon: icons.backup, superuserOnly: true },
       { label: 'نقش‌ها و پرسنل',     path: '/admin/roles',           perm: 'users_edit',    icon: icons.roles },
       { label: 'ویژگی‌های دسته‌ها',  path: '/admin/category-fields', perm: 'products_edit', icon: icons.fields },
       { label: 'مدیریت دسته‌بندی محصولات', path: '/admin/categories', perm: 'products_edit', icon: icons.categories },
-      { label: 'گزارش مالی پیشرفته', path: '/admin/financial',       perm: 'reports_view',  icon: icons.financial },
+      { label: 'گزارش مالی پیشرفته', path: '/admin/financial',       perm: 'reports_view',  icon: icons.financial, superuserOnly: true },
       { label: 'مازاد تقاضا',        path: '/admin/shortage',        perm: 'kardex_view',   icon: icons.kardex },
       { label: 'تنظیمات پیامک',      path: '/admin/sms-settings',    superuserOnly: true,   icon: icons.sms },
+      { label: 'ربات هوشمند',        path: '/admin/assistant-settings', superuserOnly: true, icon: icons.bot },
+      { label: 'باشگاه همکاران',     path: '/admin/club-settings',   superuserOnly: true,   icon: icons.contacts },
       { label: 'کمپین پیامکی',       path: '/admin/sms-campaign',    superuserOnly: true,   icon: icons.sms },
+      { label: 'مخاطبان تبلیغاتی',   path: '/admin/leads',           superuserOnly: true,   icon: icons.leads },
     ],
   },
 ]

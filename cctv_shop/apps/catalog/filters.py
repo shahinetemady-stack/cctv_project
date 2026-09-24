@@ -1,5 +1,5 @@
 import django_filters
-from django.db.models import Q, F
+from django.db.models import Q
 from .models import Category, Product
 
 
@@ -63,18 +63,43 @@ class ProductFilter(django_filters.FilterSet):
             return qs
         return queryset.exclude(pk__in=qs.values("pk"))
 
+    @staticmethod
+    def _sellable_variants_q():
+        """
+        شرط «موجودی قابل فروش» برای واریانت — فقط انبارهای با تیک «نمایش به مشتری»
+        منهای رزروشده. واریانت بدون رکورد انبار (داده قدیمی) از موجودی کل خودش سنجیده می‌شود.
+        """
+        from django.db.models import Exists, OuterRef, Subquery, Sum, IntegerField, Q, F
+        from django.db.models.functions import Coalesce
+        from apps.inventory.models import WarehouseStock
+        from .models import ProductVariant
+
+        public_stock = Coalesce(Subquery(
+            WarehouseStock.objects.filter(
+                variant_id=OuterRef("pk"),
+                warehouse__is_public=True, warehouse__is_active=True,
+            ).values("variant_id").annotate(t=Sum("quantity")).values("t"),
+            output_field=IntegerField(),
+        ), 0)
+        has_warehouse = Exists(
+            WarehouseStock.objects.filter(variant_id=OuterRef("pk"), warehouse__is_active=True)
+        )
+        return Q(
+            variants__in=ProductVariant.objects.filter(is_active=True)
+            .annotate(_public=public_stock, _has_wh=has_warehouse)
+            .filter(
+                Q(_has_wh=False, stock_quantity__gt=F("reserved_qty"))
+                | Q(_has_wh=True, _public__gt=F("reserved_qty"))
+            )
+        )
+
     def filter_in_stock(self, queryset, name, value):
         if value is None:
             return queryset
+        cond = self._sellable_variants_q()
         if value:
-            return queryset.filter(
-                variants__is_active=True,
-                variants__stock_quantity__gt=F("variants__reserved_qty"),
-            ).distinct()
-        return queryset.exclude(
-            variants__is_active=True,
-            variants__stock_quantity__gt=F("variants__reserved_qty"),
-        ).distinct()
+            return queryset.filter(cond).distinct()
+        return queryset.exclude(cond).distinct()
 
     def filter_search(self, queryset, name, value):
         if not value:

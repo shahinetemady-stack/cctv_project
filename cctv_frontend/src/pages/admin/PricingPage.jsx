@@ -5,6 +5,7 @@ import { Search } from 'lucide-react'
 import api from '../../services/api'
 import { PageLoader } from '../../components/ui'
 import AmountInput from '../../components/ui/AmountInput'
+import StockChips from '../../components/ui/StockChips'
 import usePermissions from '../../hooks/usePermissions'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
@@ -65,6 +66,8 @@ export default function PricingPage() {
           purchase_price_cny: String(variant.purchase_price_cny || 0),
           discount_percent: String(variant.discount_percent || 0),
           month2_unavailable: !!variant.month2_unavailable,
+          month1_unavailable: !!variant.month1_unavailable,
+          credit_unavailable: !!variant.credit_unavailable,
         }
       }
     }
@@ -137,14 +140,14 @@ export default function PricingPage() {
     } finally { setSaving(null) }
   }
 
-  // علامت‌گذاری «فروش دوماهه ندارد» برای یک واریانت
-  const toggleMonth2 = async (id) => {
-    const next = !vars[id]?.month2_unavailable
-    setSaving(`m2-${id}`)
+  // علامت‌گذاری «ندارد» برای هر نوع فروش (توحسابی/یکماهه/دوماهه) یک واریانت
+  const toggleUnavailable = async (id, field, label) => {
+    const next = !vars[id]?.[field]
+    setSaving(`${field}-${id}`)
     try {
-      await api.patch(`/catalog/pricing/variants/${id}/`, { month2_unavailable: next })
-      setVars(s => ({ ...s, [id]: { ...s[id], month2_unavailable: next } }))
-      toast.success(next ? 'ستون دوماهه «ندارد» شد' : 'فروش دوماهه فعال شد')
+      await api.patch(`/catalog/pricing/variants/${id}/`, { [field]: next })
+      setVars(s => ({ ...s, [id]: { ...s[id], [field]: next } }))
+      toast.success(next ? `ستون ${label} «ندارد» شد` : `فروش ${label} فعال شد`)
     } catch (e) {
       toast.error(e.response?.data?.error || 'خطا در ذخیره')
     } finally { setSaving(null) }
@@ -316,18 +319,28 @@ export default function PricingPage() {
                       data-navgroup="products" onKeyDown={handleNavKey} />
                   </td>
                   <td style={{ ...td, textAlign: 'center' }}>
-                    <span className={v.available_stock > 0 ? 'badge-green' : 'badge-red'}>
-                      {Number(v.available_stock || 0).toLocaleString('fa-IR')}
-                    </span>
+                    <div className="flex items-center justify-center gap-2 flex-wrap">
+                      <span className={v.available_stock > 0 ? 'badge-green' : 'badge-red'}>
+                        {Number(v.available_stock || 0).toLocaleString('fa-IR')}
+                      </span>
+                      {/* تفکیک انبار — سمت چپ عدد موجودی کلی */}
+                      <StockChips stocks={v.stocks} />
+                    </div>
                   </td>
                   {profitTypes.map(t => {
-                    // ستون دوماهه — قابل علامت‌گذاری «ندارد» برای هر واریانت
-                    if (t.key === 'profit_month2_percent') {
-                      const off = vars[v.id]?.month2_unavailable
+                    // ستون‌های توحسابی/یکماهه/دوماهه — قابل علامت‌گذاری «ندارد» برای هر واریانت
+                    const unavailField = {
+                      profit_credit_percent: 'credit_unavailable',
+                      profit_month1_percent: 'month1_unavailable',
+                      profit_month2_percent: 'month2_unavailable',
+                    }[t.key]
+                    if (unavailField) {
+                      const off = vars[v.id]?.[unavailField]
+                      const busy = saving === `${unavailField}-${v.id}`
                       return (
                         <td key={t.key} style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
                           {off ? (
-                            <button onClick={() => toggleMonth2(v.id)} disabled={saving === `m2-${v.id}`}
+                            <button onClick={() => toggleUnavailable(v.id, unavailField, t.label)} disabled={busy}
                               title="برای فعال‌سازی مجدد کلیک کنید"
                               className="text-gray-steel text-sm font-bold line-through decoration-red-400/70">
                               ندارد
@@ -337,7 +350,7 @@ export default function PricingPage() {
                               <span className="text-gold text-sm font-bold">
                                 {fmt(priceFor(t.key))}
                               </span>
-                              <button onClick={() => toggleMonth2(v.id)} disabled={saving === `m2-${v.id}`}
+                              <button onClick={() => toggleUnavailable(v.id, unavailField, t.label)} disabled={busy}
                                 className="text-[9px] text-[var(--color-text-muted)] hover:text-red-400 transition-colors">
                                 ✕ ندارد
                               </button>

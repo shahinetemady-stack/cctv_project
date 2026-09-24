@@ -64,11 +64,25 @@ def _soft_reset():
     # و کاربر دارند — باید قبل از حذف سفارش‌ها/کاربران پاک شوند.
     PaymentReceipt.objects.all().delete()
     PaymentTransaction.objects.all().delete()
+    # پرداخت‌های هزینه FK محافظت‌شده (PROTECT) به Payment دارند — قبل از Payment پاک شوند.
+    # ExpenseCharge و InvestorMovement هم دادهٔ عملیاتی‌اند و با ریست پاک می‌شوند
+    # (تعاریف: ExpenseCategory / RecurringExpense / Investor محفوظ می‌مانند).
+    from apps.expenses.models import ExpenseChargePayment, ExpenseCharge, InvestorMovement
+    report["پرداخت‌های هزینه"] = ExpenseChargePayment.objects.count()
+    ExpenseChargePayment.objects.all().delete()
+    report["هزینه‌های ماهانه"] = ExpenseCharge.objects.count()
+    ExpenseCharge.objects.all().delete()
+    report["گردش‌های سرمایه"] = InvestorMovement.objects.count()
+    InvestorMovement.objects.all().delete()
     # سبدهای خرید (عادی و استعلامی) هم دادهٔ عملیاتی‌اند و با ریست پاک می‌شوند
     CartItem.objects.all().delete()
     Cart.objects.all().delete()
     InquiryCartItem.objects.all().delete()
     InquiryCart.objects.all().delete()
+    from apps.accounting.models import ReturnInvoice, ReturnItem
+    report["اسناد برگشت"] = ReturnInvoice.objects.count()
+    ReturnItem.objects.all().delete()
+    ReturnInvoice.objects.all().delete()
     ExtraCost.objects.all().delete()
     PurchaseItem.objects.all().delete()
     PurchaseInvoice.objects.all().delete()
@@ -105,6 +119,10 @@ def _soft_reset():
 def _hard_reset():
     report = _soft_reset()
     from apps.accounting.models import Contact, Account
+    # سرمایه‌گذاران FK محافظت‌شده (PROTECT) به طرف حساب دارند — قبل از Contact پاک شوند.
+    from apps.expenses.models import Investor
+    report["سرمایه‌گذاران"] = Investor.objects.count()
+    Investor.objects.all().delete()
     report["طرف حساب‌ها"] = Contact.objects.count()
     Contact.objects.all().delete()
     report["حساب‌های بانکی"] = Account.objects.count()
@@ -120,6 +138,9 @@ def _hard_reset():
         PackageItem.objects.all().delete()
         report["پکیج‌ها"] = Package.objects.count()
         Package.objects.all().delete()
+        # موجودی انبارها FK محافظت‌شده (PROTECT) به variant دارد — قبل از variant پاک شود.
+        from apps.inventory.models import WarehouseStock
+        WarehouseStock.objects.all().delete()
         ProductImage.objects.all().delete()
         report["variantها"] = ProductVariant.objects.count()
         ProductVariant.objects.all().delete()

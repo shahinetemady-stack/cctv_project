@@ -1,0 +1,569 @@
+"""
+apps/catalog/models.py
+"""
+from decimal import Decimal
+from django.core.validators import MinValueValidator, MaxValueValidator
+from django.db import models
+from django.utils.text import slugify
+from apps.core.models import SingletonModel, TimeStampedModel
+
+
+class ExchangeRateSetting(SingletonModel):
+    rate_cny_to_irt = models.PositiveBigIntegerField(
+        default=85000, verbose_name="نرخ یوان (ریال)",
+        help_text="هر یوان چینی چند ریال؟",
+    )
+    updated_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="+",
+        verbose_name="بروزرسانی توسط",
+    )
+    class Meta:
+        db_table = "catalog_exchange_rate"
+        verbose_name = "نرخ ارز (یوان)"
+        verbose_name_plural = "نرخ ارز (یوان)"
+    def __str__(self):
+        return f"نرخ یوان: {self.rate_cny_to_irt:,} ریال"
+
+
+class SeoSettings(SingletonModel):
+    target_cities = models.CharField(
+        max_length=500, default="تهران، مشهد، اصفهان، شیراز، تبریز، کرج",
+        verbose_name="شهرهای هدف",
+    )
+    site_name = models.CharField(
+        max_length=100, default="فروشگاه قطعات دوربین مداربسته",
+        verbose_name="نام سایت",
+    )
+    class Meta:
+        db_table = "catalog_seo_settings"
+        verbose_name = "تنظیمات سئو"
+        verbose_name_plural = "تنظیمات سئو"
+    def __str__(self):
+        return "تنظیمات سئو"
+
+
+class Category(TimeStampedModel):
+    class CategoryType(models.TextChoices):
+        BOARD   = "board",   "برد دوربین مداربسته"
+        LENS    = "lens",    "لنز دوربین مداربسته"
+        MODEM   = "modem",   "متعلقات"
+        HOUSING = "housing", "بدنه دوربین مداربسته"
+        OTHER   = "other",   "سایر"
+
+    name = models.CharField(max_length=150, verbose_name="نام دسته‌بندی")
+    slug = models.SlugField(max_length=160, unique=True, allow_unicode=True)
+    category_type = models.CharField(
+        max_length=20, choices=CategoryType.choices,
+        default=CategoryType.OTHER, verbose_name="نوع دسته", db_index=True,
+    )
+    parent = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="children", verbose_name="دسته والد",
+    )
+    legacy_id = models.PositiveIntegerField(
+        null=True, blank=True, unique=True, db_index=True,
+        verbose_name="شناسه در سایت قدیمی",
+        help_text="برای ریدایرکت ۳۰۱ از doorbinkar.com",
+    )
+    icon = models.CharField(max_length=100, blank=True, verbose_name="آیکون")
+    image = models.ImageField(upload_to="categories/", null=True, blank=True)
+    is_active = models.BooleanField(default=True, verbose_name="فعال")
+    sort_order = models.PositiveSmallIntegerField(default=0, verbose_name="ترتیب")
+    hidden_fields = models.JSONField(default=list, blank=True, verbose_name="فیلدهای پایه مخفی در فرم ویرایش")
+    field_overrides = models.JSONField(default=dict, blank=True, verbose_name="بازنویسی لیبل/گزینه فیلدهای پایه")
+
+    # ── فرمول قیمت — هزینه‌های پیش‌فرض این دسته (یوان) ──────
+    shipping_cost_cny = models.DecimalField(
+        max_digits=8, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))],
+        verbose_name="هزینه حمل (یوان)",
+        help_text="در فرمول قیمت برای محصولات این دسته لحاظ می‌شود — صفر یعنی از دسته والد",
+    )
+    clearance_cost_cny = models.DecimalField(
+        max_digits=8, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))],
+        verbose_name="هزینه ترخیص (یوان)",
+        help_text="در فرمول قیمت برای محصولات این دسته لحاظ می‌شود — صفر یعنی از دسته والد",
+    )
+
+    # ── فرمول قیمت — درصد سود نوع فروش برای همه محصولات دسته ─
+    profit_cash_percent    = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))], verbose_name="سود نقدی (%)")
+    profit_credit_percent  = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))], verbose_name="سود تو حسابی (%)")
+    profit_month1_percent  = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))], verbose_name="سود یکماهه (%)")
+    profit_month2_percent  = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))], verbose_name="سود دوماهه (%)")
+    profit_retail_percent  = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))], verbose_name="سود مشتری عمومی (%)")
+
+    # ── SEO ───────────────────────────────────────────────
+    description = models.TextField(blank=True, verbose_name="توضیحات دسته")
+    meta_title = models.CharField(max_length=60, blank=True, verbose_name="Meta Title")
+    meta_description = models.CharField(max_length=160, blank=True, verbose_name="Meta Description")
+
+    class Meta:
+        db_table = "catalog_category"
+        verbose_name = "دسته‌بندی"
+        verbose_name_plural = "دسته‌بندی‌ها"
+        ordering = ["sort_order", "name"]
+
+    def get_active_product_count(self):
+        """تعداد محصولات فعال این دسته به‌همراه همه زیردسته‌هایش."""
+        count = self.products.filter(is_active=True).count()
+        for child in self.children.filter(is_active=True):
+            count += child.get_active_product_count()
+        return count
+
+    def __str__(self):
+        return f"{self.parent.name} / {self.name}" if self.parent else self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            base = slugify(self.name, allow_unicode=True)
+            slug = base
+            n = 2
+            while Category.objects.filter(slug=slug).exclude(pk=self.pk).exists():
+                slug = f"{base}-{n}"
+                n += 1
+            self.slug = slug
+        super().save(*args, **kwargs)
+
+
+class Product(TimeStampedModel):
+    # ── اطلاعات پایه ──────────────────────────────────────
+    name     = models.CharField(max_length=255, verbose_name="نام محصول")
+    slug     = models.SlugField(max_length=270, unique=True, allow_unicode=True)
+    category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="products", verbose_name="دسته‌بندی")
+    brand    = models.CharField(max_length=100, blank=True, verbose_name="شرکت سازنده")
+    model_number = models.CharField(max_length=100, blank=True, verbose_name="شماره مدل")
+    description       = models.TextField(blank=True, verbose_name="توضیحات")
+    short_description = models.CharField(max_length=500, blank=True, verbose_name="توضیح کوتاه")
+
+    # ── ویژگی‌های برد دوربین ──────────────────────────────
+    board_name = models.CharField(max_length=150, blank=True, verbose_name="نام برد")
+    board_system = models.CharField(max_length=20, blank=True, verbose_name="سیستم",
+        choices=[("AHD","AHD"),("IP","IP")])
+    board_resolution = models.CharField(max_length=20, blank=True, verbose_name="رزولوشن (برد)",
+        choices=[("2MP","2MP"),("4MP","4MP"),("5MP","5MP"),("8MP","8MP"),("12MP","12MP")])
+    sensor_name  = models.CharField(max_length=150, blank=True, verbose_name="نام سنسور")
+    sensor_size  = models.CharField(max_length=30, blank=True, verbose_name="اندازه سنسور",
+        choices=[('1/4"','1/4"'),('1/3"','1/3"'),('1/2.8"','1/2.8"'),
+                 ('1/2.7"','1/2.7"'),('1/2"','1/2"'),('1/1.8"','1/1.8"')])
+    ai_processor    = models.CharField(max_length=150, blank=True, verbose_name="پردازنده")
+    board_dimensions= models.CharField(max_length=100, blank=True, verbose_name="ابعاد (برد)",
+        choices=[("۳۲*۳۲","۳۲*۳۲"),("۳۸*۳۸","۳۸*۳۸"),("۳۸*۴۸","۳۸*۴۸")])
+    board_tech_notes= models.TextField(blank=True, verbose_name="اطلاعات فنی بیشتر (برد)")
+
+    # ── ویژگی‌های لنز دوربین ──────────────────────────────
+    lens_name = models.CharField(max_length=150, blank=True, verbose_name="نام لنز")
+    lens_resolution = models.CharField(max_length=20, blank=True, verbose_name="رزولوشن لنز",
+        choices=[("3MP","3MP"),("5MP","5MP"),("8MP","8MP")])
+    lens_degree = models.CharField(max_length=20, blank=True, verbose_name="فاصله کانونی",
+        choices=[("1.7mm","1.7mm"),("1.8mm","1.8mm"),("2.8mm","2.8mm"),
+                 ("3.6mm","3.6mm"),("4mm","4mm"),("6mm","6mm"),
+                 ("8mm","8mm"),("12mm","12mm"),("16mm","16mm")])
+    lens_type = models.CharField(max_length=50, blank=True, verbose_name="نوع لنز",
+        choices=[("فیکس","فیکس"),("وریفکال","وریفکال"),
+                 ("فیش آی","فیش آی"),("پین هولد","پین هولد"),("موتورایز","موتورایز")])
+    focal_ratio = models.CharField(max_length=30, blank=True, verbose_name="نوع کاربرد",
+        choices=[("معمولی","معمولی"),("استارلایت","استارلایت"),("دارک لایت","دارک لایت")])
+
+    # ── ویژگی‌های متعلقات ─────────────────────────────────
+    modem_model  = models.CharField(max_length=150, blank=True, verbose_name="مدل")
+    modem_type   = models.CharField(max_length=100, blank=True, verbose_name="نوع")
+    pin_count    = models.CharField(max_length=50,  blank=True, verbose_name="تعداد پین")
+    voltage      = models.CharField(max_length=50,  blank=True, verbose_name="ولتاژ کاری")
+    ampere_output= models.CharField(max_length=50,  blank=True, verbose_name="آمپر خروجی")
+    sim_card     = models.BooleanField(default=False, verbose_name="قابلیت سیم کارت")
+    output_ports = models.PositiveSmallIntegerField(null=True, blank=True, verbose_name="تعداد پورت خروجی")
+    modem_size   = models.CharField(max_length=100, blank=True, verbose_name="سایز")
+
+    # ── ویژگی‌های بدنه دوربین ─────────────────────────────
+    housing_material = models.CharField(max_length=50, blank=True, verbose_name="جنس بدنه",
+        choices=[("فلز","فلز"),("پلاستیک","پلاستیک"),("فلز و پلاستیک","فلز و پلاستیک")])
+    housing_type = models.CharField(max_length=50, blank=True, verbose_name="نوع بدنه",
+        choices=[("Bullet","Bullet"),("Dome","Dome"),("Box","Box"),("PTZ","PTZ"),("Fisheye","Fisheye")])
+    housing_size = models.CharField(max_length=100, blank=True, verbose_name="سایز دوربین")
+    has_microphone = models.BooleanField(default=False, verbose_name="قابلیت میکروفون")
+
+    # ── فایل‌ها ────────────────────────────────────────────
+    datasheet_pdf = models.FileField(upload_to="datasheets/%Y/%m/", null=True, blank=True, verbose_name="دیتاشیت PDF")
+    whatsapp_link = models.URLField(blank=True, verbose_name="لینک واتساپ")
+    bale_link     = models.URLField(blank=True, verbose_name="لینک بله")
+    compatible_with = models.ManyToManyField("self", symmetrical=True, blank=True, verbose_name="محصولات سازگار")
+
+    # ── وضعیت ─────────────────────────────────────────────
+    is_active   = models.BooleanField(default=True, verbose_name="فعال", db_index=True)
+    is_featured = models.BooleanField(default=False, verbose_name="ویژه")
+
+    # ── SEO ───────────────────────────────────────────────
+    meta_title       = models.CharField(max_length=60,  blank=True, verbose_name="Meta Title")
+    meta_description = models.CharField(max_length=160, blank=True, verbose_name="Meta Description")
+    keywords         = models.CharField(max_length=500, blank=True, verbose_name="کلمات کلیدی")
+    geo_tags         = models.CharField(max_length=300, blank=True, verbose_name="شهرهای هدف")
+    dynamic_specs    = models.JSONField(default=dict, blank=True, verbose_name="مشخصات سفارشی دسته")
+    legacy_id        = models.PositiveIntegerField(
+        null=True, blank=True, unique=True, db_index=True,
+        verbose_name="شناسه در سایت قدیمی",
+        help_text="برای ریدایرکت ۳۰۱ از doorbinkar.com",
+    )
+
+    class Meta:
+        db_table = "catalog_product"
+        verbose_name = "محصول"
+        verbose_name_plural = "محصولات"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        from apps.catalog.seo import generate_slug, generate_all_seo_fields
+        # نام برد اگر خالی باشد از شماره مدل (فیلد بالای فرم) خودکار پر می‌شود
+        if self.category_type == "board" and not self.board_name and self.model_number:
+            self.board_name = self.model_number
+        old_slug = old_pdf = None
+        if self.pk:
+            old_slug, old_pdf = (Product.objects.filter(pk=self.pk)
+                                 .values_list("slug", "datasheet_pdf").first() or (None, None))
+        if not self.slug:
+            self.slug = generate_slug(self.name, self.__class__, self.pk)
+        elif old_slug and old_slug != self.slug:
+            SlugRedirect.record(f"/products/{old_slug}", f"/products/{self.slug}")
+        # حذف فایل دیتاشیت قدیمی هنگام تعویض/حذف — جنگو پیش‌فرض فایل قبلی را نگه می‌دارد
+        new_pdf = self.datasheet_pdf.name if self.datasheet_pdf else ""
+        if old_pdf and old_pdf != new_pdf:
+            from django.core.files.storage import default_storage
+            if default_storage.exists(old_pdf):
+                default_storage.delete(old_pdf)
+        for k, v in generate_all_seo_fields(self, force=False).items():
+            setattr(self, k, v)
+        super().save(*args, **kwargs)
+
+    def generate_seo_fields(self, force=False):
+        from apps.catalog.seo import generate_all_seo_fields
+        for k, v in generate_all_seo_fields(self, force=force).items():
+            setattr(self, k, v)
+
+    @property
+    def main_image(self):
+        return self.images.filter(is_primary=True).first()
+
+    @property
+    def available_stock(self):
+        return sum(v.available_stock for v in self.variants.all())
+
+    @property
+    def category_type(self):
+        return self.category.category_type if self.category_id else None
+
+
+class ProductImage(TimeStampedModel):
+    product    = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="images")
+    image      = models.ImageField(upload_to="products/%Y/%m/", verbose_name="تصویر")
+    alt_text   = models.CharField(max_length=255, blank=True, verbose_name="متن جایگزین")
+    is_primary = models.BooleanField(default=False, verbose_name="تصویر اصلی")
+    sort_order = models.PositiveSmallIntegerField(default=0, verbose_name="ترتیب")
+
+    class Meta:
+        db_table = "catalog_product_image"
+        verbose_name = "تصویر محصول"
+        verbose_name_plural = "تصاویر محصول"
+        ordering = ["-is_primary", "sort_order"]
+
+    def save(self, *args, **kwargs):
+        if self.is_primary:
+            ProductImage.objects.filter(product=self.product, is_primary=True).exclude(pk=self.pk).update(is_primary=False)
+        # فشرده‌سازی خودکار فقط برای آپلود جدید — رکوردهای موجود (save برای تغییر is_primary) دست نمی‌خورند
+        if self.pk is None and self.image:
+            from .image_utils import compress_product_image
+            self.image = compress_product_image(self.image)
+        super().save(*args, **kwargs)
+
+
+class DatasheetPage(TimeStampedModel):
+    """صفحه‌ای از دیتاشیت PDF محصول که به تصویر (webp) تبدیل شده."""
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE,
+        related_name="datasheet_pages", verbose_name="محصول",
+    )
+    image   = models.ImageField(upload_to="datasheets/pages/%Y/%m/", verbose_name="تصویر صفحه")
+    page    = models.PositiveSmallIntegerField(verbose_name="شماره صفحه")
+
+    class Meta:
+        db_table = "catalog_datasheet_page"
+        verbose_name = "صفحه دیتاشیت"
+        verbose_name_plural = "صفحات دیتاشیت"
+        ordering = ["page"]
+        unique_together = [("product", "page")]
+
+    def __str__(self):
+        return f"{self.product} — صفحه {self.page}"
+
+
+class ProductVariant(TimeStampedModel):
+    product    = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="variants", verbose_name="محصول")
+    sku        = models.CharField(max_length=100, unique=True, verbose_name="کد SKU")
+    name_suffix= models.CharField(max_length=100, blank=True, verbose_name="پسوند نام")
+    stock_quantity = models.PositiveIntegerField(default=0, verbose_name="موجودی کل")
+    reserved_qty   = models.PositiveIntegerField(default=0, verbose_name="رزرو شده")
+    month2_unavailable = models.BooleanField(default=False, verbose_name="فروش دوماهه ندارد",
+        help_text="در فرمول قیمت، ستون دوماهه این واریانت «ندارد» نمایش داده می‌شود")
+    purchase_price_cny = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.00"))],
+        verbose_name="قیمت خرید (یوان)",
+        help_text="قیمت خرید به یوان چینی",
+    )
+    shipping_cost_cny = models.DecimalField(
+        max_digits=8, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))],
+        verbose_name="هزینه حمل (یوان)",
+        help_text="هزینه حمل به یوان چینی",
+    )
+    profit_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))],
+        verbose_name="سود (%)",
+        help_text="درصد سود روی قیمت خرید + حمل. مثال: 20 یعنی ۲۰٪",
+    )
+    discount_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0")), MaxValueValidator(Decimal("100"))],
+        verbose_name="تخفیف (%)",
+        help_text="تخفیف فروش روی قیمت فرمول (۰ تا ۱۰۰). صفر یعنی بدون تخفیف",
+    )
+    is_active     = models.BooleanField(default=True, verbose_name="فعال")
+
+    class Meta:
+        db_table = "catalog_product_variant"
+        verbose_name = "نسخه محصول"
+        verbose_name_plural = "نسخه‌های محصول"
+        ordering = ["product", "sku"]
+
+    def __str__(self):
+        return f"{self.product.name} [{self.sku}]"
+
+    @property
+    def final_price(self):
+        import math
+        # نرخ ذخیره‌شده ریال است؛ قیمت نهایی ریال برمی‌گردد
+        rate_irt = Decimal(ExchangeRateSetting.get_instance().rate_cny_to_irt)
+        subtotal = (self.purchase_price_cny + self.shipping_cost_cny) * rate_irt
+        profit = subtotal * (self.profit_percent / 100)
+        return math.ceil(float(subtotal + profit))
+
+    @property
+    def available_stock(self):
+        return max(0, self.stock_quantity - self.reserved_qty)
+
+    @property
+    def is_in_stock(self):
+        return self.available_stock > 0
+
+    @property
+    def is_low_stock(self):
+        from django.conf import settings
+        return 0 < self.available_stock <= getattr(settings, "LOW_STOCK_THRESHOLD", 5)
+
+    def reserve(self, quantity):
+        if self.available_stock >= quantity:
+            self.reserved_qty += quantity
+            self.save(update_fields=["reserved_qty","updated_at"])
+            return True
+        return False
+
+    def release_reservation(self, quantity):
+        self.reserved_qty = max(0, self.reserved_qty - quantity)
+        self.save(update_fields=["reserved_qty","updated_at"])
+
+    def deduct_stock(self, quantity):
+        self.reserved_qty   = max(0, self.reserved_qty - quantity)
+        self.stock_quantity = max(0, self.stock_quantity - quantity)
+        self.save(update_fields=["reserved_qty","stock_quantity","updated_at"])
+
+
+class Package(models.Model):
+    """پکیج پیشنهادی — ترکیب چند محصول با تخفیف"""
+
+    name        = models.CharField(max_length=200, verbose_name="نام پکیج")
+    slug        = models.SlugField(max_length=250, unique=True, allow_unicode=True, verbose_name="نامک")
+    description = models.TextField(blank=True, verbose_name="توضیحات")
+    image       = models.ImageField(upload_to='packages/', null=True, blank=True, verbose_name="تصویر")
+    products    = models.ManyToManyField('Product', through='PackageItem', related_name='packages', verbose_name="محصولات")
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="تخفیف (%)")
+    min_quantity = models.PositiveSmallIntegerField(default=1, verbose_name="حداقل تعداد سفارش",
+        help_text="حداقل تعدادی که مشتری باید از این پکیج سفارش دهد")
+    is_active   = models.BooleanField(default=True, verbose_name="فعال")
+    is_featured = models.BooleanField(default=False, verbose_name="ویژه")
+
+    # ── SEO ───────────────────────────────────────────────
+    meta_title       = models.CharField(max_length=60,  blank=True, verbose_name="Meta Title")
+    meta_description = models.CharField(max_length=160, blank=True, verbose_name="Meta Description")
+    keywords         = models.CharField(max_length=500, blank=True, verbose_name="کلمات کلیدی")
+    geo_tags         = models.CharField(max_length=300, blank=True, verbose_name="شهرهای هدف")
+
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "catalog_package"
+        verbose_name = "پکیج"
+        verbose_name_plural = "پکیج‌ها"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def original_price(self):
+        """قیمت اصلی بدون تخفیف"""
+        total = 0
+        for item in self.package_items.select_related('variant').all():
+            total += item.variant.final_price * item.quantity
+        return total
+
+    @property
+    def final_price(self):
+        """قیمت نهایی با تخفیف"""
+        import math
+        disc = float(self.discount_percent) / 100
+        return math.ceil(self.original_price * (1 - disc))
+
+    @property
+    def savings(self):
+        return self.original_price - self.final_price
+
+    def prices_for(self, user):
+        """قیمت (اصلی، نهایی) پکیج برای یک کاربر خاص — ریال.
+        مبنای اقلام همان price_for_user است تا قیمت پکیج با قیمتی که کاربر
+        در صفحه محصول می‌بیند (سطح همکاری/نوع تسویه) یکی باشد."""
+        import math
+        from apps.catalog.pricing import price_for_user
+        original = sum(
+            price_for_user(item.variant, user) * item.quantity
+            for item in self.package_items.all()
+        )
+        disc = float(self.discount_percent) / 100
+        final = math.ceil(original * (1 - disc))
+        return original, final
+
+
+class PackageItem(models.Model):
+    """آیتم داخل پکیج"""
+    package  = models.ForeignKey(Package, on_delete=models.CASCADE, related_name='package_items')
+    product  = models.ForeignKey('Product', on_delete=models.CASCADE, verbose_name="محصول")
+    variant  = models.ForeignKey('ProductVariant', on_delete=models.CASCADE, verbose_name="نوع محصول")
+    quantity = models.PositiveSmallIntegerField(default=1, verbose_name="تعداد")
+
+    class Meta:
+        db_table = "catalog_package_item"
+        verbose_name = "آیتم پکیج"
+        verbose_name_plural = "آیتم‌های پکیج"
+
+    def __str__(self):
+        return f"{self.package.name} — {self.product.name} × {self.quantity}"
+
+
+class ProductPriceHistory(models.Model):
+    """تاریخچه قیمت محصول — روزانه ذخیره می‌شود"""
+    variant    = models.ForeignKey('ProductVariant', on_delete=models.CASCADE,
+                   related_name='price_history', verbose_name="variant")
+    date       = models.DateField(verbose_name="تاریخ")
+    price_irr  = models.PositiveIntegerField(verbose_name="قیمت (تومان)")
+    price_cny  = models.DecimalField(max_digits=10, decimal_places=2,
+                   default=0, verbose_name="قیمت (یوان)")
+
+    class Meta:
+        db_table = "catalog_price_history"
+        verbose_name = "تاریخچه قیمت"
+        unique_together = [("variant", "date")]
+        ordering = ["-date"]
+
+    def __str__(self):
+        return f"{self.variant} | {self.date} | {self.price_irr:,}"
+
+
+
+class CategorySpecField(TimeStampedModel):
+    """ویژگی سفارشی تعریف‌شده توسط ادمین برای یک دسته‌بندی."""
+    class FieldType(models.TextChoices):
+        TEXT     = "text",     "متن"
+        SELECT   = "select",   "لیست کشویی"
+        CHECKBOX = "checkbox", "تیک"
+
+    category   = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="spec_fields", verbose_name="دسته‌بندی")
+    key        = models.SlugField(max_length=80, allow_unicode=True, verbose_name="کلید")
+    label      = models.CharField(max_length=100, verbose_name="نام ویژگی")
+    field_type = models.CharField(max_length=10, choices=FieldType.choices, default=FieldType.TEXT, verbose_name="نوع فیلد")
+    choices    = models.CharField(max_length=300, blank=True, verbose_name="گزینه‌ها", help_text="برای لیست کشویی — با ویرگول جدا کنید")
+    sort_order = models.PositiveSmallIntegerField(default=0, verbose_name="ترتیب")
+    is_active  = models.BooleanField(default=True, verbose_name="فعال")
+
+    class Meta:
+        db_table = "catalog_category_spec_field"
+        verbose_name = "ویژگی دسته"
+        verbose_name_plural = "ویژگی‌های دسته"
+        ordering = ["sort_order", "id"]
+        unique_together = [("category", "key")]
+
+    def save(self, *args, **kwargs):
+        if not self.key:
+            base = slugify(self.label, allow_unicode=True) or "field"
+            key, i = base, 1
+            while CategorySpecField.objects.filter(category=self.category, key=key).exclude(pk=self.pk).exists():
+                i += 1
+                key = f"{base}-{i}"
+            self.key = key
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.category.name} / {self.label}"
+
+
+class CategoryBrand(TimeStampedModel):
+    """برند مجاز برای یک دسته‌بندی اصلی — لیست دراپ‌داون برند در ویرایشگر محصول
+    از همین‌جا (+ برندهای در حال استفاده محصولات همان دسته) ساخته می‌شود."""
+
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="brands", verbose_name="دسته‌بندی")
+    name     = models.CharField(max_length=100, verbose_name="نام برند")
+
+    class Meta:
+        db_table = "catalog_category_brand"
+        verbose_name = "برند دسته"
+        verbose_name_plural = "برندهای دسته"
+        ordering = ["name"]
+        unique_together = [("category", "name")]
+
+    def __str__(self):
+        return f"{self.category.name} / {self.name}"
+
+
+class SlugRedirect(models.Model):
+    """
+    نگاشت اسلاگ قدیمی → مسیر جدید برای ریدایرکت ۳۰۱.
+    با هر تغییر اسلاگ محصول/مقاله به‌صورت خودکار ساخته می‌شود تا
+    URLهای قبلی (ایندکس گوگل، لینک‌های خارجی) به ۴۰۴ نخورند.
+    """
+    old_slug   = models.SlugField(max_length=320, unique=True, allow_unicode=True)
+    new_path   = models.CharField(max_length=400)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "catalog_slug_redirect"
+
+    def __str__(self):
+        return f"{self.old_slug} → {self.new_path}"
+
+    @classmethod
+    def record(cls, old_path, new_path):
+        """ثبت ریدایرکت از old_path به new_path + یکسری‌سازی زنجیره‌ها."""
+        old_slug = old_path.rstrip("/").rsplit("/", 1)[-1]
+        if not old_slug or old_path == new_path:
+            return
+        cls.objects.update_or_create(old_slug=old_slug, defaults={"new_path": new_path})
+        # ریدایرکتهایی که به مسیر قدیمی اشاره می‌کردند مستقیم به مقصد جدید بروند
+        cls.objects.filter(new_path=old_path).exclude(old_slug=old_slug).update(new_path=new_path)

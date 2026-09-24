@@ -13,6 +13,7 @@ const QUICK_LINKS = [
   ['قوانین', '/terms'],
   ['حریم خصوصی', '/privacy'],
   ['درباره ما', '/about'],
+  ['باشگاه همکاران', '/club'],
   ['ورود', '/auth/login'],
   ['ثبت‌نام همکار', '/auth/register'],
 ]
@@ -45,7 +46,9 @@ function EnamadSeal({ id, code }) {
     <a
       referrerPolicy="origin"
       target="_blank"
-      rel="noopener noreferrer"
+      // فقط noopener — نه noreferrer: ارسال Referer برای trustseal.enamad.ir
+      // لازم است تا شناسنامه کسب‌وکار نمایش داده شود (noreferrer مانع ارسال می‌شد)
+      rel="noopener"
       href={`https://trustseal.enamad.ir/?id=${id}&code=${code}`}
       title="نماد اعتماد الکترونیکی"
       aria-label="نماد اعتماد الکترونیکی"
@@ -348,7 +351,7 @@ export default function Footer() {
         {/* ─── نوار پایانی ─── */}
         <div className="border-t border-[var(--color-border)] py-5 mb-2 flex flex-col md:flex-row items-center justify-between gap-3">
           <span className="text-xs text-[var(--color-text-muted)]">
-            © ۱۴۰۳ {settings?.site_name || 'فروشگاه قطعات دوربین مداربسته'} — تمامی حقوق محفوظ است
+            © ۱۳۹۲ تا {new Date().toLocaleDateString('fa-IR', { year: 'numeric' })} {settings?.site_name || 'فروشگاه قطعات دوربین مداربسته'} — تمامی حقوق محفوظ است
           </span>
           <div className="flex items-center gap-2">
             <span className="badge badge-gold !text-[10px]">ساخته شده با ❤️ در ایران</span>

@@ -26,7 +26,7 @@ const useCompareStore = create(
         }
         set({ items: [...items, product] })
         toast.success(items.length === 0
-          ? 'به مقایسه اضافه شد — از آیکون ⚖ بالای صفحه می‌توانید ببینیدش'
+          ? 'به مقایسه اضافه شد — از آیکون مقایسه بالای صفحه می‌توانید ببینیدش'
           : 'به مقایسه اضافه شد')
         return true
       },

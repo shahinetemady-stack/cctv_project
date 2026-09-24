@@ -1,0 +1,1128 @@
+"""
+apps/accounting/models.py — v4
+─────────────────────────────────
+Workflow دو مرحله‌ای فاکتور خرید:
+
+مرحله ۱ — ORDERED (هنگام ثبت سفارش):
+  - supplier, items, نرخ یوان خرید
+  - shipping_contact (شرکت حمل) — از همان ابتدا مشخص است
+  - warehouse_transit (انبار در راه — مثلاً «در راه هوایی»)
+  - apply_to_inventory(): موجودی به stock_quantity اضافه می‌شود
+    + کاردکس انبار در راه: PURCHASE
+
+مرحله ۲ — RECEIVED (وقتی کالا رسید):
+  - rate_shipping_cny, shipping_cost_cny, clearance_cost_irr, carton_weight
+  - warehouse_destination (انبار مقصد — shop1/shop2/...)
+  - mark_received(): انتقال از warehouse_transit به warehouse_destination
+    + کاردکس: TRANSFER_OUT از در راه + TRANSFER_IN به مقصد
+    + stock_quantity تغییر نمی‌کند (از قبل اضافه شده)
+"""
+import logging
+from django.db import models, transaction
+from django.conf import settings
+from django.utils import timezone
+from decimal import Decimal
+
+from apps.core.models import AuditMixin, AuditableModel
+
+logger = logging.getLogger(__name__)
+
+
+class Contact(AuditableModel):
+    class ContactType(models.TextChoices):
+        SUPPLIER_CN  = "supplier_cn",  "تامین‌کننده چینی"
+        CLEARANCE    = "clearance",    "ترخیص‌کار"
+        SHIPPING_CO  = "shipping_co",  "شرکت حمل"
+        STAFF        = "staff",        "کارمند / فروشنده"
+        CUSTOMER     = "customer",     "مشتری"
+        PARTNER      = "partner",      "همکار"
+        OTHER        = "other",        "سایر"
+
+    class Currency(models.TextChoices):
+        CNY = "CNY", "یوان چین"
+        IRR = "IRR", "ریال ایران"
+        USD = "USD", "دلار"
+
+    class PartnerTier(models.TextChoices):
+        SILVER   = "silver",   "همکار سیلور"
+        GOLD     = "gold",     "همکار گلد"
+        PLATINUM = "platinum", "همکار پلاتینیوم"
+
+    name         = models.CharField(max_length=200, verbose_name="نام")
+    contact_type = models.CharField(max_length=20, choices=ContactType.choices, verbose_name="نوع")
+    currency     = models.CharField(max_length=5, choices=Currency.choices, default=Currency.CNY, verbose_name="ارز پیش‌فرض")
+    phone        = models.CharField(max_length=50, blank=True, verbose_name="موبایل")
+    wechat       = models.CharField(max_length=100, blank=True, verbose_name="وی‌چت / واتساپ / تلفن")
+    address      = models.TextField(blank=True, verbose_name="آدرس")
+    province     = models.CharField(max_length=50, blank=True, verbose_name="استان")
+    partner_tier = models.CharField(max_length=10, choices=PartnerTier.choices, blank=True,
+                        verbose_name="سطح همکار",
+                        help_text="فقط برای نوع «همکار» — سیلور/گلد/پلاتینیوم")
+    note         = models.TextField(blank=True, verbose_name="توضیحات")
+    opening_balance_irr = models.BigIntegerField(default=0, verbose_name="مانده اول دوره (ریال)",
+                        help_text="مثبت = طرف حساب به ما بدهکار | منفی = ما به او بدهکاریم")
+    opening_balance_cny = models.DecimalField(max_digits=18, decimal_places=2, default=0,
+                        verbose_name="مانده اول دوره (یوان)",
+                        help_text="مثبت = طرف حساب به ما بدهکار | منفی = ما به او بدهکاریم")
+    is_active    = models.BooleanField(default=True, verbose_name="فعال")
+    created_at   = models.DateTimeField(auto_now_add=True)
+    updated_at   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "accounting_contact"
+        verbose_name = "طرف حساب"
+        verbose_name_plural = "طرف حساب‌ها"
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.get_contact_type_display()})"
+
+    @property
+    def balance_irr(self):
+        """
+        مانده حساب به ریال — فقط اسناد ریالی خالص.
+        اسناد یوانی در balance_cny حساب می‌شوند و «مانده کل» =
+        balance_irr + balance_cny × نرخ روز یوان است.
+        مثبت = طرف حساب به ما بدهکار است (بستانکار ما)
+        منفی = ما به طرف حساب بدهکاریم
+        """
+        from django.db.models import Sum
+        paid_irr = self.payments.filter(currency='IRR', direction='out').aggregate(s=Sum('amount'))['s'] or 0
+        recv_irr = self.payments.filter(currency='IRR', direction='in').aggregate(s=Sum('amount'))['s'] or 0
+
+        total_invoiced_irr = 0
+        for inv in self.purchase_invoices.all():
+            if inv.purchase_type == PurchaseInvoice.PurchaseType.DOMESTIC:
+                # خرید داخلی — قیمت آیتم‌ها مستقیماً ریال است
+                total_invoiced_irr += sum(item.unit_price_irr * item.quantity for item in inv.items.all())
+
+        for inv in self.shipping_invoices.all():
+            total_invoiced_irr += inv.clearance_cost_irr
+
+        extra_irr = self.extra_costs.aggregate(s=Sum('amount_irr'))['s'] or 0
+        total_invoiced_irr += extra_irr
+
+        # ما کالا خریدیم = به تأمین‌کننده بدهکاریم = balance منفی
+        # پول دادیم (out) = بدهی کم شد = balance مثبت | از او گرفتیم (in) = balance منفی‌تر
+        # مانده اول دوره: مثبت = بدهکار به ما، منفی = بستانکار
+        return float(paid_irr) - float(recv_irr) - total_invoiced_irr + float(self.opening_balance_irr)
+
+    @property
+    def balance_cny(self):
+        """
+        مانده حساب به یوان.
+        مثبت = طرف حساب به ما بدهکار است (بستانکار ما)
+        منفی = ما به طرف حساب بدهکاریم
+        """
+        from django.db.models import Sum
+        paid_cny = self.payments.filter(currency='CNY', direction='out').aggregate(s=Sum('amount'))['s'] or 0
+        recv_cny = self.payments.filter(currency='CNY', direction='in').aggregate(s=Sum('amount'))['s'] or 0
+        total_paid_cny = float(paid_cny)
+        total_cny = 0
+        for inv in self.purchase_invoices.all():
+            items_cny = sum(float(item.unit_price_cny) * item.quantity for item in inv.items.all())
+            total_cny += items_cny
+        for inv in self.shipping_invoices.all():
+            total_cny += float(inv.shipping_cost_cny)
+
+        # ما کالا خریدیم = به تأمین‌کننده بدهکاریم = balance منفی
+        # پول دادیم (out) = بدهی کم شد = balance مثبت | از او گرفتیم (in) = balance منفی‌تر
+        # مانده اول دوره: مثبت = بدهکار به ما، منفی = بستانکار
+        return total_paid_cny - float(recv_cny) - total_cny + float(self.opening_balance_cny)
+
+
+class PurchaseInvoice(AuditMixin):
+    """فاکتور خرید — workflow دو مرحله‌ای با انبار در راه/مقصد (خارجی) یا رسید مستقیم (داخلی)"""
+
+    class PurchaseType(models.TextChoices):
+        FOREIGN  = "foreign",  "خرید خارجی"
+        DOMESTIC = "domestic", "خرید داخلی"
+
+    class Status(models.TextChoices):
+        ORDERED   = "ordered",   "سفارش داده شده (در راه)"
+        RECEIVED  = "received",  "رسیده (در انبار)"
+        PAID      = "paid",      "تسویه شده"
+        CANCELLED = "cancelled", "لغو شده"
+
+    purchase_type  = models.CharField(max_length=10, choices=PurchaseType.choices,
+                        default=PurchaseType.FOREIGN, verbose_name="نوع خرید")
+    supplier       = models.ForeignKey(Contact, on_delete=models.PROTECT,
+                        related_name="purchase_invoices", verbose_name="تامین‌کننده")
+    invoice_number = models.CharField(max_length=50, blank=True, verbose_name="شماره فاکتور")
+    date           = models.DateField(verbose_name="تاریخ سفارش")
+
+    # ── انبار در راه (مرحله ۱) ───────────────────────────────
+    warehouse      = models.ForeignKey("inventory.Warehouse", on_delete=models.PROTECT,
+                        null=True, blank=True,
+                        related_name="purchase_invoices_transit",
+                        verbose_name="انبار در راه")
+
+    # ── انبار مقصد (مرحله ۲) ───────────────────────────────
+    warehouse_destination = models.ForeignKey(
+        "inventory.Warehouse", on_delete=models.PROTECT,
+        null=True, blank=True,
+        related_name="purchase_invoices_destination",
+        verbose_name="انبار مقصد (وقتی رسید)")
+
+    rate_purchase_cny = models.PositiveBigIntegerField(
+        verbose_name="نرخ یوان خرید (تومان)")
+    rate_shipping_cny = models.PositiveBigIntegerField(
+        default=0, null=True, blank=True,
+        verbose_name="نرخ یوان حمل (تومان)")
+
+    # شرکت حمل — از مرحله ۱ قابل تعیین است
+    shipping_contact   = models.ForeignKey(Contact, on_delete=models.SET_NULL,
+                            null=True, blank=True, related_name="shipping_invoices",
+                            verbose_name="شرکت حمل / ترخیص‌کار")
+    shipping_cost_cny  = models.DecimalField(max_digits=12, decimal_places=2, default=0,
+                            verbose_name="هزینه حمل کل (یوان)")
+    clearance_cost_irr = models.PositiveBigIntegerField(default=0,
+                            verbose_name="هزینه ترخیص کل (ریال)")
+
+    status     = models.CharField(max_length=20, choices=Status.choices,
+                    default=Status.ORDERED, verbose_name="وضعیت")
+    note       = models.TextField(blank=True, verbose_name="توضیحات")
+
+    received_at = models.DateTimeField(null=True, blank=True, verbose_name="تاریخ رسیدن کالا")
+    inventory_applied = models.BooleanField(default=False, verbose_name="موجودی اعمال شده")
+    inventory_applied_at = models.DateTimeField(null=True, blank=True)
+
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name="created_purchase_invoices",
+                    verbose_name="ثبت‌کننده")
+    received_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name="received_purchase_invoices",
+                    verbose_name="تأییدکننده رسیدن کالا")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name="edited_purchase_invoices",
+                    verbose_name="آخرین ویرایش‌کننده")
+
+    class Meta:
+        db_table = "accounting_purchase_invoice"
+        verbose_name = "فاکتور خرید"
+        verbose_name_plural = "فاکتورهای خرید"
+        ordering = ["-date", "-created_at"]
+
+    def __str__(self):
+        return f"فاکتور {self.invoice_number or self.id} — {self.supplier.name} — {self.date}"
+
+    @property
+    def total_weight(self):
+        return sum(item.total_weight for item in self.items.all())
+
+    @property
+    def total_cny(self):
+        items_cny = sum(item.subtotal_cny for item in self.items.all())
+        return items_cny + (self.shipping_cost_cny or 0)
+
+    @property
+    def total_irr(self):
+        # خرید داخلی — قیمت‌ها مستقیماً ریال است
+        if self.purchase_type == self.PurchaseType.DOMESTIC:
+            items_irr = sum(item.unit_price_irr * item.quantity for item in self.items.all())
+            extra_irr = sum(e.amount_irr for e in self.extra_costs.all())
+            return int(items_irr + extra_irr)
+        items_irr = sum(item.subtotal_cny * self.rate_purchase_cny for item in self.items.all())
+        # اگه rate_shipping_cny ثبت نشده، از rate_purchase_cny استفاده می‌کنیم
+        shipping_rate = self.rate_shipping_cny or self.rate_purchase_cny or 0
+        shipping_irr = (self.shipping_cost_cny or 0) * shipping_rate
+        extra_irr = sum(e.amount_irr for e in self.extra_costs.all())
+        return int(items_irr + shipping_irr + (self.clearance_cost_irr or 0) + extra_irr)
+
+    @property
+    def is_complete(self):
+        return bool(self.rate_shipping_cny and self.total_weight)
+
+    def calculate_items_cost(self):
+        """محاسبه بهای تمام شده هر آیتم"""
+        total_w = self.total_weight
+        for item in self.items.all():
+            if total_w > 0:
+                weight_ratio = Decimal(str(item.total_weight)) / Decimal(str(total_w))
+            else:
+                weight_ratio = Decimal('0')
+
+            shipping_irr = (self.shipping_cost_cny or Decimal('0')) * Decimal(str(self.rate_shipping_cny or 0)) * weight_ratio
+            item.shipping_cost_irr = int(shipping_irr / item.quantity) if item.quantity else 0
+
+            clearance_share = Decimal(str(self.clearance_cost_irr or 0)) * weight_ratio
+            item.clearance_cost_irr = int(clearance_share / item.quantity) if item.quantity else 0
+
+            extra_total = sum(e.amount_irr for e in self.extra_costs.all())
+            extra_share = Decimal(str(extra_total)) * weight_ratio
+            item.extra_cost_irr = int(extra_share / item.quantity) if item.quantity else 0
+
+            purchase_irr = item.unit_price_cny * Decimal(str(self.rate_purchase_cny))
+            item.unit_cost_irr = int(
+                purchase_irr +
+                item.shipping_cost_irr +
+                item.clearance_cost_irr +
+                item.extra_cost_irr
+            )
+            item.save()
+
+    # ═══════════════════════════════════════════════════════════════════
+    # مرحله ۱: apply_to_inventory — وقتی سفارش ثبت می‌شود
+    # ═══════════════════════════════════════════════════════════════════
+    @transaction.atomic
+    def apply_to_inventory(self, user=None):
+        """
+        موجودی را به انبار «در راه» (self.warehouse) اضافه می‌کند:
+          - stock_quantity += quantity  (از نظر مالی، کالا خریداری شده)
+          - WarehouseStock انبار در راه += quantity
+          - کاردکس: PURCHASE در انبار در راه
+        idempotent
+        """
+        from django.utils import timezone
+
+        if self.inventory_applied:
+            return False
+
+        items = list(self.items.select_related("variant").all())
+        if not items:
+            raise ValueError("این فاکتور آیتمی ندارد.")
+
+        for item in items:
+            variant = item.variant
+            old_qty = variant.stock_quantity
+            variant.stock_quantity = old_qty + item.quantity
+            variant.save(update_fields=["stock_quantity"])
+            logger.info(
+                f"[PURCHASE] {variant.sku}: {old_qty} → {variant.stock_quantity} "
+                f"(+{item.quantity}) فاکتور {self.invoice_number or self.id}"
+            )
+
+            if self.warehouse is not None:
+                self._record_warehouse_inflow(item, user)
+
+        self.inventory_applied = True
+        self.inventory_applied_at = timezone.now()
+        self.save(update_fields=["inventory_applied", "inventory_applied_at", "updated_at"])
+        return True
+
+    def _record_warehouse_inflow(self, item, user=None):
+        """ثبت ورود به انبار در راه (مرحله ۱)"""
+        try:
+            from apps.inventory.models import StockMovement
+            StockMovement.record(
+                warehouse=self.warehouse,
+                variant=item.variant,
+                movement_type=StockMovement.MovementType.PURCHASE,
+                quantity=item.quantity,
+                unit_price=int(item.unit_cost_irr or 0),
+                reference=self.invoice_number or str(self.id),
+                note=f"خرید از {self.supplier.name} → {self.warehouse.name}",
+                user=user,
+            )
+        except Exception as exc:
+            logger.warning(f"[INVENTORY] ثبت کاردکس inflow ناموفق: {exc}")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # مرحله ۲: mark_received — وقتی کالا می‌رسد و به انبار مقصد منتقل می‌شود
+    # ═══════════════════════════════════════════════════════════════════
+    @transaction.atomic
+    def mark_received(self, destination_warehouse, user=None):
+        """
+        هنگام رسیدن کالا:
+          1) ذخیره انبار مقصد
+          2) محاسبه بهای تمام شده (با اطلاعات حمل تکمیل شده)
+          3) انتقال از انبار در راه → انبار مقصد در کاردکس:
+             - TRANSFER_OUT از در راه (-quantity)
+             - TRANSFER_IN به مقصد (+quantity)
+          4) stock_quantity تغییر نمی‌کند (در مرحله ۱ اضافه شده بود)
+
+        idempotent: اگر status == RECEIVED، چیزی نمی‌کند
+        """
+        from django.utils import timezone
+
+        if self.status == self.Status.RECEIVED:
+            logger.info(f"[PURCHASE] فاکتور {self.invoice_number or self.id} قبلاً RECEIVED شده")
+            return False
+
+        if destination_warehouse is None:
+            raise ValueError("انبار مقصد الزامی است.")
+
+        self.warehouse_destination = destination_warehouse
+
+        items = list(self.items.select_related("variant").all())
+        if not items:
+            raise ValueError("این فاکتور آیتمی ندارد.")
+
+        # محاسبه بهای تمام شده
+        self.calculate_items_cost()
+
+        # انتقال موجودی از انبار در راه به انبار مقصد
+        if self.warehouse and destination_warehouse and self.warehouse_id != destination_warehouse.id:
+            for item in items:
+                self._record_warehouse_transfer(item, destination_warehouse, user)
+
+        self.status = self.Status.RECEIVED
+        self.received_at = timezone.now()
+        if user:
+            self.received_by = user
+        self.save(update_fields=[
+            "status", "warehouse_destination", "received_at", "received_by", "updated_at",
+        ])
+        return True
+
+    def _record_warehouse_transfer(self, item, destination, user=None):
+        """انتقال یک آیتم از انبار در راه → انبار مقصد در کاردکس"""
+        try:
+            from apps.inventory.models import StockMovement
+            # خروج از انبار در راه
+            StockMovement.record(
+                warehouse=self.warehouse,
+                variant=item.variant,
+                movement_type=StockMovement.MovementType.TRANSFER_OUT,
+                quantity=-item.quantity,
+                unit_price=int(item.unit_cost_irr or 0),
+                reference=self.invoice_number or str(self.id),
+                note=f"رسیدن کالا → انتقال به {destination.name}",
+                user=user,
+            )
+            # ورود به انبار مقصد
+            StockMovement.record(
+                warehouse=destination,
+                variant=item.variant,
+                movement_type=StockMovement.MovementType.TRANSFER_IN,
+                quantity=item.quantity,
+                unit_price=int(item.unit_cost_irr or 0),
+                reference=self.invoice_number or str(self.id),
+                note=f"رسیدن از {self.warehouse.name if self.warehouse else 'در راه'}",
+                user=user,
+            )
+        except Exception as exc:
+            logger.warning(f"[INVENTORY] انتقال انبار ناموفق: {exc}")
+
+
+class PurchaseItem(models.Model):
+    invoice  = models.ForeignKey(PurchaseInvoice, on_delete=models.CASCADE,
+                  related_name="items", verbose_name="فاکتور")
+    variant  = models.ForeignKey("catalog.ProductVariant", on_delete=models.PROTECT,
+                  related_name="purchase_items", verbose_name="کالا")
+
+    quantity        = models.PositiveIntegerField(verbose_name="تعداد کل")
+    carton_count    = models.PositiveIntegerField(default=1, verbose_name="تعداد کارتن")
+    carton_weight   = models.DecimalField(max_digits=8, decimal_places=3,
+                        null=True, blank=True, default=0,
+                        verbose_name="وزن هر کارتن (kg)")
+
+    unit_price_cny  = models.DecimalField(max_digits=10, decimal_places=2, default=0,
+                        verbose_name="قیمت واحد (یوان)")
+    unit_price_irr  = models.PositiveBigIntegerField(default=0,
+                        verbose_name="قیمت واحد (ریال) — خرید داخلی")
+
+    shipping_cost_irr  = models.PositiveBigIntegerField(default=0)
+    clearance_cost_irr = models.PositiveBigIntegerField(default=0)
+    extra_cost_irr     = models.PositiveBigIntegerField(default=0)
+    unit_cost_irr      = models.PositiveBigIntegerField(default=0)
+
+    note = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        db_table = "accounting_purchase_item"
+        verbose_name = "آیتم فاکتور خرید"
+        verbose_name_plural = "آیتم‌های فاکتور خرید"
+
+    def __str__(self):
+        return f"{self.variant} × {self.quantity}"
+
+    @property
+    def total_weight(self):
+        if not self.carton_weight:
+            return 0
+        return float(self.carton_weight) * self.carton_count
+
+    @property
+    def subtotal_cny(self):
+        return self.unit_price_cny * self.quantity
+
+
+class ExtraCost(models.Model):
+    class CostType(models.TextChoices):
+        RENT       = "rent",       "اجاره"
+        DELIVERY   = "delivery",   "پیک / ارسال"
+        COMMISSION = "commission", "پورسانت فروش"
+        ELECTRICITY= "electricity","برق"
+        INSURANCE  = "insurance",  "بیمه"
+        OTHER      = "other",      "سایر"
+
+    invoice    = models.ForeignKey(PurchaseInvoice, on_delete=models.CASCADE,
+                    related_name="extra_costs", verbose_name="فاکتور")
+    cost_type  = models.CharField(max_length=20, choices=CostType.choices)
+    contact    = models.ForeignKey(Contact, on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name="extra_costs")
+    amount_irr = models.PositiveBigIntegerField(verbose_name="مبلغ (ریال)")
+    description= models.CharField(max_length=200, blank=True)
+    date       = models.DateField(null=True, blank=True)
+
+    class Meta:
+        db_table = "accounting_extra_cost"
+        verbose_name = "هزینه جانبی"
+        verbose_name_plural = "هزینه‌های جانبی"
+
+    def __str__(self):
+        return f"{self.get_cost_type_display()} — {self.amount_irr:,} ریال"
+
+
+class Account(AuditableModel):
+    class AccountType(models.TextChoices):
+        CASH      = "cash",      "صندوق نقد"
+        BANK      = "bank",      "حساب بانکی"
+        PETTY     = "petty",     "تنخواه"
+        VIRTUAL   = "virtual",   "کیف پول / ارزی"
+
+    class Currency(models.TextChoices):
+        IRR = "IRR", "ریال"
+        CNY = "CNY", "یوان"
+        USD = "USD", "دلار"
+
+    name         = models.CharField(max_length=100)
+    account_type = models.CharField(max_length=20, choices=AccountType.choices)
+    currency     = models.CharField(max_length=5, choices=Currency.choices, default=Currency.IRR)
+    bank_name    = models.CharField(max_length=100, blank=True)
+    account_number = models.CharField(max_length=50, blank=True)
+    initial_balance = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    is_active    = models.BooleanField(default=True)
+    note         = models.TextField(blank=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
+    updated_at   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "accounting_account"
+        verbose_name = "حساب بانکی / صندوق"
+        verbose_name_plural = "حساب‌های بانکی / صندوق"
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.get_account_type_display()}) — {self.currency}"
+
+    @property
+    def balance(self):
+        """
+        موجودی حساب = مانده اولیه + ورودی‌ها - خروجی‌ها.
+        اگر ارز تراکنش با ارز حساب فرق داشته باشد، معادل ریالی (amount_irr)
+        برای حساب‌های ریالی و معادل ارز حساب برای حساب‌های ارزی لحاظ می‌شود.
+        """
+        def eff(p):
+            if p.currency == self.currency:
+                return float(p.amount)
+            if self.currency == 'IRR':
+                return float(p.amount_irr)
+            # حساب ارزی با تراکنش ریالی — تبدیل با همان نرخ
+            return round(float(p.amount_irr) / float(p.rate_irr), 2) if p.rate_irr else float(p.amount)
+
+        paid_out = sum(eff(p) for p in self.payments_out.all())
+        paid_in = sum(eff(p) for p in self.payments_in.all())
+        return float(self.initial_balance) + paid_in - paid_out
+
+
+class Payment(AuditMixin):
+    class PaymentType(models.TextChoices):
+        CASH     = "cash",     "نقد"
+        TRANSFER = "transfer", "حواله بانکی"
+        INSTALLMENT = "installment", "قسط"
+        OTHER    = "other",    "سایر"
+
+    class Direction(models.TextChoices):
+        OUT = "out", "پرداختی (بدهکار)"
+        IN  = "in",  "دریافتی (بستانکار)"
+
+    class Currency(models.TextChoices):
+        CNY = "CNY", "یوان"
+        IRR = "IRR", "ریال"
+        USD = "USD", "دلار"
+
+    contact      = models.ForeignKey(Contact, on_delete=models.PROTECT,
+                      null=True, blank=True, related_name="payments")
+    invoice      = models.ForeignKey(PurchaseInvoice, on_delete=models.SET_NULL,
+                      null=True, blank=True, related_name="payments")
+    from_account = models.ForeignKey('Account', on_delete=models.SET_NULL,
+                      null=True, blank=True, related_name="payments_out")
+    to_account   = models.ForeignKey('Account', on_delete=models.SET_NULL,
+                      null=True, blank=True, related_name="payments_in")
+    direction    = models.CharField(max_length=5, choices=Direction.choices)
+    payment_type = models.CharField(max_length=20, choices=PaymentType.choices)
+    currency     = models.CharField(max_length=5, choices=Currency.choices)
+    amount       = models.DecimalField(max_digits=18, decimal_places=2)
+    rate_irr     = models.PositiveBigIntegerField(default=0)
+    date         = models.DateField()
+    reference    = models.CharField(max_length=100, blank=True)
+    note         = models.TextField(blank=True)
+    created_by   = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                      null=True, blank=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
+    updated_at   = models.DateTimeField(auto_now=True)
+    updated_by   = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                      null=True, blank=True, related_name='edited_payments',
+                      verbose_name="آخرین ویرایش‌کننده")
+
+    class Meta:
+        db_table = "accounting_payment"
+        verbose_name = "پرداخت"
+        verbose_name_plural = "پرداخت‌ها"
+        ordering = ["-date", "-created_at"]
+
+    def __str__(self):
+        return f"{self.get_direction_display()} | {self.contact.name if self.contact else '-'} | {self.amount} {self.currency}"
+
+    @property
+    def amount_irr(self):
+        if self.currency == 'IRR':
+            return int(self.amount)
+        return int(self.amount * self.rate_irr)
+
+
+def generate_invoice_number():
+    """شماره فاکتور فروش — ساده و ترتیبی، شروع از ۱۰۰۰ (فاکتورهای قدیمی با فرمت INV نادیده گرفته می‌شوند)"""
+    from django.db.models.functions import Cast
+    last = (
+        SaleInvoice.objects
+        .filter(invoice_number__regex=r'^\d+$')
+        .annotate(num=Cast('invoice_number', models.BigIntegerField()))
+        .order_by('-num')
+        .values_list('num', flat=True)
+        .first()
+    )
+    return str((last or 999) + 1)
+
+
+class SaleInvoice(AuditMixin):
+    class Status(models.TextChoices):
+        DRAFT     = "draft",     "پیش‌نویس"
+        CONFIRMED = "confirmed", "تأیید شده"
+        PAID      = "paid",      "تسویه شده"
+        CANCELLED = "cancelled", "لغو شده"
+
+    class InvoiceSource(models.TextChoices):
+        ORDER  = "order",  "سفارش سایت"
+        MANUAL = "manual", "دستی (خارج از سایت)"
+
+    class SaleType(models.TextChoices):
+        DOMESTIC = "domestic", "فروش داخلی"
+        FOREIGN  = "foreign",  "فروش خارجی"
+
+    class Settlement(models.TextChoices):
+        CASH   = "cash",   "نقدی"
+        CREDIT = "credit", "تو حسابی"
+        MONTH1 = "month1", "یکماهه"
+
+    sale_type = models.CharField(max_length=10, choices=SaleType.choices,
+                    default=SaleType.DOMESTIC, verbose_name="نوع فروش")
+    currency  = models.CharField(max_length=5, default="IRR",
+                    choices=[("IRR", "ریال ایران"), ("CNY", "یوان چین"), ("USD", "دلار آمریکا")],
+                    verbose_name="ارز فاکتور",
+                    help_text="فروش داخلی ریالی است — فروش خارجی به انتخاب (پیش‌فرض یوان)")
+    settlement = models.CharField(max_length=10, choices=Settlement.choices,
+                    default=Settlement.CASH, verbose_name="نحوه تسویه")
+    due_date  = models.DateField(null=True, blank=True, verbose_name="موعد تسویه",
+                    help_text="برای فاکتورهای تو حسابی — سررسید هشدار داده می‌شود")
+    invoice_number = models.CharField(max_length=50, unique=True, default=generate_invoice_number)
+    issue_date = models.DateField(default=timezone.localdate, verbose_name="تاریخ صدور",
+                    help_text="تاریخ فاکتور — برای ثبت در تاریخ دیگر قابل تغییر است؛ پیش‌فرض امروز")
+    source    = models.CharField(max_length=10, choices=InvoiceSource.choices, default=InvoiceSource.MANUAL)
+    order     = models.OneToOneField('orders.Order', on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name='sale_invoice')
+    customer  = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                    related_name='sale_invoices')
+    customer_name = models.CharField(max_length=200, blank=True)
+    customer_phone = models.CharField(max_length=20, blank=True)
+    discount_amount = models.PositiveBigIntegerField(default=0)
+    shipping_cost   = models.PositiveBigIntegerField(default=0)
+    tax_amount      = models.PositiveBigIntegerField(default=0)
+    note      = models.TextField(blank=True)
+    status    = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    stock_deducted = models.BooleanField(default=False)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name='created_invoices')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name='edited_invoices',
+                    verbose_name="آخرین ویرایش‌کننده")
+
+    class Meta:
+        db_table = "accounting_sale_invoice"
+        verbose_name = "فاکتور فروش"
+        verbose_name_plural = "فاکتورهای فروش"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"فاکتور {self.invoice_number} — {self.customer_name or self.customer}"
+
+    @property
+    def subtotal(self):
+        return sum(item.subtotal for item in self.items.all())
+
+    @property
+    def total_amount(self):
+        return self.subtotal - self.discount_amount + self.shipping_cost + self.tax_amount
+
+    @property
+    def paid_amount(self):
+        from django.db.models import Sum
+        return self.sale_payments.aggregate(s=Sum('amount'))['s'] or 0
+
+    @property
+    def remaining_amount(self):
+        return self.total_amount - self.paid_amount
+
+    @property
+    def total_cost(self):
+        return sum(item.total_cost for item in self.items.all())
+
+    @property
+    def gross_profit(self):
+        return self.total_amount - self.total_cost
+
+    @transaction.atomic
+    def deduct_from_inventory(self, user=None):
+        if self.stock_deducted:
+            return False
+        if self.source == self.InvoiceSource.ORDER:
+            self.stock_deducted = True
+            self.save(update_fields=["stock_deducted", "updated_at"])
+            return False
+
+        items = list(self.items.select_related("variant").all())
+        if not items:
+            raise ValueError("این فاکتور آیتمی ندارد.")
+
+        for item in items:
+            if item.variant.available_stock < item.quantity:
+                raise ValueError(
+                    f"موجودی کافی برای '{item.variant.sku}' وجود ندارد. "
+                    f"موجود: {item.variant.available_stock} | لازم: {item.quantity}"
+                )
+
+        for item in items:
+            item.variant.deduct_stock(item.quantity)
+            self._record_warehouse_outflow(item, user)
+
+        self.stock_deducted = True
+        self.save(update_fields=["stock_deducted", "updated_at"])
+        return True
+
+    def _record_warehouse_outflow(self, item, user=None):
+        try:
+            from apps.inventory.models import Warehouse, StockMovement
+            warehouse = (
+                Warehouse.objects.filter(is_public=True, is_active=True).first()
+                or Warehouse.objects.filter(is_active=True).first()
+            )
+            if warehouse is None:
+                return
+            StockMovement.record(
+                warehouse=warehouse,
+                variant=item.variant,
+                movement_type=StockMovement.MovementType.SALE,
+                quantity=-item.quantity,
+                unit_price=int(item.unit_price),
+                reference=self.invoice_number,
+                note=f"فروش دستی — فاکتور {self.invoice_number}",
+                user=user,
+            )
+        except Exception as exc:
+            logger.warning(f"[INVENTORY] ثبت کاردکس فروش ناموفق: {exc}")
+
+
+class SaleItem(models.Model):
+    invoice   = models.ForeignKey(SaleInvoice, on_delete=models.CASCADE, related_name='items')
+    variant   = models.ForeignKey('catalog.ProductVariant', on_delete=models.PROTECT, related_name='sale_items')
+    quantity  = models.PositiveIntegerField()
+    unit_price = models.PositiveBigIntegerField()
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "accounting_sale_item"
+        verbose_name = "آیتم فاکتور فروش"
+        verbose_name_plural = "آیتم‌های فاکتور فروش"
+
+    def __str__(self):
+        return f"{self.variant} × {self.quantity}"
+
+    @property
+    def subtotal(self):
+        disc = self.unit_price * self.quantity * float(self.discount_percent) / 100
+        return int(self.unit_price * self.quantity - disc)
+
+    @property
+    def unit_cost(self):
+        """میانگین وزنی بهای تمام شده از آخرین فاکتور خرید"""
+        items = self.variant.purchase_items.filter(unit_cost_irr__gt=0).order_by('-invoice__date')
+        item = items.first()
+        return item.unit_cost_irr if item else 0
+
+    @property
+    def total_cost(self):
+        return self.unit_cost * self.quantity
+
+    @property
+    def profit(self):
+        return self.subtotal - self.total_cost
+
+
+class SalePayment(AuditMixin):
+    class PaymentMethod(models.TextChoices):
+        CASH     = "cash",     "نقد"
+        TRANSFER = "transfer", "حواله بانکی"
+        CARD     = "card",     "کارت به کارت"
+        ONLINE   = "online",   "پرداخت آنلاین"
+        CREDIT   = "credit",   "نسیه (حساب باز)"
+
+    invoice    = models.ForeignKey(SaleInvoice, on_delete=models.CASCADE, related_name='sale_payments')
+    to_account = models.ForeignKey('Account', on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name='sale_receipts')
+    method     = models.CharField(max_length=20, choices=PaymentMethod.choices)
+    amount     = models.PositiveBigIntegerField()
+    date       = models.DateField()
+    reference  = models.CharField(max_length=100, blank=True)
+    note       = models.TextField(blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name='edited_sale_payments',
+                    verbose_name="آخرین ویرایش‌کننده")
+
+    class Meta:
+        db_table = "accounting_sale_payment"
+        verbose_name = "پرداخت فروش"
+        verbose_name_plural = "پرداخت‌های فروش"
+        ordering = ["-date"]
+
+    def __str__(self):
+        return f"{self.invoice.invoice_number} | {self.amount:,} ریال"
+
+
+class SettlementLine(models.Model):
+    """
+    قسط/ردیف تسویه برای فاکتور فروش — هر فاکتور می‌تواند چند ردیف با
+    موعدهای مختلف داشته باشد (نقدی، تو حسابی، یکماهه، دوماهه).
+    """
+
+    class SettlementType(models.TextChoices):
+        CASH   = "cash",   "نقدی"
+        CREDIT = "credit", "تو حسابی"
+        MONTH1 = "month1", "یکماهه"
+        MONTH2 = "month2", "دوماهه"
+
+    invoice = models.ForeignKey(
+        SaleInvoice, on_delete=models.CASCADE,
+        related_name="settlement_lines", verbose_name="فاکتور فروش",
+    )
+    settlement_type = models.CharField(
+        max_length=10, choices=SettlementType.choices, verbose_name="نحوه تسویه",
+    )
+    amount = models.PositiveBigIntegerField(verbose_name="مبلغ (ریال)")
+    due_date = models.DateField(verbose_name="موعد تسویه")
+    is_active = models.BooleanField(default=True, verbose_name="فعال")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="تاریخ ثبت")
+
+    class Meta:
+        db_table = "accounting_settlement_line"
+        verbose_name = "ردیف تسویه"
+        verbose_name_plural = "ردیف‌های تسویه"
+        ordering = ["due_date"]
+
+    def __str__(self):
+        return f"{self.invoice.invoice_number} | {self.get_settlement_type_display()} | {self.amount:,} ریال"
+
+    @property
+    def paid_amount(self) -> int:
+        return self.allocations.aggregate(total=models.Sum("amount"))["total"] or 0
+
+    @property
+    def remaining_amount(self) -> int:
+        return self.amount - self.paid_amount
+
+    @property
+    def is_overdue(self) -> bool:
+        from django.utils import timezone
+        return self.due_date < timezone.now().date() and self.remaining_amount > 0
+
+    @property
+    def days_overdue(self) -> int:
+        from django.utils import timezone
+        if not self.is_overdue:
+            return 0
+        return (timezone.now().date() - self.due_date).days
+
+
+class PaymentReceipt(AuditMixin):
+    """فیش واریزی آپلودشده توسط مشتری — پس از تأیید ادمین به تسویه‌ها تخصیص می‌یابد."""
+
+    class Status(models.TextChoices):
+        PENDING  = "pending",  "در انتظار بررسی"
+        APPROVED = "approved", "تأیید شده"
+        REJECTED = "rejected", "رد شده"
+
+    order = models.ForeignKey(
+        'orders.Order', on_delete=models.PROTECT,
+        related_name="payment_receipts", verbose_name="سفارش",
+    )
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="payment_receipts", verbose_name="مشتری",
+    )
+    image = models.ImageField(upload_to="receipts/%Y/%m/", verbose_name="تصویر فیش")
+    amount = models.PositiveBigIntegerField(verbose_name="مبلغ (ریال)")
+    paid_at = models.DateField(verbose_name="تاریخ واریز")
+    tracking_code = models.CharField(max_length=100, blank=True, verbose_name="کد پیگیری")
+    status = models.CharField(
+        max_length=20, choices=Status.choices,
+        default=Status.PENDING, verbose_name="وضعیت",
+    )
+    reject_reason = models.TextField(blank=True, verbose_name="دلیل رد")
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, related_name="uploaded_receipts", verbose_name="آپلودکننده",
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="reviewed_receipts", verbose_name="بررسی‌کننده",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True, verbose_name="زمان بررسی")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="تاریخ ثبت")
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="edited_payment_receipts",
+        verbose_name="آخرین ویرایش‌کننده",
+    )
+    sale_payment = models.ForeignKey(
+        SalePayment, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="receipts", verbose_name="پرداخت فروش",
+    )
+
+    class Meta:
+        db_table = "accounting_payment_receipt"
+        verbose_name = "فیش واریزی"
+        verbose_name_plural = "فیش‌های واریزی"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"فیش {self.order.order_number} | {self.amount:,} ریال [{self.get_status_display()}]"
+
+    def _image_changed(self) -> bool:
+        """True اگر آپلود جدید است یا تصویر نسبت به رکورد قبلی عوض شده."""
+        if not self.image:
+            return False
+        if not self.pk:
+            return True
+        try:
+            old = PaymentReceipt.objects.only("image").get(pk=self.pk)
+        except PaymentReceipt.DoesNotExist:
+            return True
+        return old.image.name != self.image.name
+
+    def save(self, *args, **kwargs):
+        if self._image_changed():
+            try:
+                from io import BytesIO
+                import os
+                from PIL import Image as PILImage
+                from django.core.files.base import ContentFile
+
+                img = PILImage.open(self.image)
+                img = img.convert("RGB")
+                if img.width > 1200:
+                    ratio = 1200 / img.width
+                    img = img.resize((1200, int(img.height * ratio)), PILImage.LANCZOS)
+                buffer = BytesIO()
+                img.save(buffer, format="WEBP", quality=80)
+                stem = os.path.splitext(os.path.basename(self.image.name))[0]
+                self.image.save(f"{stem}.webp", ContentFile(buffer.getvalue()), save=False)
+            except Exception as exc:
+                logger.warning(f"[RECEIPT] فشرده‌سازی تصویر فیش ناموفق: {exc}")
+        super().save(*args, **kwargs)
+
+
+class ReceiptAllocation(models.Model):
+    """تخصیص مبلغی از یک فیش تأییدشده به یک ردیف تسویه."""
+
+    receipt = models.ForeignKey(
+        PaymentReceipt, on_delete=models.CASCADE,
+        related_name="allocations", verbose_name="فیش واریزی",
+    )
+    settlement_line = models.ForeignKey(
+        SettlementLine, on_delete=models.CASCADE,
+        related_name="allocations", verbose_name="ردیف تسویه",
+    )
+    amount = models.PositiveBigIntegerField(verbose_name="مبلغ (ریال)")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="تاریخ ثبت")
+
+    class Meta:
+        db_table = "accounting_receipt_allocation"
+        verbose_name = "تخصیص فیش"
+        verbose_name_plural = "تخصیص‌های فیش"
+        unique_together = [["receipt", "settlement_line"]]
+
+    def __str__(self):
+        return f"{self.receipt} → {self.settlement_line} | {self.amount:,} ریال"
+
+
+# ────────────────────────────────────────────────────────────────
+# برگشت از فروش و خرید (Returns)
+# ────────────────────────────────────────────────────────────────
+
+def generate_return_number():
+    """شماره سند برگشت — سکانس عددی جدا، شروع از ۱۰۰۰"""
+    from django.db.models.functions import Cast
+    last = (
+        ReturnInvoice.objects
+        .filter(invoice_number__regex=r'^\d+$')
+        .annotate(num=Cast('invoice_number', models.BigIntegerField()))
+        .order_by('-num')
+        .values_list('num', flat=True)
+        .first()
+    )
+    return str((last or 999) + 1)
+
+
+class ReturnInvoice(AuditMixin):
+    """
+    سند برگشت:
+    - برگشت از فروش: کالا از مشتری برمی‌گردد → ورود به انبار (+) با حرکت RETURN
+    - برگشت از خرید: کالا به تأمین‌کننده برمی‌گردد → خروج از انبار (−) با حرکت RETURN
+    موجودی هنگام ثبت سند اعمال می‌شود (مثل فاکتور فروش/خرید دستی) و با لغو سند معکوس می‌شود.
+    """
+    class ReturnType(models.TextChoices):
+        SALE     = "sale",     "برگشت از فروش"
+        PURCHASE = "purchase", "برگشت از خرید"
+
+    class Status(models.TextChoices):
+        CONFIRMED = "confirmed", "ثبت شده"
+        CANCELLED = "cancelled", "لغو شده"
+
+    return_type  = models.CharField(max_length=10, choices=ReturnType.choices, verbose_name="نوع برگشت")
+    invoice_number = models.CharField(max_length=50, unique=True, default=generate_return_number)
+    sale_invoice = models.ForeignKey(SaleInvoice, on_delete=models.SET_NULL,
+                        null=True, blank=True, related_name='returns', verbose_name="فاکتور فروش مبدأ")
+    purchase_invoice = models.ForeignKey(PurchaseInvoice, on_delete=models.SET_NULL,
+                        null=True, blank=True, related_name='returns', verbose_name="فاکتور خرید مبدأ")
+    warehouse  = models.ForeignKey('inventory.Warehouse', on_delete=models.PROTECT,
+                        related_name='return_invoices', verbose_name="انبار")
+    date       = models.DateField(verbose_name="تاریخ")
+    note       = models.TextField(blank=True)
+    status     = models.CharField(max_length=20, choices=Status.choices, default=Status.CONFIRMED)
+    inventory_applied = models.BooleanField(default=False)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                        null=True, blank=True, related_name='created_returns')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                        null=True, blank=True, related_name='edited_returns',
+                        verbose_name="آخرین ویرایش‌کننده")
+
+    class Meta:
+        db_table = "accounting_return_invoice"
+        verbose_name = "سند برگشت"
+        verbose_name_plural = "اسناد برگشت"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"برگشت {self.invoice_number} — {self.get_return_type_display()}"
+
+    @property
+    def total_amount(self):
+        return sum(item.subtotal for item in self.items.all())
+
+    @transaction.atomic
+    def apply_to_inventory(self, user=None):
+        """اعمال موجودی هنگام ثبت سند — idempotent با فلگ inventory_applied"""
+        if self.inventory_applied:
+            return False
+        items = list(self.items.select_related("variant").all())
+        if not items:
+            raise ValueError("این سند آیتمی ندارد.")
+
+        from apps.inventory.models import StockMovement
+        is_sale_return = self.return_type == self.ReturnType.SALE
+
+        if not is_sale_return:
+            for item in items:
+                if item.variant.stock_quantity < item.quantity:
+                    raise ValueError(
+                        f"موجودی کافی برای برگشت '{item.variant.sku}' وجود ندارد. "
+                        f"موجود: {item.variant.stock_quantity} | لازم: {item.quantity}"
+                    )
+
+        for item in items:
+            if is_sale_return:
+                item.variant.stock_quantity += item.quantity
+            else:
+                item.variant.stock_quantity -= item.quantity
+            item.variant.save(update_fields=["stock_quantity"])
+            StockMovement.record(
+                warehouse=self.warehouse,
+                variant=item.variant,
+                movement_type=StockMovement.MovementType.RETURN,
+                quantity=item.quantity if is_sale_return else -item.quantity,
+                unit_price=int(item.unit_price),
+                reference=self.invoice_number,
+                note=f"{self.get_return_type_display()} — سند {self.invoice_number}",
+                user=user,
+            )
+
+        self.inventory_applied = True
+        self.save(update_fields=["inventory_applied", "updated_at"])
+        return True
+
+    @transaction.atomic
+    def cancel(self, user=None):
+        """لغو سند و معکوس‌کردن حرکت‌های موجودی"""
+        if self.status == self.Status.CANCELLED:
+            return False
+
+        from apps.inventory.models import StockMovement
+        is_sale_return = self.return_type == self.ReturnType.SALE
+
+        for item in self.items.select_related("variant").all():
+            if is_sale_return:
+                if item.variant.stock_quantity < item.quantity:
+                    raise ValueError(
+                        f"امکان لغو نیست — موجودی '{item.variant.sku}' کمتر از مقدار برگشتی است."
+                    )
+                item.variant.stock_quantity -= item.quantity
+            else:
+                item.variant.stock_quantity += item.quantity
+            item.variant.save(update_fields=["stock_quantity"])
+            StockMovement.record(
+                warehouse=self.warehouse,
+                variant=item.variant,
+                movement_type=StockMovement.MovementType.RETURN,
+                quantity=-item.quantity if is_sale_return else item.quantity,
+                unit_price=int(item.unit_price),
+                reference=self.invoice_number,
+                note=f"لغو {self.get_return_type_display()} — سند {self.invoice_number}",
+                user=user,
+            )
+
+        self.status = self.Status.CANCELLED
+        self.save(update_fields=["status", "updated_at"])
+        return True
+
+
+class ReturnItem(models.Model):
+    invoice   = models.ForeignKey(ReturnInvoice, on_delete=models.CASCADE, related_name='items')
+    variant   = models.ForeignKey('catalog.ProductVariant', on_delete=models.PROTECT, related_name='return_items')
+    quantity  = models.PositiveIntegerField()
+    unit_price = models.PositiveBigIntegerField(verbose_name="فی (تومان)")
+
+    class Meta:
+        db_table = "accounting_return_item"
+        verbose_name = "آیتم سند برگشت"
+        verbose_name_plural = "آیتم‌های سند برگشت"
+
+    def __str__(self):
+        return f"{self.variant} × {self.quantity}"
+
+    @property
+    def subtotal(self):
+        return self.unit_price * self.quantity
+
+
+from .backup_tools import BackupSetting, BackupLog  # noqa: F401

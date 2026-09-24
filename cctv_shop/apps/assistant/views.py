@@ -7,23 +7,28 @@
 
 import json
 import logging
+import os
 import re
+import time
 
 import requests
+from django.conf import settings as dj_settings
+from django.core.cache import cache
 from django.db.models import Q
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.catalog.models import Product
 
-from .models import FAQ
+from .models import FAQ, AssistantSettings, LearnedQA
 
 logger = logging.getLogger(__name__)
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 MODEL = "qwen2.5:3b"
 TIMEOUT = 140  # روی CPU نسل پاسخ کند است — باید زیر nginx/gunicorn (150s) بماند
+CLOUD_TIMEOUT = 40  # سرویس‌های ابری (Gemini/z.ai/…) — رایگان‌ها گاهی تا ~۳۰ ثانیه طول می‌کشند
 
 # اعداد فارسی/عربی → لاتین (کاربر «۲ مگاپیکسل» می‌نویسد)
 FA_TO_EN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
@@ -31,17 +36,40 @@ FA_TO_EN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "012
 MP_WORDS = {"1": "یک", "2": "دو", "3": "سه", "4": "چهار", "5": "پنج", "6": "شش", "8": "هشت", "12": "دوازده"}
 # املای فارسی اصطلاحات → شکلی که در نام/مشخصات محصولات آمده
 ALIASES = {"ای اچ دی": "AHD", "ای‌اچ‌دی": "AHD", "آی پی": "IP", "ای پی": "IP", "پی او ای": "POE"}
+# اصطلاحات دوزبانه — برخی محصولات اسم انگلیسی دارند؛ هر دو شکل جستجو می‌شود (به‌جای جایگزینی، اضافه می‌شود)
+ALIASES_BILINGUAL = {
+    "دارک لایت": "dark light", "دارک‌لایت": "dark light",
+    "استار لایت": "star light", "استارلایت": "starlight",
+    "باکس دوربین": "housing", "توربو": "turbo",
+}
 
 SYSTEM_PROMPT = """تو دستیار فروشگاه اینترنتی «دوربینکار» هستی (فروش تجهیزات دوربین مداربسته: دوربین، DVR، NVR، هارد، کابل و…).
 قوانین سخت‌گیرانه:
 - فقط فارسی جواب بده؛ کوتاه و مفید (حداکثر ۵ جمله) و محترمانه.
 - درباره قیمت و موجودی «فقط» بر اساس لیست «اطلاعات محصولات» جواب بده. اگر محصول موردنظر در لیست نبود، صادقانه بگو در فروشگاه پیدا نکردی و پیشنهاد بده با فروش تماس بگیرند یا عبارت دیگری جستجو کنند.
+- قیمت‌ها در لیست و کاتالوگ به «ریال» است؛ همیشه با همان واحد ریال اعلام کن و به تومان تبدیل نکن.
 - فقط محصولاتی را پیشنهاد بده که در لیست هستند؛ وضعیت موجودی را دقیقاً همان‌طور که در لیست آمده بگو و اگر ناموجود است، صادقانه اعلام کن.
 - اگر مشتری مشخصات دقیق خواست (مثلاً مگاپیکسل یا مدل خاص)، فقط همان را پیشنهاد بده؛ اگر دقیقاً همان در لیست نبود، صادقانه بگو و نزدیک‌ترین گزینه موجود را معرفی کن.
+- اگر سؤال بله/خیر یا سؤال درباره یک مشخصه بود (مثل «کیس K6 فلزیه؟» یا «ابعادش چقدره؟»)، اول مستقیم و کوتاه از روی «مشخصات» همان محصول جواب بده، بعد درباره موجودی یا جایگزین بگو.
+- در پیشنهاد محصول اولویت با اقلام «موجود» است؛ محصول ناموجود را فقط وقتی معرفی کن که دقیقاً همان خواسته مشتری است یا جایگزین موجودی ندارد — و همیشه صریح بگو ناموجود است.
+- اگر مشتری «ارزان‌ترین» یا «گران‌ترین» خواست، فقط از قیمت‌های لیست استفاده کن و ارزان‌ترین/گران‌ترین «موجود» را معرفی کن؛ اگر ارزان‌ترینِ لیست ناموجود بود، بگو ناموجود است و ارزان‌ترین موجود را پیشنهاد بده.
+- «مگ»، «مگا»، «mp»، «meg» و «megapixel» همگی به معنای «مگاپیکسل» (رزولوشن سنسور) هستند؛ مثلاً «۲ مگ» یعنی ۲ مگاپیکسل (فول‌اچ‌دی 1080p). اگر کاربر معنی این اصطلاح‌ها را پرسید، کوتاه توضیح بده و محصولات همان رزولوشن از لیست را پیشنهاد بده.
 - هرگز قیمت، موجودی یا مشخصات از خودت نساز.
 - در انتخاب محصول راهنمایی کن (مثلاً تفاوت داهوا و هایک‌ویژن، DVR با NVR، دوربین داخلی با بیرونی).
 - اگر سؤال مشاوره‌ای بود (مثلاً «برای پارکینگ» یا «برای مغازه»)، از روی «مشخصات» محصولات لیست راهنمایی کن؛ مثلاً فاصله کانونی کوچک‌تر (2.8mm) زاویه دید بازتر برای فاصله نزدیک است و بزرگ‌تر (8mm به بالا) برای فاصله دور، و سنسور استارلایت برای تاریکی بهتر است.
-- اگر سؤال ربطی به فروشگاه نداشت، مؤدبانه بگو فقط درباره محصولات و خرید می‌توانی کمک کنی."""
+- اگر سؤال ربطی به فروشگاه نداشت، مؤدبانه بگو فقط درباره محصولات و خرید می‌توانی کمک کنی.
+- اگر پیام مشتری فقط سلام و احوال‌پرسی یا تشکر بود (مثل «سلام»، «ممنون»، «خداحافظ»)، کوتاه و محترمانه جواب بده و «هیچ محصولی پیشنهاد نده» و از کاتالوگ چیزی معرفی نکن — فقط بپرس چه قطعه‌ای برای مونتاژ لازم دارد.
+- پیام‌های کوتاه پیگیری (مثل «مدلای بیشتری بده»، «ارزان‌ترش چی؟»، «کدومش موجوده؟») ادامهٔ همان موضوع قبلی گفتگو هستند — از روی تاریخچه گفتگو بفهم منظور مشتری چیست و همان موضوع را ادامه بده، موضوع را عوض نکن.
+- در پایان «هر» پاسخ فنی، قدم بعدی مشتری را حدس بزن و با یک جمله کوتاه پیشنهادش بده — مثلاً اگر برد خواست، به لنز و کیس سازگارش اشاره کن («این برد با لنز ۵ مگاپیکسل و کیس ۳۸ سازگار است؛ دام می‌خواهی یا بولت؟»)؛ اگر لنز خواست، به هولدر و کابل اشاره کن. هدف این است که مشتری برای کامل‌کردن سفارشش راهنمایی شود — فقط یک جمله، کوتاه و طبیعی، نه لیست تبلیغاتی.
+- هرگز خطوط «اطلاعات محصولات» را عیناً یا با همان قالب تکرار نکن؛ با جمله‌های خودت، کوتاه و طبیعی جواب بده و جواب را با کلماتی مثل «همین» یا «بله،» شروع نکن.
+- اگر از هویت یا توانایی‌هایت پرسیدند، بگو: «من ربات هوشمند دوربینکار هستم و به دیتاشیت‌های سایت دسترسی دارم؛ می‌توانم منطبق‌ترین محصول با خواسته شما را پیدا کنم.»
+لحن و سبک (پرسنای نگارش):
+- مخاطب تو هرگز مصرف‌کنندهٔ خانگی نیست؛ مخاطب اصلی مونتاژکار، تعمیرکار و تولیدکننده دوربین مداربسته است (B2B) که جنس را برای مونتاژ و فروش مجدد می‌خرد، نه برای نصب در خانه.
+- با اصطلاحات دنیای کارگاه صحبت کن: برد، سنسور، IR-cut، FPC، کیس، QC، لحیم‌کاری، تست اتاق تاریک، فلت، باک کالیبراسیون.
+- هرگز با زبان تبلیغاتی مصرف‌کننده جواب نده (مثل «مناسب خانه شما»، «خرید آسان»، «امنیت خانواده»). به‌جایش فنی و عملی حرف بزن: سازگاری برد با سنسور و لنز، ابعاد برد و کیس، نوع خروجی تصویر، شرایط نوری سنسور.
+- وقتی پیشنهاد محصول می‌دهی، دلیل فنی بگو (مثلاً «این برد سنسور سونی ۳۳۵ دارد و برای نور کم مناسب است») نه دلیل بازاریابی.
+- کاملاً انسان‌نویس بنویس: طول جمله‌ها متنوع، قضاوت فنی صریح و تجربه‌محور، توصیه عملی قابل اجرا. بدون کلیشه‌های ماشینی مثل «در دنیای امروز»، «با پیشرفت فناوری»، «همان‌طور که می‌دانید»، «در نهایت».
+- ادعای فنی باید دقیق و محتاطانه باشد؛ مدل و عدد واقعی بزن و چیزی جعل نکن."""
 
 
 def _product_dict(p: Product, user=None) -> dict:
@@ -112,14 +140,27 @@ def _find_products(query: str, limit: int = 4):  # limit کم = پرامپت ک�
     query = query.translate(FA_TO_EN_DIGITS)
     for fa, en in ALIASES.items():
         query = query.replace(fa, en)
+    # شکل انگلیسی اصطلاحات دوزبانه به عبارت اضافه می‌شود تا محصولات اسم‌انگلیسی هم پیدا شوند
+    for fa, en in ALIASES_BILINGUAL.items():
+        if fa in query:
+            query += " " + en
     # اعداد حروفی قبل از «مگاپیکسل» → رقم تا منطق تطابق رزولوشن فعال شود («دو مگاپیکسل» → «2 مگاپیکسل»)
     for d, w in MP_WORDS.items():
         query = query.replace(f"{w} مگاپیکسل", f"{d} مگاپیکسل").replace(f"{w}مگاپیکسل", f"{d} مگاپیکسل")
+    # حالت خلاصه با حروف («دو مگ») — بعد از تبدیل کامل تا دوباره‌کاری نشود
+    for d, w in MP_WORDS.items():
+        query = query.replace(f"{w} مگ", f"{d} مگاپیکسل").replace(f"{w}مگ", f"{d} مگاپیکسل")
+    # معادل‌های رایج مگاپیکسل → شکل کامل تا تطابق رزولوشن فعال شود («2مگ»، «2 مگا»، «2mp»)
+    query = re.sub(r"(?i)(\d+)\s*(?:megapixels?|mega|mp)\b", r"\1 مگاپیکسل ", query)
+    query = re.sub(r"(\d+)\s*مگاپیکسل", r"\1 مگاپیکسل ", query)
+    query = re.sub(r"(\d+)\s*مگا(?!پیکسل)", r"\1 مگاپیکسل ", query)
+    query = re.sub(r"(\d+)\s*مگ(?![اپیکسلا])", r"\1 مگاپیکسل ", query)
     # علائم نگارشی به فاصله — وگرنه به کلمه می‌چسبند («داری؟» ≠ «داری»)
     query = re.sub(r"[؟?!.,،؛:]", " ", query)
     stopwords = {"چی", "چه", "پیشنهاد", "پشنهاد", "میدی", "میده", "میخوام", "میخواهم", "دارید", "داری",
-                 "قیمت", "قیمتش", "چقدر", "چقدره", "برای", "لطفا", "لطفاً", "خرید", "بفرمایید"}
-    words = [w for w in re.split(r"\s+", query.strip()) if len(w) > 1 and w not in stopwords][:8]
+                 "قیمت", "قیمتش", "چقدر", "چقدره", "برای", "لطفا", "لطفاً", "خرید", "بفرمایید",
+                 "هست", "هستن", "یعنی", "چیه", "چیست"}
+    words = [w.lower() for w in re.split(r"\s+", query.strip()) if len(w) > 1 and w not in stopwords][:8]
     qs = Product.objects.filter(is_active=True).select_related("category").prefetch_related("variants")
     if not words:
         return [], False
@@ -141,13 +182,14 @@ def _find_products(query: str, limit: int = 4):  # limit کم = پرامپت ک�
 
     def score(p: Product) -> float:
         hay = f"{p.name} {p.brand or ''} {p.category.name if p.category else ''} " \
-              f"{p.model_number or ''} {p.short_description or ''} {p.keywords or ''}"
-        s = sum(1 for w in words if w in hay)
-        if any(v in p.name for v in mp_variants):
-            s += 3
-        if p.available_stock > 0:
-            s += 0.5
-        return s
+              f"{p.model_number or ''} {p.short_description or ''} {p.keywords or ''}".lower()
+        matched = sum(1 for w in words if w in hay)
+        mp_hit = any(v in p.name for v in mp_variants)
+        if not matched and not mp_hit:
+            return 0
+        # تطابق کلمات مهم‌ترین فاکتور است؛ موجودی فقط امتیاز تشویقی می‌گیرد تا
+        # محصول نامرتبطِ موجود بالاتر از تطابق دقیقِ ناموجود قرار نگیرد
+        return matched * 2 + (3 if mp_hit else 0) + (1 if p.available_stock > 0 else 0)
 
     pool = []
     if mp_variants:  # تطابق دقیق مگاپیکسل حتماً وارد pool شود — وگرنه ممکن است قبل از اسکورینگ حذف شود
@@ -200,6 +242,163 @@ def _ask_ollama(messages: list) -> str:
     return resp.json()["message"]["content"].strip()
 
 
+def _ask_gemini(messages: list, api_key: str, model: str, proxy: str = "") -> str:
+    """فراخوانی Google Gemini (REST) — قالب چت OpenAI-like به فرمت Gemini تبدیل می‌شود.
+    سرور ایران به گوگل دسترسی ندارد؛ اگر پروکسی ست شده باشد، فقط همین درخواست از آن رد می‌شود."""
+    system = ""
+    contents = []
+    for m in messages:
+        if m["role"] == "system":
+            system += m["content"] + "\n"
+        else:
+            contents.append({
+                "role": "model" if m["role"] == "assistant" else "user",
+                "parts": [{"text": m["content"]}],
+            })
+    resp = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        params={"key": api_key},
+        json={
+            "system_instruction": {"parts": [{"text": system}]},
+            "contents": contents,
+            "generationConfig": {"maxOutputTokens": 500, "temperature": 0.3},
+        },
+        proxies={"http": proxy, "https": proxy} if proxy else None,
+        timeout=CLOUD_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+# سرویس‌های ابری OpenAI-compatible — هر سه از ایران مستقیم در دسترس‌اند (بدون پروکسی)
+OPENAI_COMPAT_PROVIDERS = {
+    "modelscope": {"base_url": "https://api-inference.modelscope.cn/v1", "key_field": "ms_api_key", "model_field": "ms_model"},
+    # حالت «فکر کردن» GLM پیش‌فرض روشن است و با کانتکست بزرگ فارسی تایم‌اوت می‌خورد — خاموشش می‌کنیم
+    "zai":        {"base_url": "https://api.z.ai/api/paas/v4",           "key_field": "zai_api_key", "model_field": "zai_model",
+                   "extra": {"thinking": {"type": "disabled"}},
+                   "timeout": 20},  # ربات رایگان — اگر ۲۰ ثانیه جواب نداد سریع برو سراغ بعدی
+    "deepseek":   {"base_url": "https://api.deepseek.com",               "key_field": "ds_api_key",  "model_field": "ds_model"},
+}
+
+
+def _ask_openai_compat(messages: list, base_url: str, api_key: str, model: str, extra: dict | None = None,
+                       timeout: int = CLOUD_TIMEOUT) -> str:
+    """فراخوانی سرویس‌های OpenAI-compatible (ModelScope / z.ai / DeepSeek) — پیام‌ها همان قالب چت است."""
+    resp = requests.post(
+        f"{base_url}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"model": model, "messages": messages, "max_tokens": 500, "temperature": 0.3, **(extra or {})},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"].strip()
+
+
+def _engine_chain(st):
+    """زنجیرهٔ موتورها به ترتیب اولویت: اول موتور انتخاب‌شده، بعد بقیهٔ کلیددارها، آخر Qwen لوکال.
+    خروجی: لیست (نام موتور، تابع فراخوانی با ورودی messages)."""
+    chain = []
+    gemini_key = st.gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
+    gemini = ("gemini", lambda msgs: _ask_gemini(msgs, gemini_key, st.gemini_model, st.gemini_proxy))
+    providers = {
+        "gemini": gemini if (st.gemini_enabled and gemini_key) else None,
+    }
+    for name, cfg in OPENAI_COMPAT_PROVIDERS.items():
+        key = getattr(st, cfg["key_field"])
+        providers[name] = (
+            (name, lambda msgs, c=cfg, k=key, m=getattr(st, cfg["model_field"]): _ask_openai_compat(msgs, c["base_url"], k, m, c.get("extra"), c.get("timeout", CLOUD_TIMEOUT)))
+            if key else None
+        )
+    ordered = [st.provider] + [p for p in ("gemini", "modelscope", "zai", "deepseek") if p != st.provider]
+    for name in ordered:
+        if providers.get(name):
+            chain.append(providers[name])
+    chain.append(("qwen", _ask_ollama))
+    return chain
+
+
+CATALOG_CACHE_TTL = 30 * 60  # کاتالوگ نیم‌ساعته بازسازی می‌شود
+
+def _catalog_payload(user=None) -> str:
+    """کاتالوگ فشردهٔ JSON همه محصولات فعال — در اختیار جمینای (تزریق به پرامپت)
+    و Qwen و هر ابزار دیگر روی سرور (فایل catalog.json کنار manage.py) قرار می‌گیرد.
+    قیمت‌ها بر اساس سطح کاربر درخواست‌دهنده است تا با بقیه سایت یکی باشد.
+    نسخهٔ روی دیسک با قیمت مشتری عمومی نوشته می‌شود."""
+    from apps.catalog.pricing import user_price_key
+    price_key, _ = user_price_key(user)
+    cache_key = f"assistant_catalog_{price_key}"
+    data = cache.get(cache_key)
+    if data is None:
+        qs = (Product.objects.filter(is_active=True)
+              .select_related("category").prefetch_related("variants"))
+        items = []
+        for p in qs:
+            d = _product_dict(p, user)
+            items.append({
+                "name": d["name"], "brand": d["brand"], "category": d["category"],
+                "price_irt": d["price_irt"], "in_stock": d["in_stock"],
+                "specs": _spec_summary(p), "url": d["url"],
+            })
+        data = json.dumps(items, ensure_ascii=False)
+        cache.set(cache_key, data, CATALOG_CACHE_TTL)
+        if price_key == "retail":  # فایل مرجع روی دیسک همیشه با قیمت عمومی
+            try:
+                with open(dj_settings.BASE_DIR / "catalog.json", "w", encoding="utf-8") as f:
+                    f.write(data)
+            except OSError as exc:
+                logger.warning(f"[ASSISTANT] نوشتن catalog.json ناموفق: {exc}")
+    return data
+
+
+def _catalog_compact(user=None) -> str:
+    """نسخهٔ جمع‌وجور کاتالوگ برای تزریق به موتورهای ابری — فقط نام/دسته/قیمت/موجودی.
+    نسخهٔ کامل با مشخصات (catalog.json) روی دیسک در دسترس است؛ تزریق نسخهٔ کامل به
+    مدل‌های رایگان پاسخ را بیش از یک دقیقه کند می‌کرد."""
+    from apps.catalog.pricing import user_price_key
+    price_key, _ = user_price_key(user)
+    cache_key = f"assistant_catalog_compact_{price_key}"
+    data = cache.get(cache_key)
+    if data is None:
+        items = json.loads(_catalog_payload(user))
+        data = json.dumps(
+            [{k: it[k] for k in ("name", "category", "price_irt", "in_stock")} for it in items],
+            ensure_ascii=False)
+        cache.set(cache_key, data, CATALOG_CACHE_TTL)
+    return data
+
+
+def _learned_context(message: str, limit: int = 2) -> str:
+    """پاسخ‌های یادگرفته‌شده از جمینای که به سؤال فعلی شبیه‌اند — برای تزریق به پرامپت."""
+    query = re.sub(r"[؟?!.,،؛:]", " ", message.translate(FA_TO_EN_DIGITS))
+    words = [w for w in re.split(r"\s+", query.strip()) if len(w) > 1][:8]
+    if not words:
+        return ""
+    scored = []
+    for qa in LearnedQA.objects.all()[:1000]:
+        s = sum(1 for w in words if w in qa.question)
+        if s:
+            scored.append((s, qa))
+    scored.sort(key=lambda t: (-t[0], -t[1].id))
+    top = [qa for _, qa in scored[:limit]]
+    if not top:
+        return ""
+    body = "\n".join(f"س: {qa.question}\nج: {qa.answer[:300]}" for qa in top)
+    return ("\n\nپاسخ‌هایی که ربات قبلاً یاد گرفته (اگر به سؤال مشتری مربوط است از آن استفاده کن، وگرنه نادیده بگیر):\n"
+            + body)
+
+
+def _learn_from_answer(question: str, answer: str, engine: str):
+    """ذخیرهٔ پاسخ موتورهای ابری برای استفاده در سؤال‌های مشابه بعدی (یادگیری ربات)."""
+    if engine in ("qwen", "rules") or not question.strip() or not answer.strip():
+        return
+    try:
+        if LearnedQA.objects.filter(question=question[:300]).exists():
+            return
+        LearnedQA.objects.create(question=question[:300], answer=answer[:2000], engine=engine)
+    except Exception as exc:
+        logger.warning(f"[ASSISTANT] ذخیره پاسخ یادگرفته‌شده ناموفق: {exc}")
+
+
 class AssistantChatView(APIView):
     """POST /api/assistant/chat/  —  {message, history?} → پاسخ چت‌بات + محصولات مرتبط"""
     permission_classes = [AllowAny]
@@ -212,46 +411,219 @@ class AssistantChatView(APIView):
         if not isinstance(history, list):
             history = []
 
-        products, is_fallback = _find_products(message)
+        # سلام و احوال‌پرسی — پاسخ فوری بدون مدل و بدون کارت محصول
+        # «سلام خوبی؟» و «سلام وقت بخیر» هم گرفته می‌شوند، ولی «سلام، برد ۵ مگا دارین؟» نه
+        if ((re.match(r"^(سلام|درود|علیکم سلام|سلام علیکم|صبح بخیر|ظهر بخیر|عصر بخیر|شب بخیر|وقت بخیر|وقتتون بخیر|هی|های|hello|hi|hey)\b", message.strip(), re.I)
+                and len(message) <= 30
+                and not re.search(r"برد|لنز|کیس|سنسور|دوربین|کابل|مودم|هارد|پاور|فیش|قیمت|خرید|موجود|سفارش", message))
+                or re.fullmatch(r"(ممنون|مرسی|متشکرم|تشکر|خداحافظ|خدانگهدار|فعلا|بای|ممنونم|مرسى)[\s!؟?.,،]*", message.strip())):
+            return Response({
+                "reply": "سلام، وقت بخیر! چه قطعه‌ای برای مونتاژ لازم دارید؟ (برد، لنز، کیس، سنسور، کابل و…)",
+                "products": [],
+                "engine": "rules",
+            })
+
+        # پرسش درباره هویت/توانایی ربات — پاسخ آماده و فوری، بدون فراخوانی مدل
+        if re.search(r"توانایی|قابلیت|کی هستی|چه کسی هستی|بلدی|چیکار می|چه کار می|خودت را معرفی|خودتو معرفی|معرفی خودت", message):
+            return Response({
+                "reply": "من ربات هوشمند دوربینکار هستم و به دیتاشیت‌های سایت دسترسی دارم؛ "
+                         "می‌توانم منطبق‌ترین محصول با خواسته شما را پیدا کنم. "
+                         "اگر سوالی راجع به قطعات داری، در خدمتم.",
+                "products": [],
+                "engine": "rules",
+            })
+
+        # نیت قیمتی: ارزان‌ترین/گران‌ترین — کل کاتالوگ بررسی شود تا گزینه ارزانِ موجود گم نشود
+        wants_cheap = bool(re.search(r"ارزان", message))
+        wants_expensive = bool(re.search(r"گران", message)) and not wants_cheap
+        price_intent = wants_cheap or wants_expensive
+
+        products, is_fallback = _find_products(message, limit=200 if price_intent else 4)
+
+        # سؤال پیگیری بدون کلمهٔ محصولی («مدلای بیشتری بده»، «ارزان‌ترش چی؟»، «چه رنگاییش داری؟»)
+        # — با کلمات سؤال‌های قبلی گفتگو جستجو کن و اقلامی که قبلاً معرفی شده‌اند را کنار بگذار
+        if is_fallback and history:
+            prev_users = [str(h.get("content", "")) for h in history[-6:]
+                          if isinstance(h, dict) and h.get("role") == "user" and h.get("content")]
+            for prev in reversed(prev_users):
+                p2, fb2 = _find_products(prev, limit=12)
+                if not fb2:
+                    # نوع قطعه از سؤال قبلی ارث ببر — «مدلای بیشتری برد» نباید لنز بیاورد
+                    prev_types = [w for w in ("برد", "لنز", "کیس", "سنسور", "هولدر", "مودم", "پکیج") if w in prev]
+                    if prev_types:
+                        typed = [p for p in p2 if any(
+                            w in p.name or (p.category and w in p.category.name) for w in prev_types)]
+                        if typed:
+                            p2 = typed
+                    last_answers = " ".join(str(h.get("content", "")) for h in history[-6:]
+                                            if isinstance(h, dict) and h.get("role") == "assistant")
+                    fresh = [p for p in p2 if p.name not in last_answers]
+                    products, is_fallback = (fresh or p2), False
+                    break
+
         dicts = []
         for p in products:
             d = _product_dict(p, request.user)
             d["specs"] = _spec_summary(p)
             dicts.append(d)
+
+        # فیلتر نوع قطعه: اگر سؤال نوع مشخصی خواسته (برد، لنز، کیس...)،
+        # کارت‌ها و جواب فقط از همان نوع باشند — نه محصول نامرتبط
+        type_words = [w for w in ("برد", "لنز", "کیس", "سنسور", "هولدر", "مودم", "پکیج") if w in message]
+        if type_words and dicts and not is_fallback:
+            pairs = [(p, d) for p, d in zip(products, dicts)
+                     if any(w in d["name"] or w in d["category"] for w in type_words)]
+            if pairs:
+                products = [p for p, _ in pairs]
+                dicts = [d for _, d in pairs]
+
+        if price_intent:
+            # مرتب‌سازی زوجی تا products و dicts هم‌تراز بمانند
+            pairs = sorted(zip(products, dicts), key=lambda t: (
+                not t[1]["in_stock"],
+                -(t[1]["price_irt"] or 0) if wants_expensive else (t[1]["price_irt"] or 999_000_000_000),
+            ))
+            products = [p for p, _ in pairs]
+            dicts = [d for _, d in pairs]
+            # جواب قطعی از دیتا — ارزان‌ترین/گران‌ترین را به مدل نسپار
+            in_stock = [d for d in dicts if d["in_stock"] and d["price_irt"]]
+            # فیلتر رزولوشن و سیستم اگر در سؤال آمده باشد (۵ مگاپیکسل، IP، AHD...)
+            fa_msg = message.translate(FA_TO_EN_DIGITS)
+            for fa, en in ALIASES.items():
+                fa_msg = fa_msg.replace(fa, en)
+            mm = re.search(r"(\d+)\s*(?:مگاپیکسل|مگا|مگ(?![اپیکسلا])|mp|megapixel)", fa_msg)
+            if mm:
+                d = mm.group(1)
+                pats = [f"{d}مگاپیکسل"]
+                if d in MP_WORDS:
+                    pats.append(f"{MP_WORDS[d]}مگاپیکسل")
+                squeezed = [x for x in in_stock
+                            if any(pt in x["name"].translate(FA_TO_EN_DIGITS).replace("‌", "").replace(" ", "") for pt in pats)]
+                if squeezed:
+                    in_stock = squeezed
+            sys_m = re.search(r"\b(ip|ahd)\b", fa_msg.lower())
+            if sys_m:
+                sysw = sys_m.group(1)
+                same_sys = [x for x in in_stock if sysw in f"{x['name']} {x['category']} {x['specs']}".lower()]
+                if same_sys:
+                    in_stock = same_sys
+            if in_stock and not is_fallback:
+                best = in_stock[0]
+                label = "ارزان‌ترین" if wants_cheap else "گران‌ترین"
+                return Response({
+                    "reply": f"{label} گزینه موجود فروشگاه «{best['name']}» با قیمت {best['price_irt']:,} ریال است.",
+                    # کارت‌ها همان لیست فیلترشده (رزولوشن/سیستم) باشند — نه ارزان‌ترین‌های کلی
+                    "products": in_stock[:8],
+                    "engine": "rules",
+                })
+            # اگر جواب قطعی نشد، کانتکست مدل را منفجر نکن
+            products, dicts = products[:4], dicts[:4]
+
+        # جواب واقعی سریع از دیتابیس برای سؤالات مشخص (قیمت/موجودی/ابعاد/جنس بدنه)
+        # — بدون فراخوانی مدل: هم فوری است هم غیرممکن است که جمله‌اش خراب شود
+        if dicts and not is_fallback:
+            top_p, top_d = products[0], dicts[0]
+            fa_msg = message.translate(FA_TO_EN_DIGITS)
+            quick = None
+            if re.search(r"ابعاد|اندازه|سایز", fa_msg) and top_p.board_dimensions:
+                quick = f"ابعاد «{top_p.name}» برابر {top_p.board_dimensions} میلی‌متر است"
+                quick += "." if top_d["in_stock"] else "، ولی فعلاً ناموجود است."
+            elif re.search(r"فلزی|پلاستیکی", fa_msg) and top_p.housing_material:
+                if "فلز" in top_p.housing_material:
+                    quick = f"بله، بدنه «{top_p.name}» فلزی است."
+                else:
+                    quick = f"نه، بدنه «{top_p.name}» {top_p.housing_material} است."
+            elif re.search(r"قیمت|چنده|چند تومن|چند ریال", fa_msg) and top_d["price_irt"]:
+                quick = f"قیمت «{top_p.name}» {top_d['price_irt']:,} ریال است"
+                quick += "." if top_d["in_stock"] else "، ولی فعلاً ناموجود است."
+            elif re.search(r"موجود", fa_msg):
+                quick = f"«{top_p.name}» {'موجود است.' if top_d['in_stock'] else 'فعلاً ناموجود است.'}"
+            if quick:
+                return Response({"reply": quick, "products": dicts, "engine": "rules"})
         if dicts:
             lines = "\n".join(
-                f"- {d['name']} | برند: {d['brand'] or '-'} | دسته: {d['category']} | "
-                + (f"قیمت: {d['price_irt']:,} ریال" if d["price_irt"] else "قیمت: نامشخص")
-                + f" | موجودی: {'دارد' if d['in_stock'] else 'ندارد'}"
-                + (f" | مشخصات: {d['specs']}" if d["specs"] else "")
+                f"محصول: {d['name']}. برند: {d['brand'] or '-'}. دسته: {d['category']}. "
+                + (f"قیمت: {d['price_irt']:,} ریال." if d["price_irt"] else "قیمت: نامشخص.")
+                + f" موجودی: {'دارد' if d['in_stock'] else 'ندارد'}."
+                + (f" مشخصات: {d['specs']}." if d["specs"] else "")
                 for d in dicts
             )
+            if wants_cheap:
+                lines = "(لیست از ارزان‌ترین به گران‌ترین مرتب شده و اقلام موجود اول آمده‌اند)\n" + lines
+            elif wants_expensive:
+                lines = "(لیست از گران‌ترین به ارزان‌ترین مرتب شده و اقلام موجود اول آمده‌اند)\n" + lines
             if is_fallback:
                 lines = "(هیچ محصول مرتبطی با درخواست مشتری پیدا نشد؛ صادقانه بگو پیدا نکردی. " \
                         "این‌ها فقط چند محصول کلی فروشگاه‌اند، نه جواب درخواست مشتری:)\n" + lines
         else:
             lines = "(محصولی یافت نشد)"
 
+        user_content = (f"اطلاعات محصولات فروشگاه:\n{lines}"
+                        f"{_faq_context(_find_faqs(message))}"
+                        f"{_learned_context(message)}"
+                        f"\n\nپیام مشتری: {message}")
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         for h in history[-6:]:
             if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content"):
                 messages.append({"role": h["role"], "content": str(h["content"])[:500]})
-        messages.append({
-            "role": "user",
-            "content": f"اطلاعات محصولات فروشگاه:\n{lines}{_faq_context(_find_faqs(message))}\n\nپیام مشتری: {message}",
-        })
+        messages.append({"role": "user", "content": user_content})
 
-        try:
-            reply = _ask_ollama(messages)
-        except Exception as exc:
-            logger.warning(f"[ASSISTANT] خطای Ollama: {exc}")
+        # زنجیرهٔ موتورها: موتور انتخاب‌شده در پنل اول است؛ اگر خطا داد بقیهٔ کلیددارها
+        # و در نهایت Qwen لوکال. موتورهای ابری کاتالوگ جمع‌وجور (نام/قیمت/موجودی) را هم
+        # می‌گیرند — تزریق نسخهٔ کامل به مدل‌های رایگان پاسخ را بیش از یک دقیقه کند می‌کرد؛
+        # مشخصات فنی از کانتکست متمرکز محصولات مرتبط می‌آید و catalog.json کامل روی دیسک است.
+        st = AssistantSettings.get_instance()
+        _catalog_payload(request.user)  # catalog.json روی دیسک همیشه تازه بماند
+        cloud_messages = messages[:-1] + [{
+            "role": "user",
+            "content": user_content + "\n\nکاتالوگ محصولات فروشگاه (JSON):\n" + _catalog_compact(request.user),
+        }]
+        reply, engine, elapsed = None, None, None
+        for name, call in _engine_chain(st):
+            try:
+                t0 = time.monotonic()
+                reply = call(cloud_messages if name != "qwen" else messages)
+                engine, elapsed = name, round(time.monotonic() - t0, 1)
+                break
+            except Exception as exc:
+                logger.warning(f"[ASSISTANT] موتور {name} خطا داد — تلاش با موتور بعدی: {exc}")
+        if reply is None:
             return Response(
                 {"error": "دستیار هوشمند موقتاً در دسترس نیست؛ کمی بعد دوباره تلاش کنید."},
                 status=503,
             )
+        if st.learn_from_gemini:
+            _learn_from_answer(message, reply, engine)
+
+        # کارت‌ها = محصولاتی که مدل واقعاً در جواب نام برده — مدل از کاتالوگ کامل جواب می‌دهد
+        # و ممکن است محصولی را بگوید که جستجوی کلیدواژه پیدا نکرده (اسم انگلیسی و…)
+        if not is_fallback:
+            try:
+                catalog_items = json.loads(_catalog_compact(request.user))
+                def _name_codes(nm):
+                    # کدهای مدل داخل اسم (YT-10035، H55Y، GC1084…) — مدل معمولاً فقط کد را می‌گوید
+                    return [t for t in re.findall(r"[A-Za-z][A-Za-z0-9]*-?[A-Za-z0-9]*\d+[A-Za-z0-9\-]*", nm) if len(t) >= 3]
+                mentioned = [
+                    it for it in catalog_items
+                    if it.get("name") and (it["name"] in reply or any(c in reply for c in _name_codes(it["name"])))
+                ]
+                if mentioned:
+                    # اقلام کارت‌های قبلی که مدل نام برده اول بیایند، بعد بقیهٔ نام‌برده‌شده‌ها
+                    mentioned_names = {it["name"] for it in mentioned}
+                    dicts = mentioned + [d for d in dicts if d["name"] not in mentioned_names]
+                    dicts = dicts[:8]
+            except Exception:
+                pass  # خرابی هماهنگ‌سازی کارت نباید جواب را بشکند
+
+        # آخرین موتور پاسخ‌دهنده — در صفحه «تنظیمات ربات» پنل ادمین نمایش داده می‌شود
+        from django.utils import timezone as tz
+        cache.set("assistant_last_engine", {"engine": engine, "at": tz.now().isoformat(), "elapsed": elapsed}, None)
         return Response({
             "reply": reply,
-            "products": dicts,
+            # محصولات fallback (نامرتبط) کارت نشان داده نمی‌شوند — فقط در کانتکست مدل بوده‌اند
+            "products": [] if is_fallback else dicts,
+            "engine": engine,
+            "elapsed": elapsed,
         })
 
 
@@ -288,6 +660,92 @@ class SmartSearchView(APIView):
         })
 
 
+# ─── راهنمای هوشمند حسابداری (فقط پنل مدیریت) ────────────────────────────────
+# پایگاه دانش ساخت‌یافته در accounting_guide.json (کنار همین فایل) — موضوع‌ها با
+# کلمات کلیدی، مسیر دقیق منوها و نمونه سؤال/جواب. برای به‌روزرسانی راهنما فقط
+# همان فایل را ویرایش کن.
+def _load_accounting_guide() -> str:
+    import os.path
+    path = os.path.join(os.path.dirname(__file__), "accounting_guide.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            kb = json.load(fh)
+    except Exception as exc:
+        logger.error(f"[ACC-ASSISTANT] خواندن accounting_guide.json ناموفق: {exc}")
+        return "(راهنمای سیستم در دسترس نیست)"
+    parts = [kb.get("menu_map", ""), kb.get("currency_note", "")]
+    for t in kb.get("topics", []):
+        parts.append(f"■ {t['title']}\n{t['content']}")
+        for qa in t.get("qa", []):
+            parts.append(f"  نمونه سؤال: {qa['q']}\n  نمونه جواب: {qa['a']}")
+    return "\n\n".join(p for p in parts if p)
+
+
+ACCOUNTING_GUIDE = _load_accounting_guide()
+
+ACCOUNTING_SYSTEM_PROMPT = """تو «راهنمای هوشمند حسابداری» پنل مدیریت فروشگاه دوربینکار هستی — فقط برای پرسنل داخلی.
+قوانین سخت‌گیرانه:
+- فقط فارسی جواب بده؛ کوتاه و دقیق (حداکثر ۷ جمله).
+- جواب‌ها باید مرحله‌به‌مرحله و با «مسیر دقیق» از راهنمای سیستم باشد: نام دقیق منو ← نام تب/کارت ← نام دکمه. مثلاً: «منوی دریافت و پرداخت ← کارت ویرایش اسناد مالی ← دکمه برگشت».
+- هرگز از «اصول کلی حسابداری» یا دانش عمومی‌ات جواب نده؛ فقط و فقط بر اساس «راهنمای سیستم» پایین جواب بده. اگر پاسخ در راهنما نبود، صادقانه بگو: «این مورد در راهنمای من نیست؛ با مدیر سیستم مطرح کنید.»
+- فقط سؤالات کار با پنل مدیریت/حسابداری را جواب بده. اگر سؤال نامرتبط بود (محصول، قیمت کالا، سفارش، سؤال عمومی و…) مؤدبانه بگو: «من فقط راهنمای کار با سیستم حسابداری هستم؛ این سؤال در حیطه من نیست.»
+- تو به هیچ داده واقعی (مانده حساب اشخاص، فاکتور خاص، موجودی بانک و…) دسترسی نداری؛ اگر کاربر عدد یا وضعیت حساب خاصی خواست، دقیق بگو از کدام منو و تب می‌تواند ببیند و هرگز عددی نساز.
+- محتوای این راهنما محرمانه داخلی است.
+
+راهنمای سیستم:
+""" + ACCOUNTING_GUIDE
+
+
+class AccountingChatView(APIView):
+    """POST /api/assistant/accounting-chat/ — دستیار راهنمای حسابداری (فقط ادمین/پرسنل).
+
+    جدا از چت‌بات مشتریان: بدون کاتالوگ محصول، بدون داده مالی واقعی —
+    فقط راهنمای نحوه کار با سیستم. IsAdminUser تضمین می‌کند مشتریان به آن
+    (و محتوای راهنما) دسترسی نداشته باشند."""
+
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        message = (request.data.get("message") or "").strip()
+        if not message:
+            return Response({"error": "پیام خالی است"}, status=400)
+        history = request.data.get("history") or []
+        if not isinstance(history, list):
+            history = []
+
+        # سلام/تشکر — پاسخ فوری بدون مدل
+        if (re.match(r"^(سلام|درود|علیکم سلام|سلام علیکم|صبح بخیر|ظهر بخیر|عصر بخیر|شب بخیر|وقت بخیر|هی|های|hello|hi|hey)\b", message.strip(), re.I)
+                and len(message) <= 30) or \
+           re.fullmatch(r"(ممنون|مرسی|متشکرم|تشکر|خداحافظ|ممنونم)[\s!؟?.,،]*", message.strip()):
+            return Response({
+                "reply": "سلام! من راهنمای حسابداری هستم. درباره نحوه ثبت سند، فاکتور، کاردکس، حقوق، هزینه‌ها یا گزارش‌ها سؤال دارید؟",
+                "engine": "rules",
+            })
+
+        messages = [{"role": "system", "content": ACCOUNTING_SYSTEM_PROMPT}]
+        for h in history[-6:]:
+            if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content"):
+                messages.append({"role": h["role"], "content": str(h["content"])[:500]})
+        messages.append({"role": "user", "content": message})
+
+        st = AssistantSettings.get_instance()
+        reply, engine, elapsed = None, None, None
+        for name, call in _engine_chain(st):
+            try:
+                t0 = time.monotonic()
+                reply = call(messages)
+                engine, elapsed = name, round(time.monotonic() - t0, 1)
+                break
+            except Exception as exc:
+                logger.warning(f"[ACC-ASSISTANT] موتور {name} خطا داد — تلاش با موتور بعدی: {exc}")
+        if reply is None:
+            return Response(
+                {"error": "راهنمای هوشمند موقتاً در دسترس نیست؛ کمی بعد دوباره تلاش کنید."},
+                status=503,
+            )
+        return Response({"reply": reply, "engine": engine, "elapsed": elapsed})
+
+
 class FAQListView(APIView):
     """GET /api/assistant/faqs/ — لیست پرسش‌های متداول فعال برای صفحه «سوالات متداول»"""
     permission_classes = [AllowAny]
@@ -295,3 +753,34 @@ class FAQListView(APIView):
     def get(self, request):
         faqs = FAQ.objects.filter(is_active=True)
         return Response([{"id": f.id, "question": f.question, "answer": f.answer} for f in faqs])
+
+
+class AssistantSettingsView(APIView):
+    """GET/PUT /api/assistant/settings/ — تنظیمات ربات هوشمند (کلیدها، موتور اصلی و…) + آخرین موتور پاسخ‌دهنده"""
+    permission_classes = [IsAdminUser]
+
+    FIELDS = ["provider", "gemini_api_key", "gemini_model", "gemini_enabled", "gemini_proxy",
+              "ms_api_key", "ms_model", "zai_api_key", "zai_model", "ds_api_key", "ds_model",
+              "learn_from_gemini"]
+
+    def get(self, request):
+        st = AssistantSettings.get_instance()
+        return Response({
+            **{f: getattr(st, f) for f in self.FIELDS},
+            "last_engine": cache.get("assistant_last_engine"),
+            "learned_count": LearnedQA.objects.count(),
+        })
+
+    def put(self, request):
+        st = AssistantSettings.get_instance()
+        data = request.data
+        if "provider" in data and data["provider"] in dict(AssistantSettings.PROVIDERS):
+            st.provider = data["provider"]
+        for f in self.FIELDS:
+            if f == "provider":
+                continue
+            if f in data:
+                setattr(st, f, bool(data[f]) if f in ("gemini_enabled", "learn_from_gemini") else str(data[f]).strip())
+        st.save()
+        logger.info(f"[ASSISTANT] تنظیمات ربات توسط {request.user} به‌روز شد (provider={st.provider})")
+        return self.get(request)

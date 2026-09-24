@@ -69,6 +69,14 @@ export const GridIcon = (p) => (
   </svg>
 )
 
+// آیکون مقایسه محصولات — گیج/نیم‌دایره با عقربه
+export const GaugeIcon = mk(
+  <>
+    <path d="m12 15 3.5-3.5" />
+    <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+  </>
+)
+
 export const SparkleIcon = () => (
   <svg viewBox="0 0 24 24" className="w-3 h-3" fill="currentColor">
     <path d="M12 2l1.5 5.5L19 9l-5.5 1.5L12 16l-1.5-5.5L5 9l5.5-1.5L12 2z" />

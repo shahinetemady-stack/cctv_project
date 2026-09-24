@@ -1,0 +1,30 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "دوربینکار",
+    "documentationUrl": "https://doorbinkar.com/",
+    "logoUrl": "https://doorbinkar.com/icons/icon-512.png"
+  },
+  "entries": [
+    {
+      "identifier": "urn:air:doorbinkar.com:site:smart-assistant",
+      "displayName": "دستیار هوشمند دوربینکار",
+      "type": "text/markdown; profile=\"urn:air:agent-skills\"",
+      "url": "https://doorbinkar.com/llms.txt",
+      "description": "راهنمای خزنده‌های AI برای فروشگاه تخصصی قطعات دوربین مداربسته دوربینکار — جستجوی قطعه، ربات مشاور فنی و ساختار صفحات سایت.",
+      "tags": ["cctv", "ecommerce", "assistant", "fa-IR"],
+      "capabilities": ["ProductSearch", "TechnicalQA", "CompatibilityCheck"],
+      "representativeQueries": [
+        "برد ۵ مگاپیکسل ip ارزان کدام است؟",
+        "لنز دارک لایت چی داری؟",
+        "کدام بردها برای پلاک‌خوانی مناسب‌اند؟"
+      ],
+      "version": "1.0.0",
+      "updatedAt": "2026-09-22T00:00:00Z",
+      "metadata": {
+        "locale": "fa-IR",
+        "store": "doorbinkar.com"
+      }
+    }
+  ]
+}

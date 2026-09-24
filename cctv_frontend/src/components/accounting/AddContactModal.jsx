@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../../services/api'
 import AmountInput from '../ui/AmountInput'
+import { PROVINCES } from '../../constants/provinces'
 
 // ─── مودال افزودن طرف حساب ─────────────────────────────────────
 // هم در صفحه طرف حساب‌ها (contacts_create) و هم داخل فاکتور فروش
 // (forInvoice — ساخت Contact + کاربر سایه برای اتصال فاکتور) استفاده می‌شود.
+// چیدمان فرم دقیقاً مثل «ویرایش اطلاعات طرف حساب» (EditContactModal) است.
 // نوع‌های قابل انتخاب در فرم — چهار گروه اصلی
 const FORM_TYPES = [
   ['partner',     'همکار'],
@@ -31,12 +33,15 @@ export default function AddContactModal({ creatableTypes = null, onClose, onCrea
     ? (visibleTypes.some(([k]) => k === 'partner') ? 'partner' : visibleTypes[0]?.[0] || 'customer')
     : (visibleTypes[0]?.[0] || 'supplier_cn')
   const emptyForm = {
-    name: '', contact_type: defaultType,
-    partner_tier: '', currency: 'IRR',
-    phone: '', wechat: '', address: '', note: '', opening_balance_irr: '', opening_balance_cny: '',
+    title: '', name: '', contact_type: defaultType,
+    partner_tier: '', currency: 'IRR', has_fx: false,
+    phone: '', wechat: '', province: '', address: '', note: '',
+    opening_balance_irr: '', opening_balance_cny: '',
+    credit_limit_irr: '', legacy_purchase_total: '',
   }
   const [form, setForm] = useState(emptyForm)
   const [msg, setMsg] = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const createMut = useMutation({
     mutationFn: (d) => api.post(forInvoice ? '/accounting/customers/' : '/accounting/contacts/', d).then(r => r.data),
@@ -50,6 +55,8 @@ export default function AddContactModal({ creatableTypes = null, onClose, onCrea
       }
       setMsg({ type: 'success', text: 'طرف حساب اضافه شد' })
       setForm(emptyForm)
+      // اگر فرم میزبان (مثل فاکتور خرید) طرف تازه‌ساخته را می‌خواهد، بلافاصله برگردان و ببند
+      if (onCreated) { onCreated(data); onClose(); return }
       setTimeout(() => { setMsg(null); onClose() }, 1200)
     },
     onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا' }),
@@ -92,81 +99,111 @@ export default function AddContactModal({ creatableTypes = null, onClose, onCrea
       <div className="card p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <div>
-            <h2 className="font-bold text-white text-lg">افزودن طرف حساب</h2>
+            <h2 className="font-bold text-white text-base">افزودن طرف حساب</h2>
             {forInvoice && <p className="text-xs text-gray-steel mt-0.5">در کاردکس اشخاص ثبت می‌شود</p>}
           </div>
           <button onClick={onClose} className="text-gray-steel hover:text-white text-2xl">×</button>
         </div>
-        <div className="space-y-3">
-          <div>
-            <label className="label text-xs mb-1 block">نام *</label>
-            <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              className="input text-sm" placeholder="نام طرف حساب" autoFocus />
+        {msg && (
+          <div className={`rounded-lg px-4 py-2 text-xs mb-3 ${msg.type === 'success' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+            {msg.text}
           </div>
-          <div>
-            <label className="label text-xs mb-1 block">نوع *</label>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <label className="text-xs text-gray-steel col-span-2">عنوان
+            <select value={form.title} onChange={e => set('title', e.target.value)} className="input text-sm mt-1">
+              <option value="">— بدون عنوان —</option>
+              <option value="mr">آقای</option>
+              <option value="mrs">خانم</option>
+              <option value="company">شرکت</option>
+              <option value="shop">فروشگاه</option>
+            </select>
+          </label>
+          <label className="text-xs text-gray-steel col-span-2">نام طرف حساب *
+            <input value={form.name} onChange={e => set('name', e.target.value)}
+              className="input text-sm mt-1" autoFocus />
+          </label>
+          <label className="text-xs text-gray-steel">موبایل *
+            <input value={form.phone} onChange={e => set('phone', e.target.value)}
+              dir="ltr" maxLength={11} placeholder="09123456789" className="input text-sm mt-1" />
+          </label>
+          <label className="text-xs text-gray-steel">وی‌چت / واتساپ / تلفن
+            <input value={form.wechat} onChange={e => set('wechat', e.target.value)} dir="ltr" className="input text-sm mt-1" />
+          </label>
+          <label className="text-xs text-gray-steel">نوع *
             <select value={form.contact_type}
               onChange={e => setForm(f => ({ ...f, contact_type: e.target.value, partner_tier: '' }))}
-              className="input text-sm">
+              className="input text-sm mt-1">
               {visibleTypes.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
+          </label>
+          <label className="text-xs text-gray-steel">ارز پیش‌فرض
+            <select value={form.currency} onChange={e => set('currency', e.target.value)} className="input text-sm mt-1">
+              {form.has_fx && <option value="CNY">یوان چین</option>}
+              <option value="IRR">ریال ایران</option>
+              <option value="USD">دلار</option>
+            </select>
+          </label>
+          {/* عملیات ارزی — فعال بودن فیلدها و ستون‌های یوانی برای این طرف حساب */}
+          <label className="flex items-start gap-2 text-xs text-gray-steel cursor-pointer col-span-2">
+            <input type="checkbox" checked={!!form.has_fx}
+              onChange={e => setForm(f => ({ ...f, has_fx: e.target.checked, currency: !e.target.checked && f.currency === 'CNY' ? 'IRR' : f.currency }))}
+              className="accent-[#FBC02D] mt-0.5" />
+            <span>💱 عملیات ارزی<span className="block text-[10px] text-gray-steel mt-0.5">این شخص کارکرد یوانی دارد — ستون‌ها و فیلدهای ارزی برایش نمایش داده می‌شود</span></span>
+          </label>
+          <label className="text-xs text-gray-steel">استان
+            <input value={form.province} onChange={e => set('province', e.target.value)}
+              list="province-options" className="input text-sm mt-1" placeholder="جستجو یا انتخاب استان..." />
+            <datalist id="province-options">
+              {PROVINCES.map(p => <option key={p} value={p} />)}
+            </datalist>
+          </label>
+          <label className="text-xs text-gray-steel col-span-2">آدرس
+            <textarea value={form.address} onChange={e => set('address', e.target.value)} rows={2} className="input text-sm mt-1" />
+          </label>
+          <label className="text-xs text-gray-steel col-span-2">توضیحات
+            <textarea value={form.note} onChange={e => set('note', e.target.value)} rows={2} className="input text-sm mt-1" />
+          </label>
+          <label className="text-xs text-gray-steel">مانده اول دوره (ریال)
+            <AmountInput value={form.opening_balance_irr}
+              onChange={e => set('opening_balance_irr', e.target.value)}
+              className="input text-sm mt-1" placeholder="0" />
+          </label>
+          {form.has_fx && (
+            <label className="text-xs text-gray-steel">مانده اول دوره (یوان)
+              <AmountInput value={form.opening_balance_cny}
+                onChange={e => set('opening_balance_cny', e.target.value)}
+                className="input text-sm mt-1" placeholder="0" />
+            </label>
+          )}
+          <div className="col-span-2 text-[10px] text-gray-steel">مثبت = طرف حساب به ما بدهکار | منفی = ما به او بدهکاریم</div>
+          {/* سقف اعتبار — شامل هر نوع بدهی: حساب باز، چک وصول‌نشده، ردیف‌های تسویه باز */}
+          <label className="text-xs text-gray-steel col-span-2">سقف اعتبار (ریال) — ۰ یعنی نامحدود
+            <AmountInput value={form.credit_limit_irr}
+              onChange={e => set('credit_limit_irr', e.target.value)}
+              className="input text-sm mt-1" placeholder="0" />
+          </label>
+          <div className="col-span-2 text-[10px] text-gray-steel -mt-2">
+            شامل انواع بدهی می‌شود: حساب باز، چک وصول‌نشده و هر بدهی تسویه‌نشده — اگر مجموع بدهی از سقف بگذرد، فروش اعتباری جدید بسته می‌شود
           </div>
-          {/* سطح همکار — فقط وقتی نوع «همکار» انتخاب شده */}
-          {form.contact_type === 'partner' && (
-            <div>
-              <label className="label text-xs mb-1 block">سطح همکار *</label>
-              <select value={form.partner_tier} onChange={e => setForm(f => ({ ...f, partner_tier: e.target.value }))} className="input text-sm">
+          <label className="text-xs text-gray-steel col-span-2">مجموع سابقه خرید قبلی خارج از سایت (ریال)
+            <AmountInput value={form.legacy_purchase_total}
+              onChange={e => set('legacy_purchase_total', e.target.value)}
+              className="input text-sm mt-1" placeholder="0" />
+          </label>
+          <div className="col-span-2 text-[10px] text-gray-steel -mt-2">
+            این مبلغ با خریدهای آنلاین سایت جمع می‌شود و ملاک ارتقای خودکار سطح همکار (باشگاه همکاران) است
+          </div>
+        </div>
+        {/* سطح همکار — فقط وقتی نوع «همکار» انتخاب شده (مثل بخش پایین فرم ویرایش) */}
+        {form.contact_type === 'partner' && (
+          <div className="mt-4 pt-4 border-t border-white/10 space-y-3">
+            <label className="text-xs text-gray-steel block">سطح همکار *
+              <select value={form.partner_tier} onChange={e => set('partner_tier', e.target.value)} className="input text-xs mt-1">
                 <option value="">انتخاب کنید...</option>
                 {PARTNER_TIERS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </select>
-            </div>
-          )}
-          <div>
-            <label className="label text-xs mb-1 block">ارز پیش‌فرض</label>
-            <select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value }))} className="input text-sm">
-              <option value="CNY">یوان چین (CNY)</option>
-              <option value="IRR">ریال ایران (IRR)</option>
-              <option value="USD">دلار (USD)</option>
-            </select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label text-xs mb-1 block">موبایل *</label>
-              <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-                className="input text-sm" placeholder="09123456789" dir="ltr" maxLength={11} />
-            </div>
-            <div>
-              <label className="label text-xs mb-1 block">وی‌چت / واتساپ / تلفن</label>
-              <input value={form.wechat} onChange={e => setForm(f => ({ ...f, wechat: e.target.value }))}
-                className="input text-sm" placeholder="اختیاری" />
-            </div>
-          </div>
-          <div>
-            <label className="label text-xs mb-1 block">آدرس</label>
-            <textarea value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
-              className="input text-sm resize-none" rows={2} placeholder="اختیاری" />
-          </div>
-          <div>
-            <label className="label text-xs mb-1 block">توضیحات</label>
-            <textarea value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
-              className="input text-sm resize-none" rows={2} />
-          </div>
-          <div>
-            <label className="label text-xs mb-1 block">مانده اول دوره</label>
-            <div className="grid grid-cols-2 gap-3">
-              <AmountInput value={form.opening_balance_irr}
-                onChange={e => setForm(f => ({ ...f, opening_balance_irr: e.target.value }))}
-                className="input text-sm" placeholder="ریال" />
-              <AmountInput value={form.opening_balance_cny}
-                onChange={e => setForm(f => ({ ...f, opening_balance_cny: e.target.value }))}
-                className="input text-sm" placeholder="یوان" />
-            </div>
-            <div className="text-[10px] text-gray-steel mt-1">مثبت = طرف حساب به ما بدهکار | منفی = ما به او بدهکاریم</div>
-          </div>
-        </div>
-        {msg && (
-          <div className={`mt-3 rounded-lg px-4 py-2 text-sm ${msg.type === 'success' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-            {msg.text}
+            </label>
           </div>
         )}
         <div className="flex gap-3 mt-5">

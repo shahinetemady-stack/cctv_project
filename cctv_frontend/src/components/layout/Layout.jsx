@@ -1,7 +1,7 @@
 import SiteBackground from './SiteBackground'
 import ExchangeRateWidget from './ExchangeRateWidget'
 import { Outlet, Link, useLocation } from 'react-router-dom'
-import { useEffect as useEffectReact, useState, useRef } from 'react'
+import { useEffect as useEffectReact, useState, useRef, lazy, Suspense, startTransition } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import Header from './Header'
 import Footer from './Footer'
@@ -11,8 +11,50 @@ import api from '../../services/api'
 import { filterAdminMenu } from '../../config/adminMenu'
 import MenuBadge from './MenuBadge'
 import OrderNotifier from './OrderNotifier'
-import ChatWidget from '../ChatWidget'
 import BackToTop from './BackToTop'
+// چت‌بات با تأخیر و به‌صورت چانک جدا لود می‌شود تا لود اولیه سبک بماند
+const ChatWidget = lazy(() => import('../ChatWidget'))
+
+// فوتر سنگین و همیشه زیر اسکرول است — فقط وقتی نزدیک ویوپورت شود mount می‌شود تا
+// رندر/استایل آن وارد پنجره بوت اولیه نشود
+function LazyFooter() {
+  const ref = useRef(null)
+  const [near, setNear] = useState(false)
+  useEffectReact(() => {
+    const el = ref.current
+    if (!el) return
+    const obs = new IntersectionObserver(([e]) => {
+      if (e.isIntersecting) { startTransition(() => setNear(true)); obs.disconnect() }
+    }, { rootMargin: '500px' })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [])
+  return <div ref={ref}>{near ? <Footer /> : null}</div>
+}
+
+// چت‌بات بعد از لود کامل صفحه و idle مرورگر mount می‌شود — چانک سنگین آن نباید
+// پنجره تعامل‌پذیری اولیه (TTI) را طولانی کند
+function LazyChat() {
+  const [ready, setReady] = useState(false)
+  useEffectReact(() => {
+    let idleId, cancelled = false
+    const cb = () => { if (!cancelled) setReady(true) }
+    const schedule = () => {
+      idleId = window.requestIdleCallback
+        ? window.requestIdleCallback(cb, { timeout: 8000 })
+        : setTimeout(cb, 5000)
+    }
+    if (document.readyState === 'complete') schedule()
+    else window.addEventListener('load', schedule, { once: true })
+    return () => {
+      cancelled = true
+      window.removeEventListener('load', schedule)
+      if (window.cancelIdleCallback) cancelIdleCallback(idleId)
+    }
+  }, [])
+  if (!ready) return null
+  return <Suspense fallback={null}><ChatWidget /></Suspense>
+}
 
 // ─── آیتم تکی منوی ادمین (مشترک سایدبار و کشوی موبایل) ───────
 function AdminMenuLink({ item, location, onClick, indent }) {
@@ -216,6 +258,9 @@ function BottomNav({ onOpenAdminMenu }) {
   const { count: itemCount } = useCartStore()
   const isStaff = user?.is_staff || user?.profile?.user_type === 'staff' || user?.is_superuser || false
 
+  // ─── افکت Limelight (اقتباس از 21st.dev): نوار نور متحرک بالای آیتم فعال ───
+  const itemRefs = useRef([])
+  const [lightX, setLightX] = useState(null)
   const items = [
     {
       to: '/',
@@ -291,15 +336,37 @@ function BottomNav({ onOpenAdminMenu }) {
     },
   ]
 
+  const activeIndex = items.findIndex(it => it.match(location.pathname))
+
+  // موقعیت نوار نور زیر آیتم فعال — با transform (بدون layout thrash)
+  useEffectReact(() => {
+    const update = () => {
+      const el = itemRefs.current[activeIndex]
+      setLightX(el ? el.offsetLeft + el.offsetWidth / 2 : null)
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [activeIndex, itemCount])
+
   return (
-    <nav className="bottom-nav pb-safe" aria-label="ناوبری موبایل" style={{ position: 'sticky', bottom: 0, zIndex: 99999 }}>
+    <nav className="bottom-nav pb-safe" aria-label="ناوبری موبایل" style={{ position: 'sticky', bottom: 0, zIndex: 60 }}>
       <div className="bottom-nav-inner">
-        {items.map((item) => {
+        {/* نوار نور Limelight — به آیتم فعال حرکت می‌کند */}
+        <div
+          aria-hidden="true"
+          className={`bottom-nav-limelight${lightX != null ? ' ready' : ''}`}
+          style={{ transform: lightX != null ? `translateX(calc(${lightX}px - 50%))` : 'translateX(-999px)' }}
+        >
+          <div className="bottom-nav-limelight-cone" />
+        </div>
+        {items.map((item, i) => {
           const isActive = item.match(location.pathname)
           return (
             <Link
               key={item.label}
               to={item.to}
+              ref={(el) => { itemRefs.current[i] = el }}
               className={`bottom-nav-item ${isActive ? 'active' : ''}`}
               aria-current={isActive ? 'page' : undefined}
               onClick={(e) => {
@@ -372,13 +439,13 @@ export default function Layout() {
             <Outlet />
           </main>
         </div>
-        <Footer />
+        <LazyFooter />
         <BottomNav onOpenAdminMenu={() => setAdminDrawerOpen(true)} />
       </div>
       {/* اعلان لحظه‌ای سفارش/فیش جدید برای پرسنل */}
       {isStaff && <OrderNotifier />}
-      {/* چت‌بات دستیار هوشمند — همه صفحات */}
-      <ChatWidget />
+      {/* چت‌بات دستیار هوشمند — همه صفحات؛ بعد از idle لود می‌شود */}
+      <LazyChat />
       {/* دکمه شناور بازگشت به بالای صفحه — همه صفحات */}
       <BackToTop />
       {/* Mobile Admin Drawer — از طریق دکمه «منو» در ناوبری پایین باز می‌شود */}

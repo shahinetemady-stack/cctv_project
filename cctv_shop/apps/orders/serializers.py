@@ -28,12 +28,13 @@ class _VariantInfoMixin(serializers.Serializer):
         return None
 
     def get_available_stock(self, obj):
-        return obj.variant.available_stock if obj.variant_id else None
+        # موجودی نمایشی به مشتری = فقط انبارهای با تیک «نمایش به مشتری»
+        return obj.variant.sellable_stock if obj.variant_id else None
 
     def get_stock_short(self, obj):
         if not obj.variant_id:
             return False
-        return obj.quantity > obj.variant.available_stock
+        return obj.quantity > obj.variant.sellable_stock
 
 
 class CartItemSerializer(_VariantInfoMixin, serializers.ModelSerializer):
@@ -67,9 +68,9 @@ class CartItemSerializer(_VariantInfoMixin, serializers.ModelSerializer):
     def validate(self, data):
         variant = data.get("variant") or self.instance.variant
         quantity = data.get("quantity", 1)
-        if variant.available_stock < quantity:
+        if variant.sellable_stock < quantity:
             raise serializers.ValidationError(
-                f"موجودی کافی نیست. موجودی فعلی: {variant.available_stock}"
+                f"درخواست شما بیشتر از موجودی است — حداکثر موجودی قابل فروش این کالا {variant.sellable_stock} عدد است."
             )
         return data
 

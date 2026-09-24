@@ -10,15 +10,18 @@ import {
 import api from '../../services/api'
 import { PageLoader } from '../../components/ui'
 import { formatDate } from '../../utils/date'
+import AccountingChatBox from '../../components/admin/AccountingChatBox'
 
 const STATUS_FA = {
   pending: 'در انتظار', confirmed: 'تأیید شده',
   awaiting_payment: 'در انتظار پرداخت', paid: 'پرداخت شده',
   ready_to_ship: 'آماده ارسال', shipped: 'ارسال شده', cancelled: 'لغو شده',
+  draft: 'پیش‌نویس',
 }
 const STATUS_COLOR = {
   pending: '#FBBF24', confirmed: '#60A5FA', awaiting_payment: '#8B5CF6',
   paid: '#34D399', ready_to_ship: '#22D3EE', shipped: '#0EA5E9', cancelled: '#F87171',
+  draft: '#71717A',
 }
 const PALETTE = ['#FBC02D', '#60A5FA', '#34D399', '#FBBF24', '#8B5CF6', '#F87171']
 const AXIS = { fill: '#7C8DA6', fontSize: 11 }
@@ -31,9 +34,9 @@ const TOOLTIP_STYLE = {
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 function compact(n) {
   n = Number(n || 0)
-  if (n >= 1e9) return `${(n / 1e9).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} ممد`
-  if (n >= 1e6) return `${(n / 1e6).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} م`
-  if (n >= 1e3) return `${(n / 1e3).toLocaleString('fa-IR', { maximumFractionDigits: 0 })} ه`
+  if (n >= 1e9) return `${(n / 1e9).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} میلیارد`
+  if (n >= 1e6) return `${(n / 1e6).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} میلیون`
+  if (n >= 1e3) return `${(n / 1e3).toLocaleString('fa-IR', { maximumFractionDigits: 0 })} هزار`
   return fmt(n)
 }
 
@@ -49,7 +52,7 @@ function Kpi({ icon: Icon, label, value, unit, sub, delta, color = '#FBC02D' }) 
         </span>
       </div>
       <div className="flex items-end gap-1.5">
-        <span className="text-xl font-extrabold text-white font-mono leading-none">{fmt(value)}</span>
+        <span className="text-xl font-extrabold text-white leading-none">{fmt(value)}</span>
         {unit && <span className="text-[10px] text-gray-steel mb-0.5">{unit}</span>}
       </div>
       <div className="flex items-center gap-2 text-[10px]">
@@ -103,6 +106,7 @@ export default function DashboardPage() {
     sales = {}, orders = {}, users = {}, inventory = {}, last_orders = [],
     daily_sales = [], prev_month_sales = 0,
     orders_by_status = [], top_products = [], sales_by_category = [],
+    month_label = '', today_label = '',
   } = data || {}
 
   // برچسب شمسی برای محور روزها — مقدار ISO خام در day باقی می‌ماند
@@ -113,26 +117,23 @@ export default function DashboardPage() {
     : null
   const totalOrders = orders_by_status.reduce((a, b) => a + b.count, 0)
 
-  const finance = [
-    { name: 'طلب از مشتریان', value: bs?.assets?.receivable || 0, color: '#60A5FA' },
-    { name: 'بدهی به تامین‌کنندگان', value: bs?.liabilities?.payable_irr || 0, color: '#F87171' },
-    { name: 'موجودی بانک', value: bs?.assets?.cash_irr || 0, color: '#34D399' },
-    { name: 'سود ناخالص', value: bs?.profit?.gross_profit || 0, color: '#FBC02D' },
-  ]
-  const maxFin = Math.max(...finance.map(f => Math.abs(f.value)), 1)
-
   return (
     <div className="container-main py-8 max-w-6xl">
       <div className="flex items-center justify-between mb-6">
         <h1 className="font-display font-bold text-2xl text-white">داشبورد مدیریت</h1>
-        <span className="text-xs text-gray-steel">بروزرسانی خودکار هر دقیقه</span>
+        <span className="text-xs text-gray-steel">{today_label || 'بروزرسانی خودکار هر دقیقه'}</span>
+      </div>
+
+      {/* ─── راهنمای هوشمند حسابداری ────────────────────────── */}
+      <div className="mb-4">
+        <AccountingChatBox />
       </div>
 
       {/* ─── KPI ها ─────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
         <Kpi icon={TrendingUp} label="فروش امروز" value={sales.today} unit="ریال"
           sub={`هفته: ${compact(sales.week)}`} color="#FBC02D" />
-        <Kpi icon={Wallet} label="فروش این ماه" value={sales.month} unit="ریال"
+        <Kpi icon={Wallet} label={month_label ? `فروش ${month_label}` : 'فروش این ماه'} value={sales.month} unit="ریال"
           delta={momDelta} sub={momDelta == null ? '—' : 'نسبت به ماه قبل'} color="#34D399" />
         <Kpi icon={ShoppingBag} label="سفارشات امروز" value={orders.today} unit="سفارش"
           sub={`در انتظار: ${fmt(orders.pending)} · پرداخت: ${fmt(orders.awaiting_payment)}`} color="#60A5FA" />
@@ -142,7 +143,7 @@ export default function DashboardPage() {
 
       {/* ─── روند فروش + وضعیت سفارش‌ها ─────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-        <ChartCard title="روند فروش ۳۰ روز اخیر" sub="ریال" className="lg:col-span-2" height={240}>
+        <ChartCard title={month_label ? `روند فروش ${month_label}` : 'روند فروش ماه جاری'} sub="ریال" className="lg:col-span-2" height={240}>
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={dailyChart} margin={{ top: 5, right: 8, left: 8, bottom: 0 }}>
               <defs>
@@ -180,7 +181,7 @@ export default function DashboardPage() {
                 </PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-2xl font-extrabold text-white font-mono">{fmt(totalOrders)}</span>
+                <span className="text-2xl font-extrabold text-white">{fmt(totalOrders)}</span>
                 <span className="text-[10px] text-gray-steel">سفارش</span>
               </div>
             </div>
@@ -240,31 +241,8 @@ export default function DashboardPage() {
         </ChartCard>
       </div>
 
-      {/* ─── مالی + انبار + آخرین سفارشات ────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <ChartCard title="وضعیت مالی" sub="ریال" height={210}>
-          <div className="h-full flex flex-col justify-center gap-4" dir="rtl">
-            {finance.map(f => (
-              <div key={f.name}>
-                <div className="flex items-center justify-between text-[11px] mb-1">
-                  <span className="text-gray-steel">{f.name}</span>
-                  <span className="font-mono font-bold text-white">{compact(f.value)}</span>
-                </div>
-                <div className="h-2 rounded-full bg-white/5 overflow-hidden">
-                  <div className="h-full rounded-full transition-all duration-700"
-                    style={{ width: `${Math.max((Math.abs(f.value) / maxFin) * 100, f.value ? 3 : 0)}%`, background: f.color }} />
-                </div>
-              </div>
-            ))}
-            <div className="flex items-center justify-between pt-3 border-t border-white/5 text-[11px]">
-              <span className="text-gray-steel">خالص دارایی</span>
-              <span className={`font-mono font-bold ${(bs?.equity || 0) >= 0 ? 'text-alert-green' : 'text-alert-red'}`}>
-                {compact(bs?.equity)} ریال
-              </span>
-            </div>
-          </div>
-        </ChartCard>
-
+      {/* ─── انبار + آخرین سفارشات ──────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <ChartCard title="سلامت انبار" height={210}>
           <div className="h-full flex flex-col justify-center gap-3" dir="rtl">
             <div className="flex items-center gap-3">
@@ -273,7 +251,7 @@ export default function DashboardPage() {
               </span>
               <div className="flex-1">
                 <div className="text-[11px] text-gray-steel">موجودی کم (≤ ۵)</div>
-                <div className="text-lg font-extrabold text-white font-mono">{fmt(inventory.low_stock)} <span className="text-[10px] font-normal text-gray-steel">محصول</span></div>
+                <div className="text-lg font-extrabold text-white">{fmt(inventory.low_stock)} <span className="text-[10px] font-normal text-gray-steel">محصول</span></div>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -282,12 +260,12 @@ export default function DashboardPage() {
               </span>
               <div className="flex-1">
                 <div className="text-[11px] text-gray-steel">ناموجود</div>
-                <div className="text-lg font-extrabold text-white font-mono">{fmt(inventory.out_of_stock)} <span className="text-[10px] font-normal text-gray-steel">محصول</span></div>
+                <div className="text-lg font-extrabold text-white">{fmt(inventory.out_of_stock)} <span className="text-[10px] font-normal text-gray-steel">محصول</span></div>
               </div>
             </div>
             <div className="pt-3 border-t border-white/5 flex items-center justify-between text-[11px]">
               <span className="text-gray-steel">ارزش موجودی کالا</span>
-              <span className="font-mono font-bold text-gold">{compact(bs?.assets?.stock_value)} ریال</span>
+              <span className="font-bold text-gold">{fmt(bs?.assets?.stock_value)} ریال</span>
             </div>
           </div>
         </ChartCard>
@@ -299,7 +277,7 @@ export default function DashboardPage() {
             ) : last_orders.map((o, i) => (
               <div key={i} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
                 <div className="flex flex-col">
-                  <span className="font-mono text-[11px] text-gold">{o.order_number}</span>
+                  <span className="text-[11px] text-gold">{o.order_number}</span>
                   <span className="text-[10px] text-gray-steel" dir="ltr">{o.user}</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -307,7 +285,7 @@ export default function DashboardPage() {
                     style={{ color: STATUS_COLOR[o.status], background: (STATUS_COLOR[o.status] || '#71717A') + '20' }}>
                     {STATUS_FA[o.status] || o.status}
                   </span>
-                  <span className="text-[11px] font-bold text-white font-mono">{compact(o.amount)}</span>
+                  <span className="text-[11px] font-bold text-white whitespace-nowrap">{fmt(o.amount)} ریال</span>
                 </div>
               </div>
             ))}

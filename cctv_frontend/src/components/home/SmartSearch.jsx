@@ -1,272 +1,490 @@
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { Search, Bot, ArrowLeft, Sparkles, Loader2, Camera } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import api from '../../services/api'
-import { mediaUrl } from '../../utils/media'
+import useAuthStore from '../../store/useAuthStore'
+import { useAfterLoad } from '../../hooks/useAfterLoad'
 
-// ─── چیپ‌های پیشنهادی (ترکیب جستجو + پرسش) ───────────────────
-const CHIPS = [
-  'لنز ۵ مگاپیکسل',
-  'برد IP',
-  'سنسور سونی',
-  'کدام برد برای دوربین دام مناسبه؟',
-  'لنز ۵ مگاپیکسل با چه سنسوری مچ می‌شه؟',
+// نام موتورها برای نمایش به ادمین
+const ENGINE_NAMES = {
+  gemini: 'Gemini', modelscope: 'ModelScope Qwen3', zai: 'z.ai GLM', deepseek: 'DeepSeek', qwen: 'Qwen لوکال',
+}
+
+// ─── هوک ارتفاع خودکار تکست‌اریا ──────────────────────────────
+function useAutoResizeTextarea(minHeight = 26, maxHeight = 150) {
+  const ref = useRef(null)
+  const adjust = useCallback((reset) => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = `${minHeight}px`
+    if (!reset) el.style.height = `${Math.max(minHeight, Math.min(el.scrollHeight, maxHeight))}px`
+  }, [minHeight, maxHeight])
+  return [ref, adjust]
+}
+
+// ─── سه نقطه «در حال فکر کردن» ────────────────────────────────
+function TypingDots() {
+  return (
+    <span style={{ display: 'inline-flex', gap: 4, marginRight: 6, verticalAlign: 'middle' }}>
+      {[0, 1, 2].map((i) => (
+        <span key={i} className="chat-typing-dot" style={{ animationDelay: `${i * 0.15}s` }} />
+      ))}
+    </span>
+  )
+}
+
+// ─── صورت ربات (مثل ماسکات Kimi ولی با طلایی سایت) ────────────
+// حالت‌ها: idle | listening (دارد به سوال گوش می‌دهد) | thinking | happy
+function BotFace({ size = 40, state = 'idle' }) {
+  return (
+    <span className={`bot-face bot-face-${state}`} style={{ width: size, height: size, flexShrink: 0 }}>
+      <span className="bot-eye" />
+      <span className="bot-eye" />
+    </span>
+  )
+}
+
+// ─── سوالات نمونه برای placeholder تایپ‌شونده ─────────────────
+const SAMPLE_QUESTIONS = [
+  'برد ۵ مگاپیکسل ip ارزان کدام است؟',
+  'لنز دارک لایت چی داری؟',
+  'لنز ۲.۸ استارلایت داری؟',
+  'کدام بردها را برای پلاک خوانی می توانم استفاده کنم؟',
 ]
 
-// ─── ابزار متن فارسی ──────────────────────────────────────────
-const fa2en = (s) => s.replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
-const faNum = (n) => Number(n).toLocaleString('fa-IR')
-
-// ─── تحلیل سوال کاربر (فارسی + انگلیسی) ───────────────────────
-function analyze(q) {
-  const t = fa2en(q).toLowerCase()
-  const mp = (t.match(/(\d+)\s*(?:مگاپیکسل|مگا|mp|megapixel)/) || [])[1]
-  const parts = []
-  if (/لنز|lens/.test(t)) parts.push('لنز')
-  if (/برد|board|pcb|module|ماژول/.test(t)) parts.push('برد')
-  if (/سنسور|چیپست|چیپ|sensor|chip/.test(t)) parts.push('سنسور')
-  if (/هولدر|holder/.test(t)) parts.push('هولدر')
-  if (/پکیج|ست کامل|package|kit/.test(t)) parts.push('پکیج')
-  if (/دام|dome/.test(t)) parts.push('دام')
-  const brands = []
-  if (/سونی|sony/.test(t)) brands.push('سونی')
-  if (/ytotech|ytot|yt|یوتوت/.test(t)) brands.push('YTOT')
-  if (/vatilon|واتیلون/.test(t)) brands.push('Vatilon')
-  if (/فولهان|fullhan/.test(t)) brands.push('فولهان')
-  const usage = []
-  if (/فروشگاه|shop|store/.test(t)) usage.push('فروشگاه')
-  if (/منزل|خانه|home/.test(t)) usage.push('منزل')
-  if (/انبار|warehouse/.test(t)) usage.push('انبار')
-  return { mp, parts, brands, usage, raw: q.trim() }
-}
-
-// ─── جستجوی محصولات + راهنمایی محلی (پاسخ فوری) ───────────────
-async function askBot(q) {
-  const a = analyze(q)
-  const kw = a.raw
-  let products = []
-  try {
-    // جستجوی هوشمند بک‌اند (با اصلاح غلط‌های تایپی فارسی)
-    const d = await api
-      .get('/catalog/products/search/', { params: { q: kw } })
-      .then((r) => r.data)
-    products = (d?.results || []).slice(0, 3)
-  } catch {}
-
-  const tips = []
-  if (a.mp)
-    tips.push(`برای سیستم ${faNum(a.mp)} مگاپیکسل، لنز و سنسوری با رزولوشن مساوی یا بالاتر بگیر تا از کیفیت کامل استفاده کنی.`)
-  if (a.parts.includes('لنز'))
-    tips.push('فوکال لنز تعیین‌کننده فاصله دیده — فضای باز فوکال بیشتر (۸ یا ۱۲ میلی‌متر)، فضای بسته فوکال کمتر.')
-  if (a.parts.includes('برد'))
-    tips.push('برد رو بر اساس نوع دوربین (IP یا آنالوگ)، تعداد کانال و رزولوشن موردنیازت انتخاب کن؛ بردهای IP برای ارتقای بعدی انعطاف بیشتری دارن.')
-  if (a.parts.includes('سنسور'))
-    tips.push('سنسورهای سونی Starvis برای نور کم و دید در شب بهترین عملکرد رو دارن.')
-  if (a.parts.includes('دام'))
-    tips.push('دوربین دام برای نصب سقفی و فضای داخلی عالیه — برای بیرون حتماً بدنه ضدآب (IP66) بگیر.')
-  if (a.usage.includes('فروشگاه'))
-    tips.push('برای فروشگاه ترکیب دام سقفی + بولت برای ورودی با رزولوشن حداقل ۵ مگاپیکسل پیشنهاد می‌شه.')
-  if (a.usage.includes('انبار'))
-    tips.push('برای انبار به‌خاطر فاصله زیاد، لنز فوکال بالا و دوربین با IR قوی لازمه.')
-  if (!tips.length)
-    tips.push('برای راهنمایی دقیق‌تر، نام قطعه (لنز، برد، سنسور...) یا برند و رزولوشن مدنظرت رو بگو. «راهنمای انتخاب قطعه» هم قدم‌به‌قدم کمکت می‌کنه.')
-
-  return {
-    head: products.length
-      ? 'بر اساس سوالت، این موارد از کاتالوگ بیشترین تطابق رو دارن:'
-      : 'محصول کاملاً منطبقی پیدا نکردم، ولی این راهنمایی کمکت می‌کنه:',
-    tips,
-    products,
-  }
+// تایپ حروف‌به‌حروف، مکث، پاک‌کردن و رفتن سراغ سوال بعدی
+// فقط وقتی active است (هیرو در دید + تب visible) کار می‌کند و شروع اولیه‌اش به
+// فرصت خلوت main-thread موکول می‌شود — وگرنه هر ۵۵ms یک رندر React در پنجره بوت می‌ساخت
+function useTypewriter(phrases, active, typeSpeed = 55, deleteSpeed = 22, holdMs = 2100) {
+  const [text, setText] = useState('')
+  useEffect(() => {
+    if (!active) return
+    let phrase = 0
+    let char = 0
+    let deleting = false
+    let timer
+    const tick = () => {
+      const full = phrases[phrase]
+      if (!deleting) {
+        char += 1
+        setText(full.slice(0, char))
+        if (char === full.length) {
+          deleting = true
+          timer = setTimeout(tick, holdMs)
+          return
+        }
+        timer = setTimeout(tick, typeSpeed)
+      } else {
+        char -= 1
+        setText(full.slice(0, char))
+        if (char === 0) {
+          deleting = false
+          phrase = (phrase + 1) % phrases.length
+          timer = setTimeout(tick, 450)
+          return
+        }
+        timer = setTimeout(tick, deleteSpeed)
+      }
+    }
+    const ric = window.requestIdleCallback || ((cb) => setTimeout(cb, 900))
+    const idleId = ric(() => { timer = setTimeout(tick, 300) }, { timeout: 2200 })
+    return () => { clearTimeout(timer); if (window.cancelIdleCallback) cancelIdleCallback(idleId) }
+  }, [active])
+  return text
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SmartSearch — باکس یکپارچه «جستجوی قطعه + پرسش از ربات مشاور»
+// SmartSearch — باکس پرسش از دستیار هوشمند در هیرو
+// ظاهر PromptInput (21st.dev): باکس ساده که با فوکوس باز می‌شود و
+// پاسخ زیر سوال نمایش داده می‌شود — منطق دقیقاً همان ChatWidget
+// (POST /assistant/chat/ با history) است.
 // ═══════════════════════════════════════════════════════════════
 export default function SmartSearch() {
-  const [q, setQ] = useState('')
-  const [lastQuery, setLastQuery] = useState('')
-  const [phase, setPhase] = useState('idle') // idle | typing | done
-  const [answer, setAnswer] = useState(null)
-  const [aiPending, setAiPending] = useState(false)
+  const isAdmin = useAuthStore(s => s.isAdmin)
+  const [engineName, setEngineName] = useState('')  // موتور اصلی — فقط برای ادمین
+  const [input, setInput] = useState('')
+  const [messages, setMessages] = useState([])
+  const [started, setStarted] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [justAnswered, setJustAnswered] = useState(false)
+  const [textareaRef, adjustHeight] = useAutoResizeTextarea(24, 200)
+  const bottomRef = useRef(null)
 
-  const submit = async (e) => {
-    e?.preventDefault()
-    const query = q.trim()
-    if (!query || phase === 'typing') return
-    setLastQuery(query)
-    setPhase('typing')
-    setAnswer(null)
-    setAiPending(true)
+  // حالت ربات: فکرکردن > خوشحالی از جواب > گوش‌دادن به تایپ مشتری > عادی
+  const botState = loading ? 'thinking' : justAnswered ? 'happy' : (input.trim() || focused) ? 'listening' : 'idle'
 
-    // ۱) پاسخ فوری محلی: محصولات مرتبط + راهنمایی — بدون انتظار برای AI
-    const local = await askBot(query)
-    setAnswer({ ...local, kind: 'local' })
-    setPhase('done')
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [messages, loading])
 
-    // ۲) پاسخ هوش مصنوعی (کندتر روی CPU) — وقتی رسید جایگزین/تکمیل می‌شود
+  // موتور اصلی ربات — فقط برای ادمین، یک بار در لود
+  useEffect(() => {
+    if (!isAdmin()) return
+    api.get('/assistant/settings/')
+      .then(({ data }) => setEngineName(ENGINE_NAMES[data.provider] || ''))
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const send = async () => {
+    const text = input.trim()
+    if (!text || loading) return
+    const next = [...messages, { role: 'user', content: text }]
+    setMessages(next)
+    setStarted(true)
+    setInput('')
+    adjustHeight(true)
+    setLoading(true)
     try {
-      const ai = await api
-        .post('/catalog/assistant/ask/', { question: query }, { timeout: 130000 })
-        .then((r) => r.data)
-      if (ai?.answer && ai.source === 'ai') {
-        setAnswer({ kind: 'ai', text: ai.answer, products: local.products })
-      }
-    } catch {}
-    setAiPending(false)
+      const { data } = await api.post('/assistant/chat/', {
+        message: text,
+        history: next.slice(-7, -1),
+      }, { timeout: 130000 })
+      setMessages((m) => [...m, { role: 'assistant', content: data.reply, products: data.products, engine: data.engine, elapsed: data.elapsed }])
+      setJustAnswered(true)
+      setTimeout(() => setJustAnswered(false), 2600)
+    } catch {
+      setMessages((m) => [...m, { role: 'assistant', content: 'متأسفم، الان نتوانستم پاسخ بدهم. کمی بعد دوباره تلاش کنید.' }])
+    } finally {
+      setLoading(false)
+    }
   }
 
+  // ─── پرواز اسکرول‌محور ربات به سمت چت‌باکس ───
+  // حرکت با میزان اسکرول جلو می‌رود (نه با زمان)، با برگرداندن اسکرول ربات هم برمی‌گردد سر جایش
+  const frameRef = useRef(null)
+  const flyerRef = useRef(null)
+  const phaseRef = useRef('idle') // idle | fly | home
+  const startRef = useRef(null)
+  const posRef = useRef({ x: 0, y: 0 })
+  const rafRef = useRef(null)
+  const timersRef = useRef([])
+  const originRef = useRef({ x: 0, y: 0 })
+  const pSmoothRef = useRef(0)
+  const reenterRef = useRef(false) // بعد از خروج از خانه تا پایین آمدن پله‌ها اجازه ورود دوباره نیست
+  const exitingRef = useRef(false) // وقتی ربات دارد از در بیرون می‌آید، سر جای در می‌ماند
+  const catchupUntilRef = useRef(0) // نیم ثانیه بعد از خروج از در، جبران فاصله سریع‌تر و بدون پرش است
+  const [origin, setOrigin] = useState(null)
+  const [botAway, setBotAway] = useState(false)
+  const [showFlyer, setShowFlyer] = useState(false)
+  const [entering, setEntering] = useState(false)
+  const [exiting, setExiting] = useState(false)
+  const [showDoor, setShowDoor] = useState(false)
+  const [doorPos, setDoorPos] = useState({ x: 0, y: 0 })
+  const [showBubble, setShowBubble] = useState(false)
+  const [landing, setLanding] = useState(false)
+  const landingAtRef = useRef(0)
+
+  // تایپ‌زن placeholder فقط وقتی هیرو در دید و تب visible است فعال می‌شود
+  const [heroActive, setHeroActive] = useState(false)
+  useEffect(() => {
+    const el = frameRef.current
+    if (!el) return
+    let seen = false
+    const apply = () => setHeroActive(seen && !document.hidden)
+    const io = new IntersectionObserver((es) => { seen = es[0].isIntersecting; apply() }, { threshold: 0.05 })
+    io.observe(el)
+    document.addEventListener('visibilitychange', apply)
+    return () => { io.disconnect(); document.removeEventListener('visibilitychange', apply) }
+  }, [])
+  const afterLoad = useAfterLoad()
+  const typedPlaceholder = useTypewriter(SAMPLE_QUESTIONS, heroActive && afterLoad)
+
+  useEffect(() => { exitingRef.current = exiting }, [exiting])
+
+  useEffect(() => {
+    const clearTimers = () => { timersRef.current.forEach(clearTimeout); timersRef.current = [] }
+    const later = (fn, ms) => timersRef.current.push(setTimeout(fn, ms))
+
+    const tick = () => {
+      rafRef.current = null
+      const el = frameRef.current
+      const fab = document.getElementById('chat-fab')
+      if (!el || !fab) return
+      const bot = el.querySelector('.bot-face')
+      if (!bot) return
+      const f = fab.getBoundingClientRect()
+      const b = bot.getBoundingClientRect()
+      const fx = f.left + f.width / 2
+      const fy = f.top + f.height / 2
+
+      if (phaseRef.current === 'idle') {
+        // شروع زودتر — وقتی ربات هنوز در تصویر است و به بالای صفحه رسید
+        if (b.top < 120) {
+          phaseRef.current = 'fly'
+          startRef.current = { x: b.left + b.width / 2, y: b.top + b.height / 2, scroll: window.scrollY }
+          posRef.current = { x: startRef.current.x, y: startRef.current.y }
+          originRef.current = { ...posRef.current }
+          pSmoothRef.current = 0
+          setOrigin({ ...posRef.current })
+          clearTimers()
+          setLanding(false)
+          setBotAway(true); setShowFlyer(true); setEntering(false); setExiting(false); setShowDoor(false); setShowBubble(false)
+        } else {
+          return
+        }
+      }
+
+      const start = startRef.current
+      // ربات باید تا قبل از رسیدن اسکرول به سکشن «چرا باید با ما کار کنید» به خانه رسیده باشد
+      const anchor = document.getElementById('why-us')
+      let total
+      if (anchor) {
+        const anchorPageY = anchor.getBoundingClientRect().top + window.scrollY
+        const targetScroll = Math.max(0, anchorPageY - window.innerHeight)
+        total = Math.max(300, targetScroll - start.scroll)
+      } else {
+        const gap = Math.abs(start.y - fy)
+        const remaining = Math.max(400, document.documentElement.scrollHeight - window.innerHeight - start.scroll)
+        total = Math.max(gap + 100, remaining * 0.85)
+      }
+      const p = Math.min(1, Math.max(0, (window.scrollY - start.scroll) / total))
+      // کوانتیزه کردن مسیر به ۶ پله — ربات شش هاپ کوچک و نرم طی می‌کند
+      const STEPS = 6
+      const pq = Math.min(STEPS, Math.max(0, Math.round(p * STEPS))) / STEPS
+      // هموارسازی پیشرفت — هر پله با انیمیشن نرم طی می‌شود
+      pSmoothRef.current += (pq - pSmoothRef.current) * 0.1
+      const ps = pSmoothRef.current
+      const e = ps * ps * (3 - 2 * ps) // smoothstep — شروع و پایان نرم
+      // نوسان ملایم روی مسیر — حس شناور و غیرمستقیم بودن حرکت
+      const swayX = Math.sin(ps * Math.PI * 2) * 16 * (1 - ps)
+      const swayY = Math.sin(ps * Math.PI * 3) * 26 * (1 - ps)
+      let tx = start.x + (fx - start.x) * e + swayX
+      let ty = start.y + (fy - start.y) * e + swayY
+      if (exitingRef.current) {
+        // ربات کنار در می‌ماند تا انیمیشن خروج تمام شود — وگرنه در پایان انیمیشن پرش دارد
+        tx = fx; ty = fy
+      }
+      const bx = b.left + b.width / 2
+      const by = b.top + b.height / 2
+      if (ps < 0.2 || phaseRef.current === 'landing') {
+        // نزدیک جایگاه (مسیر برگشت): ربات به‌تدریج روی جای واقعی‌اش در کادر می‌نشیند —
+        // بدون اینکه اول بالاتر از جایش برود؛ هنگام تحویل کاملاً قفل می‌شود
+        const k = phaseRef.current === 'landing' ? 1 : 1 - ps / 0.2
+        tx += (bx - tx) * k
+        ty += (by - ty) * k
+      }
+      // تعقیب نرم هدف — حس شناور و آروم بودن؛ کمی پس از خروج از در موقتاً تندتر تا فاصله بدون پرش جبران شود
+      const follow = performance.now() < catchupUntilRef.current ? 0.3 : 0.12
+      posRef.current.x += (tx - posRef.current.x) * follow
+      posRef.current.y += (ty - posRef.current.y) * follow
+      const fl = flyerRef.current
+      if (fl && phaseRef.current === 'fly') {
+        // حرکت با transform — رندر GPU-محور و بدون پله
+        const tilt = Math.max(-12, Math.min(12, (ty - posRef.current.y) * 0.35))
+        fl.style.transform = `translate(-50%, -50%) translate3d(${posRef.current.x - originRef.current.x}px, ${posRef.current.y - originRef.current.y}px, 0) rotate(${tilt}deg)`
+      }
+      const near = Math.abs(posRef.current.x - fx) + Math.abs(posRef.current.y - fy)
+
+      // وقتی ربات از پله‌ی آخر پایین آمده، دوباره حق ورود به خانه را دارد
+      if (ps < 0.85) reenterRef.current = false
+
+      if (ps >= 0.99 && !reenterRef.current && phaseRef.current === 'fly' && near < 10) {
+        // رسید به خانه: درِ نماد چت باز می‌شود و ربات داخل می‌رود
+        phaseRef.current = 'home'
+        originRef.current = { x: posRef.current.x, y: posRef.current.y }
+        setOrigin({ ...posRef.current })
+        if (flyerRef.current) flyerRef.current.style.transform = ''
+        setDoorPos({ x: fx, y: fy })
+        setEntering(true); setShowDoor(true)
+        later(() => { setShowFlyer(false); setEntering(false) }, 900)
+        later(() => { setShowDoor(false); setShowBubble(true) }, 1150)
+        later(() => setShowBubble(false), 6800)
+      } else if (p < 0.98 && phaseRef.current === 'home') {
+        // اسکرول به بالا: در باز می‌شود، ربات از خانه بیرون می‌آید و برمی‌گردد
+        phaseRef.current = 'fly'
+        clearTimers()
+        // قفل ورود دوباره تا پایین آمدن از پله‌ی آخر — وگرنه در دوباره باز می‌شود
+        reenterRef.current = true
+        originRef.current = { x: fx, y: fy }
+        setOrigin({ x: fx, y: fy })
+        if (flyerRef.current) flyerRef.current.style.transform = ''
+        setDoorPos({ x: fx, y: fy })
+        setEntering(false); setShowBubble(false); setShowDoor(true); setShowFlyer(true); setExiting(true); setLanding(false)
+        later(() => { setExiting(false); catchupUntilRef.current = performance.now() + 550 }, 750)
+        later(() => setShowDoor(false), 850)
+      }
+
+      // نزدیک جایگاه → شروع تحویل نرم: صورت اصلی کم‌رنگ می‌آید، فلایر روی آن محو می‌گردد
+      if (b.top > 120 && ps <= 0.02 && phaseRef.current === 'fly') {
+        phaseRef.current = 'landing'
+        landingAtRef.current = Date.now()
+        setLanding(true)
+        setBotAway(false)
+      }
+
+      if (phaseRef.current === 'landing') {
+        // اگر کاربر دوباره پایین رفت، تحویل لغو و ربات به پرواز برمی‌گردد
+        if (p > 0.08) {
+          phaseRef.current = 'fly'
+          setLanding(false)
+          setBotAway(true)
+        } else {
+          const d = Math.abs(posRef.current.x - bx) + Math.abs(posRef.current.y - by)
+          if (d < 4 || Date.now() - landingAtRef.current > 450) {
+            phaseRef.current = 'idle'
+            reenterRef.current = false
+            setOrigin(null)
+            setLanding(false); setShowFlyer(false); setEntering(false); setExiting(false); setShowDoor(false); setShowBubble(false)
+            return
+          }
+        }
+      }
+
+      // حلقه تعقیب نرم در پرواز و تحویل ادامه دارد
+      if (phaseRef.current === 'fly' || phaseRef.current === 'landing') rafRef.current = requestAnimationFrame(tick)
+    }
+
+    const onScroll = () => {
+      if (rafRef.current == null) rafRef.current = requestAnimationFrame(tick)
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+      clearTimers()
+    }
+  }, [])
+
   return (
-    <div
-      style={{
-        background: 'var(--glass-bg)',
-        backdropFilter: 'blur(24px)',
-        WebkitBackdropFilter: 'blur(24px)',
-        border: '1px solid var(--color-border-strong)',
-        borderRadius: 22,
-        boxShadow: 'var(--shadow-card-hover), 0 0 60px rgba(251,192,45,0.06)',
-        padding: 'clamp(14px, 2.5vw, 22px)',
-      }}
-    >
-      {/* فرم ورودی یکپارچه */}
-      <form onSubmit={submit} style={{ display: 'flex', gap: 8 }}>
-        <div style={{ position: 'relative', flex: 1 }}>
-          <Sparkles size={18} style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-brand)', pointerEvents: 'none' }} />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="جستجوی قطعه یا پرسش از ربات مشاور... (مثل: لنز YTOT ۵ مگاپیکسل یا کدام برد برای دام مناسبه؟)"
-            style={{
-              width: '100%', height: 52, borderRadius: 14,
-              border: '1px solid var(--color-border)',
-              background: 'var(--color-bg-elevated)',
-              color: 'var(--color-text-primary)',
-              padding: '0 44px 0 16px', fontSize: 16, outline: 'none',
-              transition: 'border-color 0.2s, box-shadow 0.2s',
-            }}
-            onFocus={(e) => { e.target.style.borderColor = 'var(--color-brand)'; e.target.style.boxShadow = '0 0 0 3px var(--color-brand-soft)' }}
-            onBlur={(e) => { e.target.style.borderColor = 'var(--color-border)'; e.target.style.boxShadow = 'none' }}
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={!q.trim() || phase === 'typing'}
-          className="btn-gold"
-          style={{ height: 52, padding: '0 clamp(16px, 3vw, 26px)', borderRadius: 14, fontSize: 'clamp(13px, 2vw, 14px)', flexShrink: 0 }}
-        >
-          {phase === 'typing' ? <Loader2 size={17} className="animate-spin" /> : <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Search size={15} /> جستجو</span>}
-        </button>
-      </form>
-
-      {/* چیپ‌های پیشنهادی */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-        {CHIPS.map((c) => (
-          <button
-            key={c}
-            onClick={() => { setQ(c); }}
-            style={{
-              fontSize: 11, color: 'var(--color-text-secondary)',
-              background: 'var(--color-brand-softer)',
-              border: '1px solid var(--color-border)',
-              borderRadius: 100, padding: '5px 13px', cursor: 'pointer', transition: 'all 0.2s',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--color-brand)'; e.currentTarget.style.color = 'var(--color-brand)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--color-border)'; e.currentTarget.style.color = 'var(--color-text-secondary)' }}
-          >
-            {c}
-          </button>
-        ))}
-      </div>
-
-      {/* در حال جستجو */}
-      {phase === 'typing' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16, padding: '14px 16px', borderRadius: 14, background: 'var(--color-brand-softer)', border: '1px solid var(--color-border)' }}>
-          <Bot size={17} color="var(--color-brand)" />
-          <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>در حال جستجو و بررسی سوالت...</span>
-        </div>
-      )}
-
-      {/* ناحیه پاسخ */}
-      {phase === 'done' && answer && (
-        <div className="animate-fade-in" style={{ marginTop: 16, padding: '16px', borderRadius: 14, background: 'var(--color-brand-softer)', border: '1px solid var(--color-border)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'var(--gradient-gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <Bot size={14} color="var(--color-brand-contrast)" />
-            </div>
-            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)' }}>
-              {answer.kind === 'ai' ? 'پاسخ هوش مصنوعی:' : answer.head}
-            </span>
-            {answer.kind === 'ai' && (
-              <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--color-brand)', background: 'var(--color-brand-soft)', border: '1px solid var(--color-border-strong)', borderRadius: 100, padding: '2px 8px', letterSpacing: 1 }}>AI</span>
-            )}
-          </div>
-
-          {answer.kind === 'ai' && (
-            <div style={{ fontSize: 13, color: 'var(--color-text-primary)', lineHeight: 1.9, paddingRight: 34 }}>{answer.text}</div>
-          )}
-
-          {answer.kind === 'local' && answer.tips.map((t, i) => (
-            <div key={i} style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.8, paddingRight: 34, marginBottom: 4 }}>
-              • {t}
+    <>
+    <div ref={frameRef} className={`liquid-metal-frame${botAway ? ' bot-away' : ''}`} style={{ boxShadow: 'var(--shadow-card-hover), 0 0 60px rgba(251,192,45,0.10)' }}>
+    <div className="liquid-metal-inner">
+      {/* ناحیه گفتگو — پاسخ زیر سوال، مثل دستیار هوشمند سایت */}
+      {started && (
+        <div style={{ maxHeight: 340, overflowY: 'auto', padding: '16px 16px 6px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {messages.map((m, i) => (
+            <div key={i} style={{ textAlign: m.role === 'user' ? 'right' : 'left' }}>
+              <div
+                className="inline-block px-3 py-2 rounded-xl text-xs leading-6 whitespace-pre-wrap"
+                style={{
+                  maxWidth: '88%',
+                  background: m.role === 'user' ? 'var(--gradient-gold)' : 'var(--color-bg-secondary)',
+                  color: m.role === 'user' ? 'var(--color-brand-contrast)' : 'var(--color-text-primary)',
+                  border: m.role === 'user' ? 'none' : '1px solid var(--color-border)',
+                  textAlign: 'right',
+                }}
+              >
+                {m.content}
+              </div>
+              {/* نشان موتور پاسخ — خوانا و ثابت زیر جواب، فقط برای ادمین */}
+              {isAdmin() && m.role === 'assistant' && m.engine && (
+                <div className="mt-1" style={{ textAlign: 'left' }}>
+                  <span className="inline-block text-[11px] font-semibold px-2.5 py-1 rounded-lg"
+                    style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-brand)', color: 'var(--color-brand)' }}>
+                    {m.engine === 'rules'
+                      ? '⚙️ پاسخ آماده'
+                      : `${ENGINE_NAMES[m.engine] || m.engine}${m.elapsed != null ? ` — ${Number(m.elapsed).toLocaleString('fa-IR')} ثانیه` : ''}`}
+                  </span>
+                </div>
+              )}
+              {m.products?.length > 0 && (
+                <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {m.products.slice(0, 4).map((p, j) => (
+                    <Link
+                      key={j}
+                      to={p.url}
+                      className="block px-3 py-1.5 rounded-lg text-xs"
+                      style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)', color: 'var(--color-text-primary)', textDecoration: 'none' }}
+                    >
+                      {/* نام و قیمت در دو خط جدا — مدل لاتین وسط متن فارسی چیدمان RTL را به‌هم می‌ریزد */}
+                      <div>📷 {p.name}</div>
+                      <div style={{ marginTop: 2, color: 'var(--color-brand)', fontWeight: 700 }}>
+                        {p.price_irt ? `${Number(p.price_irt).toLocaleString('fa-IR')} ریال` : ''}
+                        {!p.in_stock && <span style={{ color: '#e74c3c', fontWeight: 400 }}> (ناموجود)</span>}
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
-
-          {/* منتظر پاسخ AI */}
-          {answer.kind === 'local' && aiPending && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, paddingRight: 34 }}>
-              <Loader2 size={13} className="animate-spin" color="var(--color-brand)" />
-              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>ربات مشاور هم داره روی سوالت فکر می‌کنه...</span>
-            </div>
-          )}
-
-          {answer.products?.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))', gap: 8, marginTop: 12 }}>
-              {answer.products.map((p) => {
-                const img = mediaUrl(p.main_image?.image || p.images?.[0]?.image || p.image)
-                // min_price سریالایزر لیست بر اساس سطح همکاری کاربر محاسبه می‌شود (ریال)
-                // — مثل بقیه بخش‌های سایت. final_price واریانت (نقدی) نباید جایگزین شود.
-                const price = p.min_price
-                return (
-                  <Link key={p.id} to={`/products/${p.slug || p.id}`} style={{ textDecoration: 'none' }}>
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 10, padding: 10,
-                      background: 'var(--color-bg-card)', border: '1px solid var(--color-border)',
-                      borderRadius: 12, transition: 'border-color 0.2s',
-                    }}
-                      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-brand)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--color-border)')}
-                    >
-                      {img ? (
-                        <img src={img} alt={p.name} style={{ width: 40, height: 40, objectFit: 'contain', borderRadius: 8, background: 'var(--color-bg-tertiary)' }} />
-                      ) : (
-                        <div style={{ width: 40, height: 40, borderRadius: 8, background: 'var(--color-bg-tertiary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-muted)' }}>
-                          <Camera size={18} />
-                        </div>
-                      )}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-text-primary)', lineHeight: 1.7, overflowWrap: 'break-word' }}>{p.name}</div>
-                        {price && <div style={{ fontSize: 11, color: 'var(--color-brand)', marginTop: 2 }}>{faNum(price)} ریال</div>}
-                      </div>
-                      <ArrowLeft size={13} color="var(--color-brand)" style={{ flexShrink: 0 }} />
-                    </div>
-                  </Link>
-                )
-              })}
-            </div>
-          )}
-
-          {/* لینک همه نتایج جستجو */}
-          <div style={{ marginTop: 12, paddingRight: 34 }}>
-            <Link
-              to={`/products?search=${encodeURIComponent(lastQuery)}`}
-              style={{ fontSize: 12, color: 'var(--color-brand)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-            >
-              مشاهده همه نتایج جستجو برای «{lastQuery}»
-              <ArrowLeft size={12} />
-            </Link>
-          </div>
+          <div ref={bottomRef} />
         </div>
       )}
+
+      {/* باکس ورودی — با فوکوس بزرگ‌تر می‌شود؛ گوی ربات بالا می‌ماند */}
+      <div
+        className="smart-input-wrap"
+        style={{
+          display: 'flex', alignItems: 'flex-start', gap: 10,
+          padding: '8px 12px',
+          borderTop: started ? '1px solid var(--color-border)' : 'none',
+          transition: 'box-shadow 0.25s ease',
+        }}
+      >
+        <textarea
+          ref={textareaRef}
+          value={input}
+          onChange={(e) => { setInput(e.target.value); adjustHeight() }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              send()
+            }
+          }}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          rows={1}
+          placeholder={started ? 'سوال بعدی‌ات را بنویس...' : typedPlaceholder}
+          style={{
+            flex: 1, alignSelf: 'center', minHeight: focused ? 156 : 24, maxHeight: 200,
+            resize: 'none', overflow: 'hidden',
+            background: 'transparent', border: 'none', outline: 'none',
+            color: 'var(--color-text-primary)', fontSize: 14, lineHeight: 1.9,
+            fontFamily: 'inherit',
+            transition: 'min-height 0.2s ease',
+          }}
+        />
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          {/* حباب فکر — از سر ربات بیرون می‌زند؛ برای ادمین نام موتور را نشان می‌دهد */}
+          {loading && (
+            <span className="bot-thought">
+              {isAdmin() && engineName ? `${engineName} دارد جواب می‌دهد` : 'در حال فکر کردن'}<TypingDots />
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={send}
+            disabled={!input.trim() || loading}
+            aria-label="ارسال"
+            style={{
+              background: 'transparent', border: 'none', padding: 0, cursor: 'pointer',
+              opacity: (!input.trim() || loading) ? 0.85 : 1,
+              transition: 'opacity 0.2s, transform 0.15s',
+            }}
+          >
+            <BotFace size={40} state={botState} />
+          </button>
+        </div>
+      </div>
     </div>
+    </div>
+    {showFlyer && createPortal(
+      <div ref={flyerRef} className={`bot-flyer${entering ? ' entering' : ''}${exiting ? ' exiting' : ''}${landing ? ' landing' : ''}`}
+        style={{ left: origin ? origin.x : posRef.current.x, top: origin ? origin.y : posRef.current.y }}>
+        <span className="bot-face" style={{ width: 36, height: 36 }}>
+          <span className="bot-eye" />
+          <span className="bot-eye" />
+        </span>
+      </div>,
+      document.body
+    )}
+    {showDoor && createPortal(
+      <div className="bot-door" style={{ left: doorPos.x, top: doorPos.y }}>
+        <span className="bot-door-panel" />
+      </div>,
+      document.body
+    )}
+    {showBubble && createPortal(
+      <div className="bot-home-bubble" style={{ left: doorPos.x + 16, top: doorPos.y }}>
+        هر سوالی داشتی من اینجا باهاتم
+      </div>,
+      document.body
+    )}
+    </>
   )
 }

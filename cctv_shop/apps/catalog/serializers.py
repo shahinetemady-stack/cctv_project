@@ -74,11 +74,12 @@ class DatasheetPageSerializer(serializers.ModelSerializer):
 
 
 class ProductVariantSerializer(serializers.ModelSerializer):
+    # موجودی نمایشی به مشتری = فقط انبارهای با تیک «نمایش به مشتری» (sellable_stock)
     final_price     = serializers.IntegerField(read_only=True)
     discount_percent = serializers.FloatField(read_only=True)
-    available_stock = serializers.IntegerField(read_only=True)
-    is_in_stock     = serializers.BooleanField(read_only=True)
-    is_low_stock    = serializers.BooleanField(read_only=True)
+    available_stock = serializers.IntegerField(source="sellable_stock", read_only=True)
+    is_in_stock     = serializers.SerializerMethodField()
+    is_low_stock    = serializers.SerializerMethodField()
     pricing         = serializers.SerializerMethodField()
 
     class Meta:
@@ -86,6 +87,13 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         fields = ["id", "sku", "name_suffix", "final_price", "discount_percent",
                   "available_stock",
                   "is_in_stock", "is_low_stock", "is_active", "pricing"]
+
+    def get_is_in_stock(self, obj):
+        return obj.sellable_stock > 0
+
+    def get_is_low_stock(self, obj):
+        from django.conf import settings
+        return 0 < obj.sellable_stock <= getattr(settings, "LOW_STOCK_THRESHOLD", 5)
 
     def get_pricing(self, obj):
         """قیمت فرمول بر اساس سطح همکاری کاربر درخواست‌دهنده."""
@@ -102,7 +110,13 @@ class ProductListSerializer(serializers.ModelSerializer):
     min_price       = serializers.SerializerMethodField()
     min_price_original = serializers.SerializerMethodField()
     discount_percent   = serializers.SerializerMethodField()
-    available_stock = serializers.IntegerField(read_only=True)
+    # موجودی نمایشی به مشتری = فقط انبارهای با تیک «نمایش به مشتری»
+    available_stock = serializers.IntegerField(source="sellable_stock", read_only=True)
+    # وضعیت نمایشی — «به‌زودی» خودکار وقتی فروشگاه خالی ولی کالا در راه هوایی است
+    availability = serializers.CharField(source="effective_availability", read_only=True)
+    # فقط برای پرسنل — موجودی واقعی کل + تفکیک انبار (برای صفحه مدیریت محصولات)
+    total_stock = serializers.SerializerMethodField()
+    stocks = serializers.SerializerMethodField()
 
     class Meta:
         model  = Product
@@ -111,7 +125,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             "category_id", "category_name", "category_type", "main_image",
             "secondary_image",
             "min_price", "min_price_original", "discount_percent",
-            "available_stock", "is_active", "is_featured", "availability",
+            "available_stock", "total_stock", "stocks", "is_active", "is_featured", "availability",
             # ویژگی‌های برد
             "board_name", "board_system", "board_resolution",
             "sensor_name", "sensor_size",
@@ -122,6 +136,29 @@ class ProductListSerializer(serializers.ModelSerializer):
             # ویژگی‌های بدنه
             "housing_material", "housing_type", "housing_size",
         ]
+
+    def _is_staff(self):
+        request = self.context.get("request")
+        return bool(request and request.user.is_authenticated and request.user.is_staff)
+
+    def get_total_stock(self, obj):
+        """موجودی واقعی کل (همه انبارها) — فقط برای پرسنل، وگرنه None."""
+        if not self._is_staff():
+            return None
+        return sum(v.stock_quantity for v in obj.variants.all())
+
+    def get_stocks(self, obj):
+        """موجودی به تفکیک انبار (جمع واریانت‌ها در هر انبار) — فقط برای پرسنل."""
+        if not self._is_staff():
+            return None
+        agg = {}
+        for v in obj.variants.all():
+            for ws in v.warehouse_stocks.all():
+                if not ws.warehouse.is_active or ws.quantity <= 0:
+                    continue
+                e = agg.setdefault(ws.warehouse.name, {"quantity": 0, "is_public": ws.warehouse.is_public})
+                e["quantity"] += ws.quantity
+        return [{"warehouse": name, **d} for name, d in sorted(agg.items())]
 
     def get_main_image(self, obj):
         img = obj.images.filter(is_primary=True).first() or obj.images.first()
@@ -174,6 +211,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     compatible_with = serializers.SerializerMethodField()
     has_datasheet  = serializers.SerializerMethodField()
     specs          = serializers.SerializerMethodField()
+    # وضعیت نمایشی — «به‌زودی» خودکار وقتی فروشگاه خالی ولی کالا در راه هوایی است
+    availability = serializers.CharField(source="effective_availability", read_only=True)
 
     class Meta:
         model  = Product

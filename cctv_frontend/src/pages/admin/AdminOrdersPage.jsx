@@ -89,11 +89,14 @@ function EditOrderModal({ order, onClose }) {
   })
 
   function handleSave() {
-    mut.mutate({
+    const payload = {
       ...form,
       confirmed_amount: Number(form.confirmed_amount) || 0,
-      settlement_due_date: form.settlement_due_date || null,
-    })
+    }
+    // تو حسابی — موعد خودکار ۱۴ روزه است و تاریخ دستی ارسال نمی‌شود (بک‌اند خودش می‌گذارد)
+    if (form.settlement_type === 'credit') delete payload.settlement_due_date
+    else payload.settlement_due_date = form.settlement_due_date || null
+    mut.mutate(payload)
   }
 
   return (
@@ -132,9 +135,13 @@ function EditOrderModal({ order, onClose }) {
             </div>
             <div>
               <label className="label text-xs mb-1 block">موعد تسویه</label>
-              <input type="date" value={form.settlement_due_date || ''}
-                onChange={e => setForm(f => ({ ...f, settlement_due_date: e.target.value }))}
-                className="input text-sm" dir="ltr" />
+              {form.settlement_type === 'credit' ? (
+                <div className="input text-sm text-gray-steel">۱۴ روز پس از تأیید (خودکار)</div>
+              ) : (
+                <input type="date" value={form.settlement_due_date || ''}
+                  onChange={e => setForm(f => ({ ...f, settlement_due_date: e.target.value }))}
+                  className="input text-sm" dir="ltr" />
+              )}
             </div>
           </div>
 
@@ -212,7 +219,7 @@ function EditOrderModal({ order, onClose }) {
 }
 
 // ─── ردیف قلم قابل ویرایش در مودال جزئیات ─────────────────────
-const DUE_LABELS = { cash: 'همان روز تأیید', credit: '۱۸ روز پس از تأیید', month1: '۳۰ روز پس از تأیید', month2: '۶۰ روز پس از تأیید' }
+const DUE_LABELS = { cash: 'همان روز تأیید', credit: '۱۴ روز پس از تأیید', month1: '۳۰ روز پس از تأیید', month2: '۶۰ روز پس از تأیید' }
 
 function ItemRow({ item, orderNumber, index, onChanged, showDate }) {
   const [qty, setQty] = useState(String(item.quantity))
@@ -251,6 +258,12 @@ function ItemRow({ item, orderNumber, index, onChanged, showDate }) {
           <div className={`text-[10px] mt-1 whitespace-nowrap ${Number(qty) > (item.available_stock ?? Infinity) ? 'text-amber-400 font-bold' : 'text-gray-steel'}`}>
             موجودی: {fmt(item.available_stock ?? 0)}
             {Number(qty) > (item.available_stock ?? Infinity) && ' ⚠️ بیشتر از موجودی'}
+            {/* تفکیک موجودی به انبار — 🔒 یعنی انبار بدون تیک «نمایش به مشتری» */}
+            {item.stocks?.map(s => (
+              <div key={s.warehouse}>
+                {s.warehouse}: {fmt(s.quantity)}{!s.is_public && ' 🔒'}
+              </div>
+            ))}
           </div>
         )}
       </td>

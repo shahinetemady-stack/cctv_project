@@ -51,9 +51,12 @@ INSTALLED_APPS = [
     "apps.inventory",
     "apps.notifications",
     "apps.payment",
+    "apps.leads",
     "apps.accounting",
     "apps.education",
     "apps.assistant",
+    "apps.payroll",
+    "apps.expenses",
     "django.contrib.humanize",
 
 ]
@@ -238,6 +241,9 @@ PAYMENT_FAIL_URL    = config("PAYMENT_FAIL_URL",    default="http://localhost:30
 # ─── Frontend URLs (for payment redirect) ────────────────────────────────────
 FRONTEND_SUCCESS_URL = config("FRONTEND_SUCCESS_URL", default="http://localhost:3000/payment/success")
 FRONTEND_FAILURE_URL = config("FRONTEND_FAILURE_URL", default="http://localhost:3000/payment/failure")
+
+# سقف خرید مستقیم نقدی با پرداخت آنلاین (ریال) — فقط مشتری عمومی؛ بالای این مبلغ باید تماس/استعلام
+DIRECT_PURCHASE_MAX_RIAL = config("DIRECT_PURCHASE_MAX_RIAL", default=200_000_000, cast=int)
 
 # ─── AI Assistant (ربات مشاور هوشمند) ────────────────────────────────────────
 # هر سرویس OpenAI-compatible — پیش‌فرض Moonshot/Kimi. کلید را در .env بگذارید.

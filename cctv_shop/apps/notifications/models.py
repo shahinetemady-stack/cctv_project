@@ -115,16 +115,20 @@ class SmsSettings(models.Model):
     payment_reminder_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب یادآوری سررسید بدهی")
     tier_change_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب تغییر سطح همکار")
     partner_approved_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب تأیید همکار")
+    partner_request_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب ثبت درخواست همکاری")
     invoice_confirmed_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب تأیید فاکتور")
     account_info_template_id = models.CharField(max_length=20, blank=True, verbose_name="قالب اطلاعات حساب پرداخت")
+    near_tier_template_id = models.CharField(max_length=64, blank=True, verbose_name="قالب نزدیک به آستانه ارتقای سطح")
 
     # ── کلیدهای روشن/خاموش ────────────────────────────────────────────
     order_status_enabled = models.BooleanField(default=True, verbose_name="پیامک تغییر وضعیت سفارش")
     payment_reminder_enabled = models.BooleanField(default=True, verbose_name="پیامک یادآوری سررسید بدهی")
     tier_change_enabled = models.BooleanField(default=True, verbose_name="پیامک تغییر سطح همکار")
     partner_approved_enabled = models.BooleanField(default=True, verbose_name="پیامک تأیید همکار")
+    partner_request_enabled = models.BooleanField(default=True, verbose_name="پیامک ثبت درخواست همکاری")
     invoice_confirmed_enabled = models.BooleanField(default=True, verbose_name="پیامک تأیید فاکتور")
     account_info_enabled = models.BooleanField(default=True, verbose_name="پیامک اطلاعات حساب پرداخت")
+    near_tier_enabled = models.BooleanField(default=True, verbose_name="پیامک نزدیک به آستانه ارتقای سطح")
 
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -7,6 +7,7 @@ export const navGroups = [
     items: [
       { label: 'همه محصولات', href: '/products', icon: '📦', desc: 'کاتالوگ کامل قطعات دوربین مداربسته' },
       { label: 'پکیج‌ها', href: '/packages', icon: '🎁', desc: 'بسته‌های آماده و اقتصادی با تخفیف ویژه' },
+      { label: 'باشگاه همکاران', href: '/club', icon: '🤝', desc: 'همکاری با نصاب‌ها و فروشندگان با مزایای ویژه' },
     ],
   },
   {

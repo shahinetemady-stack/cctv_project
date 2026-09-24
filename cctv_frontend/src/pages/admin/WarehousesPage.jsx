@@ -14,22 +14,29 @@ const WAREHOUSE_TYPES = [
   { value: 'assembly',    label: 'انبار مونتاژ' },
 ]
 
-// ─── مودال ساخت انبار جدید ──────────────────────────────────
-function WarehouseForm({ onClose }) {
+// ─── مودال ساخت/ویرایش انبار ────────────────────────────────
+function WarehouseForm({ warehouse, onClose }) {
   const qc = useQueryClient()
+  const isEdit = !!warehouse
   const [form, setForm] = useState({
-    name: '', code: '', warehouse_type: 'shop1', is_public: false, address: '',
+    name: warehouse?.name || '', code: warehouse?.code || '',
+    warehouse_type: warehouse?.warehouse_type || 'shop1',
+    is_public: warehouse?.is_public || false,
+    is_active: warehouse?.is_active !== false,
+    address: warehouse?.address || '',
   })
   const [msg, setMsg] = useState(null)
 
   const saveMut = useMutation({
-    mutationFn: (payload) => api.post('/inventory/warehouses/', payload).then(r => r.data),
+    mutationFn: (payload) => isEdit
+      ? api.patch(`/inventory/warehouses/${warehouse.id}/`, payload).then(r => r.data)
+      : api.post('/inventory/warehouses/', payload).then(r => r.data),
     onSuccess: () => {
       qc.invalidateQueries(['warehouses'])
-      toast.success('انبار جدید ساخته شد')
+      toast.success(isEdit ? 'انبار ویرایش شد' : 'انبار جدید ساخته شد')
       onClose()
     },
-    onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا در ساخت انبار' }),
+    onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا در ذخیره انبار' }),
   })
 
   function handleSubmit() {
@@ -42,7 +49,7 @@ function WarehouseForm({ onClose }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="card p-6 w-full max-w-lg">
         <div className="flex items-center justify-between mb-5">
-          <h2 className="font-bold text-white text-lg">🏬 انبار جدید</h2>
+          <h2 className="font-bold text-white text-lg">{isEdit ? `✏️ ویرایش انبار «${warehouse.name}»` : '🏬 انبار جدید'}</h2>
           <button onClick={onClose} className="text-gray-steel hover:text-white text-2xl">×</button>
         </div>
 
@@ -83,6 +90,16 @@ function WarehouseForm({ onClose }) {
             <input value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
               className="input text-sm" placeholder="اختیاری" />
           </div>
+
+          {isEdit && (
+            <label className="flex items-center gap-2 text-sm text-gray-steel cursor-pointer">
+              <input type="checkbox" checked={form.is_active}
+                onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))}
+                className="accent-brand w-4 h-4" />
+              انبار فعال است
+              {!form.is_active && <span className="text-[10px] text-amber-400">(غیرفعال = از لیست انبارها و محاسبات موجودی خارج می‌شود)</span>}
+            </label>
+          )}
         </div>
 
         {msg && (
@@ -92,7 +109,7 @@ function WarehouseForm({ onClose }) {
         <div className="flex gap-3 mt-5">
           <button onClick={handleSubmit} disabled={saveMut.isPending}
             className="btn-primary flex-1 text-sm py-2.5 disabled:opacity-50">
-            {saveMut.isPending ? 'در حال ذخیره...' : '✓ ساخت انبار'}
+            {saveMut.isPending ? 'در حال ذخیره...' : isEdit ? '✓ ذخیره تغییرات' : '✓ ساخت انبار'}
           </button>
           <button onClick={onClose} className="btn-secondary text-sm py-2.5 px-6">انصراف</button>
         </div>
@@ -309,6 +326,7 @@ function TransferModal({ warehouses, presetFrom, onClose }) {
 export default function WarehousesPage() {
   const qc = useQueryClient()
   const [showForm, setShowForm] = useState(false)
+  const [editing, setEditing] = useState(null)
   const [stocksOf, setStocksOf] = useState(null)
   const [transferFrom, setTransferFrom] = useState(null)   // null=بسته، ''=بدون پیش‌انتخاب
   const [confirmDelete, setConfirmDelete] = useState(null)
@@ -405,6 +423,10 @@ export default function WarehousesPage() {
                     className="text-xs px-3 py-1.5 rounded-lg bg-brand/15 text-brand hover:bg-brand/25 transition-all">
                     انتقال
                   </button>
+                  <button onClick={() => setEditing(w)}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-all">
+                    ویرایش
+                  </button>
                   <button onClick={() => setConfirmDelete(w)} disabled={delMut.isPending}
                     className="text-xs px-3 py-1.5 rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-all disabled:opacity-50">
                     حذف
@@ -443,7 +465,7 @@ export default function WarehousesPage() {
                     <td style={{ padding: '10px 12px' }}>{t.to_warehouse}</td>
                     <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0066FF' }}>{fmt(t.quantity)}</td>
                     <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                      <UserStamp createdBy={t.transferred_by === '—' ? '' : t.transferred_by} updatedBy={t.updated_by} />
+                      <UserStamp createdBy={t.transferred_by === '—' ? '' : t.transferred_by} updatedBy={t.updated_by} createdAt={t.date} />
                     </td>
                     <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }}>{t.note || '—'}</td>
                   </tr>
@@ -455,6 +477,7 @@ export default function WarehousesPage() {
       </div>
 
       {showForm && <WarehouseForm onClose={() => setShowForm(false)} />}
+      {editing && <WarehouseForm warehouse={editing} onClose={() => setEditing(null)} />}
       {stocksOf && <StocksModal warehouse={stocksOf} onClose={() => setStocksOf(null)} />}
       {transferFrom !== null && (
         <TransferModal warehouses={warehouses} presetFrom={transferFrom} onClose={() => setTransferFrom(null)} />

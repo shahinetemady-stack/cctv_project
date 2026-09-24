@@ -1,10 +1,6 @@
 import { useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { motion } from 'framer-motion'
 import api from '../../../services/api'
-
-const SPRING_SNAPPY = { type: 'spring', stiffness: 500, damping: 35 }
-const SPRING_SMOOTH = { type: 'spring', stiffness: 300, damping: 30 }
 
 // ─── مودال آپلود لوگو (فقط برای کاربران staff) ────────────────
 export default function LogoUploadModal({ onClose, onUploaded }) {
@@ -42,25 +38,18 @@ export default function LogoUploadModal({ onClose, onUploaded }) {
   }
 
   return (
-    <motion.div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fade-in-fast"
       onClick={onClose}
     >
-      <motion.div
-        className="card max-w-md w-full p-6 relative"
-        initial={{ opacity: 0, scale: 0.96, y: 8 }}
-        animate={{ opacity: 1, scale: 1, y: 0, transition: SPRING_SNAPPY }}
-        exit={{ opacity: 0, scale: 0.96, y: 8, transition: { duration: 0.15 } }}
+      <div
+        className="card max-w-md w-full p-6 relative animate-modal-in"
         onClick={(e) => e.stopPropagation()}
         style={{ boxShadow: 'var(--shadow-modal)' }}
       >
         <h3 className="text-lg font-bold mb-4 tracking-tight">آپلود لوگو</h3>
         <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} className="hidden" />
-        <motion.div
+        <div
           onClick={() => fileRef.current?.click()}
           onDragEnter={(e) => { e.preventDefault(); setDragging(true) }}
           onDragLeave={(e) => { e.preventDefault(); setDragging(false) }}
@@ -71,69 +60,50 @@ export default function LogoUploadModal({ onClose, onUploaded }) {
             if (f) { fileRef.current.files = e.dataTransfer.files; handleFile({ target: { files: [f] } }) }
           }}
           className="border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-colors"
-          animate={{
+          style={{
             borderColor: dragging ? 'var(--color-brand)' : 'var(--color-border)',
             backgroundColor: dragging ? 'var(--color-brand-softer)' : 'transparent',
           }}
-          transition={SPRING_SNAPPY}
         >
           {preview ? (
-            <motion.img
+            <img
               src={preview}
               alt="preview"
-              className="max-h-32 mx-auto object-contain"
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={SPRING_SMOOTH}
+              className="max-h-32 mx-auto object-contain animate-scale-in"
             />
           ) : (
             <div className="text-sm text-[var(--color-text-muted)]">
-              <motion.div
-                className="text-3xl mb-2"
-                animate={{ y: [0, -4, 0] }}
-                transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
-              >
+              <div className="text-3xl mb-2 animate-bounce-soft">
                 📁
-              </motion.div>
+              </div>
               برای انتخاب کلیک کنید یا فایل را رها کنید
             </div>
           )}
-        </motion.div>
+        </div>
         <p className="text-[10px] text-[var(--color-text-muted)] mt-2">
           ابعاد پیشنهادی: ارتفاع حدود ۱۲۸ پیکسل، عرض آزاد — PNG با پس‌زمینه شفاف یا SVG — حداکثر ۲ مگابایت.
         </p>
         {error && (
-          <motion.div
-            className="text-alert-red text-sm mt-3"
-            initial={{ opacity: 0, x: -8 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={SPRING_SNAPPY}
-          >
+          <div className="text-alert-red text-sm mt-3 animate-error-in">
             {error}
-          </motion.div>
+          </div>
         )}
         <div className="flex gap-2 mt-4">
-          <motion.button
+          <button
             onClick={upload}
             disabled={uploading || !preview}
-            whileHover={{ scale: 1.02, y: -1 }}
-            whileTap={{ scale: 0.97, y: 0 }}
-            transition={SPRING_SNAPPY}
             className="btn-gold flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {uploading ? 'در حال آپلود...' : 'آپلود'}
-          </motion.button>
-          <motion.button
+          </button>
+          <button
             onClick={onClose}
-            whileHover={{ scale: 1.02, y: -1 }}
-            whileTap={{ scale: 0.97, y: 0 }}
-            transition={SPRING_SNAPPY}
             className="btn-ghost flex-1"
           >
             انصراف
-          </motion.button>
+          </button>
         </div>
-      </motion.div>
-    </motion.div>
+      </div>
+    </div>
   )
 }

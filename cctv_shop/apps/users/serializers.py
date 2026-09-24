@@ -1,10 +1,17 @@
 """
 apps/users/serializers.py
 """
+from datetime import timedelta
 from django.contrib.auth import authenticate
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import User, UserProfile
+
+
+def validate_password_strength(password):
+    """رمز باید حداقل ۸ کاراکتر و شامل حروف و عدد باشد (عدد خالی یا حرف خالی ممنوع)."""
+    if not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
+        raise serializers.ValidationError("رمز عبور باید ترکیبی از حروف و عدد باشد (فقط عدد یا فقط حرف کافی نیست).")
 
 
 def get_tokens_for_user(user: User) -> dict:
@@ -20,7 +27,19 @@ def get_tokens_for_user(user: User) -> dict:
         refresh["user_type"] = "public"
         refresh["is_partner"] = False
         refresh["is_approved"] = False
-    return {"refresh": str(refresh), "access": str(refresh.access_token)}
+
+    access = refresh.access_token
+    # پرسنل/ادمین: انقضای بیکاری — توکن دسترسی ۳۰ دقیقه‌ای (تازه‌سازی بی‌صدا در پنل)
+    # و refresh ده‌ساعته؛ چون با rotation هر تازه‌سازی refresh جدید می‌گیرد،
+    # ۱۰ ساعت از «آخرین فعالیت» شمرده می‌شود، نه از لاگین. مشتریان: ۱ روز / ۳۰ روز.
+    if user.is_staff or user.is_superuser:
+        refresh.set_exp(lifetime=STAFF_REFRESH_LIFETIME)
+        access.set_exp(lifetime=STAFF_ACCESS_LIFETIME)
+    return {"refresh": str(refresh), "access": str(access)}
+
+
+STAFF_ACCESS_LIFETIME = timedelta(minutes=30)
+STAFF_REFRESH_LIFETIME = timedelta(hours=10)
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -58,6 +77,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         return value or None
 
     def validate(self, data):
+        validate_password_strength(data["password"])
         if data["password"] != data["password2"]:
             raise serializers.ValidationError({"password2": "رمزهای عبور مطابقت ندارند."})
         return data
@@ -108,12 +128,24 @@ class UserSerializer(serializers.ModelSerializer):
     profile = UserProfileSerializer(read_only=True)
     is_partner = serializers.BooleanField(read_only=True)
     staff_role = serializers.SerializerMethodField()
+    parent_account = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = ["id", "phone", "email", "first_name", "last_name",
-                  "is_partner", "is_staff", "is_superuser", "date_joined", "profile", "staff_role"]
+                  "is_partner", "is_staff", "is_superuser", "date_joined", "profile", "staff_role",
+            "parent_account",]
         read_only_fields = ["phone", "date_joined", "is_staff", "is_superuser"]
+
+    def get_parent_account(self, obj):
+        try:
+            profile = obj.profile
+        except Exception:
+            return None
+        if profile and profile.parent_account_id:
+            p = profile.parent_account
+            return {"id": p.id, "name": p.get_full_name() or p.phone}
+        return None
 
     def get_staff_role(self, obj):
         if not obj.is_staff:
@@ -160,23 +192,35 @@ class ChangePasswordSerializer(serializers.Serializer):
     new_password2 = serializers.CharField(write_only=True, label="تکرار رمز جدید")
 
     def validate(self, data):
+        validate_password_strength(data["new_password"])
         if data["new_password"] != data["new_password2"]:
             raise serializers.ValidationError({"new_password2": "رمزهای عبور مطابقت ندارند."})
         return data
 
 
 class PartnerRegisterSerializer(serializers.Serializer):
-    company_name = serializers.CharField(max_length=255)
+    """درخواست همکاری — پشتیبانی از نصاب‌های مستقل.
+
+    نام فروشگاه/شرکت/برند شخصی اجباری است (نصاب مستقل نام برند شخصی‌اش را می‌نویسد)؛
+    «تصویر کارت ویزیت یا عکس صفحه ادمین پیج» برای بررسی درخواست اجباری است.
+    آدرس برای ارسال بار اجباری است.
+    """
+    company_name = serializers.CharField(max_length=255, required=True, allow_blank=False)
     national_id  = serializers.CharField(max_length=20, required=False, allow_blank=True)
-    address      = serializers.CharField(required=False, allow_blank=True)
+    address      = serializers.CharField(required=True, allow_blank=False)
+    social_url   = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    document     = serializers.ImageField(required=True)
 
     def save(self, user: User):
         data = self.validated_data
         profile, _ = UserProfile.objects.get_or_create(user=user)
         profile.user_type    = UserProfile.UserType.PARTNER
-        profile.company_name = data["company_name"]
+        profile.company_name = data.get("company_name", "")
         profile.national_id  = data.get("national_id", "")
-        profile.address      = data.get("address", "")
+        profile.address      = data["address"]
+        profile.social_url   = data.get("social_url", "")
+        if data.get("document"):
+            profile.document = data["document"]
         profile.is_approved  = False
         profile.save()
         return user
@@ -187,13 +231,27 @@ class AdminPartnerListSerializer(serializers.ModelSerializer):
     phone     = serializers.CharField(source="user.phone")
     email     = serializers.EmailField(source="user.email")
     full_name = serializers.CharField(source="user.get_full_name")
+    document_url = serializers.SerializerMethodField()
+    signup_source = serializers.SerializerMethodField()
 
     class Meta:
         model = UserProfile
         fields = ["user_id", "phone", "email", "full_name",
-                  "company_name", "national_id", "is_approved", "partner_tier",
-                  "discount_percent", "credit_limit", "address", "notes", "created_at"]
-        read_only_fields = ["user_id", "phone", "email", "full_name", "created_at"]
+                  "company_name", "national_id", "social_url", "document_url",
+                  "is_approved", "partner_tier", "signup_source",
+                  "discount_percent", "credit_limit", "address", "notes", "created_at", "updated_at"]
+        read_only_fields = ["user_id", "phone", "email", "full_name", "created_at", "updated_at"]
+
+    def get_signup_source(self, obj):
+        # کاربر سایه (ساخته‌شده از پنل برای لینک فاکتور) پسورد قابل‌استفاده ندارد
+        return "self" if obj.user.has_usable_password() else "admin"
+
+    def get_document_url(self, obj):
+        if not obj.document:
+            return None
+        url = obj.document.url
+        request = self.context.get("request")
+        return request.build_absolute_uri(url) if request else url
 
 
 class AdminApprovePartnerSerializer(serializers.Serializer):
@@ -203,3 +261,42 @@ class AdminApprovePartnerSerializer(serializers.Serializer):
     partner_tier = serializers.ChoiceField(
         choices=["silver", "gold", "platinum"], required=False, allow_blank=True,
     )
+
+
+class ClubSettingsSerializer(serializers.Serializer):
+    silver_to_gold_amount = serializers.IntegerField(min_value=0)
+    gold_to_platinum_amount = serializers.IntegerField(min_value=0)
+    period_months = serializers.IntegerField(min_value=1, max_value=36)
+    auto_evaluate_enabled = serializers.BooleanField(required=False, default=True)
+    overdue_warn_workdays = serializers.IntegerField(min_value=1, max_value=30, required=False, default=3)
+    overdue_cash_only_days = serializers.IntegerField(min_value=1, max_value=60, required=False, default=7)
+    tier_benefits_silver = serializers.CharField(required=False, allow_blank=True)
+    tier_benefits_gold = serializers.CharField(required=False, allow_blank=True)
+    tier_benefits_platinum = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, data):
+        if data["gold_to_platinum_amount"] < data["silver_to_gold_amount"]:
+            raise serializers.ValidationError({
+                "gold_to_platinum_amount": "آستانه پلاتینیوم نمی‌تواند کمتر از آستانه گلد باشد."
+            })
+        return data
+
+
+class GuaranteeSerializer(serializers.ModelSerializer):
+    """تضمین همکار برای فروش اعتباری — ثبت/مشاهده توسط ادمین."""
+    guarantee_type_display = serializers.CharField(source="get_guarantee_type_display", read_only=True)
+    document_url = serializers.SerializerMethodField()
+
+    class Meta:
+        from .models import PartnerGuarantee
+        model = PartnerGuarantee
+        fields = ["id", "guarantee_type", "guarantee_type_display",
+                  "amount_rials", "description", "document", "document_url", "created_at"]
+        read_only_fields = ["id", "created_at"]
+
+    def get_document_url(self, obj):
+        if not obj.document:
+            return None
+        url = obj.document.url
+        request = self.context.get("request")
+        return request.build_absolute_uri(url) if request else url

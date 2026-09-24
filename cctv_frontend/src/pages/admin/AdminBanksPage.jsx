@@ -243,7 +243,7 @@ function TransactionsModal({ account, onClose }) {
                         <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }}>{t.reference || '—'}</td>
                         <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }}>{t.note || '—'}</td>
                         <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                          <UserStamp createdBy={t.created_by} />
+                          <UserStamp createdBy={t.created_by} createdAt={t.created_at} />
                         </td>
                       </tr>
                     ))}
@@ -286,6 +286,18 @@ export default function AdminBanksPage() {
       toast.success('تراکنش حذف شد')
     },
     onError: (e) => toast.error(e.response?.data?.error || 'خطا در حذف تراکنش'),
+  })
+
+  // سند برگشت — اصلاح اصولی بدون حذف: سند معکوس با لینک به سند اصلی ثبت می‌شود
+  const revPayMut = useMutation({
+    mutationFn: (id) => api.post(`/accounting/payments/${id}/reverse/`).then(r => r.data),
+    onSuccess: (r) => {
+      qc.invalidateQueries(['payments-list'])
+      qc.invalidateQueries(['accounts'])
+      qc.invalidateQueries(['contacts-all'])
+      toast.success(r.message || 'سند برگشت ثبت شد')
+    },
+    onError: (e) => toast.error(e.response?.data?.error || 'خطا در ثبت برگشت'),
   })
 
   // جمع موجودی حساب‌ها
@@ -379,26 +391,41 @@ export default function AdminBanksPage() {
         </div>
       </div>
 
-      {/* آخرین تراکنش‌ها — منتقل‌شده از صفحه دریافت و پرداخت */}
+      {/* تراکنش‌های امروز — سندهای قدیمی‌تر در «دریافت و پرداخت ← ویرایش اسناد مالی» قابل جستجو/اصلاح است */}
       <div className="card p-5 mb-6">
-        <h3 className="text-sm font-semibold text-white mb-4">آخرین تراکنش‌ها</h3>
-        {loadingPayments ? (
+        <h3 className="text-sm font-semibold text-white mb-4">تراکنش‌های امروز</h3>
+        {(() => {
+          const today = new Date().toLocaleDateString('en-CA')
+          const filtered = payments.filter(p => p.date === today)
+          return loadingPayments ? (
           <div className="text-center py-6 text-gray-steel text-sm">در حال بارگذاری...</div>
-        ) : payments.length === 0 ? (
-          <div className="text-center py-8 text-gray-steel text-sm">تراکنشی ثبت نشده</div>
+        ) : filtered.length === 0 ? (
+          <div className="text-center py-8 text-gray-steel text-sm">امروز تراکنشی ثبت نشده — برای اسناد قبلی از «دریافت و پرداخت ← ویرایش اسناد مالی» استفاده کنید</div>
         ) : (
           <div className="overflow-x-auto">
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.1)' }}>
-                  {['نوع', 'طرف حساب', 'حساب', 'فاکتور', 'مبلغ', 'مبلغ ریالی', 'روش', 'تاریخ', 'مرجع', 'عملیات'].map(h => (
+                  {['سند', 'نوع', 'طرف حساب', 'حساب', 'فاکتور', 'مبلغ', 'مبلغ ریالی', 'روش', 'تاریخ', 'مرجع', 'عملیات'].map(h => (
                     <th key={h} style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500 }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {payments.slice(0, 50).map((p, i) => (
+                {filtered.map((p, i) => (
                   <tr key={p.id} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                    <td style={{ padding: '10px 12px', color: 'var(--color-text-muted)', fontSize: 11, fontFamily: 'monospace' }}>
+                      #{p.id}
+                      {p.paired_with && (
+                        <div style={{ fontSize: 9, color: '#0066FF' }} title={`جفت‌شده با سند #${p.paired_with} (${p.paired_contact_name || ''})`}>🔗 #{p.paired_with}</div>
+                      )}
+                      {p.reversal_of && (
+                        <div style={{ fontSize: 9, color: '#FBC02D' }} title="این ردیف، سند برگشت است">↩ برگشت #{p.reversal_of}</div>
+                      )}
+                      {p.is_reversed && (
+                        <div style={{ fontSize: 9, color: 'var(--color-text-muted)' }} title="این سند برگشت خورده و اثرش خنثی است">✗ برگشت‌خورده</div>
+                      )}
+                    </td>
                     <td style={{ padding: '10px 12px' }}>
                       <span style={{
                         color: p.direction === 'in' ? '#00C896' : '#FF3B3B',
@@ -437,6 +464,13 @@ export default function AdminBanksPage() {
                             className="text-xs px-2 py-1 rounded-lg bg-brand/15 text-brand hover:bg-brand/25 transition-all ml-1">
                             ویرایش
                           </button>
+                          {!p.is_reversed && !p.reversal_of && (
+                            <button onClick={() => { if (window.confirm(`سند برگشت برای تراکنش #${p.id}${p.paired_with ? ` و طرف مقابلش #${p.paired_with}` : ''} ثبت شود؟ (سند معکوس ساخته می‌شود و اثر خنثی می‌شود — سابقه حفظ می‌ماند)`)) revPayMut.mutate(p.id) }}
+                              disabled={revPayMut.isPending}
+                              className="text-xs px-2 py-1 rounded-lg bg-yellow-500/15 text-yellow-400 hover:bg-yellow-500/25 transition-all ml-1 disabled:opacity-50">
+                              برگشت
+                            </button>
+                          )}
                           <button onClick={() => { if (window.confirm('این تراکنش حذف شود؟')) delPayMut.mutate(p.id) }} disabled={delPayMut.isPending}
                             className="text-xs px-2 py-1 rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-all disabled:opacity-50">
                             حذف
@@ -449,7 +483,8 @@ export default function AdminBanksPage() {
               </tbody>
             </table>
           </div>
-        )}
+        )
+        })()}
       </div>
 
       <h3 className="text-sm font-semibold text-white mb-4">مدیریت حساب‌ها</h3>

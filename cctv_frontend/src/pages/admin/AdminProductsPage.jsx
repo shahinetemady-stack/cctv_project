@@ -7,6 +7,7 @@ import { mediaUrl } from '../../utils/media'
 import { PageLoader } from '../../components/ui'
 import AmountInput from '../../components/ui/AmountInput'
 import CharCount from '../../components/ui/CharCount'
+import StockChips from '../../components/ui/StockChips'
 
 // ─── تعریف گروه‌های فیلد — choiceها مطابق مدل بک‌اند ──────────
 const FIELD_GROUPS = [
@@ -938,7 +939,7 @@ export default function AdminProductsPage() {
   }
   const visibleProducts = products
     .filter(p => (searching || showInactive || p.is_active) && matchCat(p))
-    .filter(p => !stockFilter || (stockFilter === 'in' ? p.available_stock > 0 : p.available_stock <= 0))
+    .filter(p => !stockFilter || (stockFilter === 'in' ? (p.total_stock ?? p.available_stock) > 0 : (p.total_stock ?? p.available_stock) <= 0))
     .filter(p => !onlyFeatured || p.is_featured)
     .sort((a, b) => (b.is_active ? 1 : 0) - (a.is_active ? 1 : 0))
 
@@ -1010,11 +1011,15 @@ export default function AdminProductsPage() {
                   <td style={{ padding: '10px 14px', color: 'var(--color-text-secondary)', fontSize: 11 }}>{p.category_name || '—'}</td>
                   <td style={{ padding: '10px 14px', color: 'var(--color-text-secondary)', fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }} dir="ltr">{p.model_number || '—'}</td>
                   <td style={{ padding: '10px 14px' }}>
-                    <span className={p.available_stock > 0 ? 'badge-green' : 'badge-red'}>
-                      {Number(p.available_stock || 0).toLocaleString('fa-IR')}
-                    </span>
-                    {p.availability === 'coming_soon' && <span className="badge-blue" style={{ marginRight: 4 }}>به‌زودی</span>}
-                    {p.availability === 'discontinued' && <span className="badge-red" style={{ marginRight: 4 }}>توقف تولید</span>}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={(p.total_stock ?? p.available_stock) > 0 ? 'badge-green' : 'badge-red'}>
+                        {Number(p.total_stock ?? p.available_stock ?? 0).toLocaleString('fa-IR')}
+                      </span>
+                      {/* وضعیت موجودی و تفکیک انبار — سمت چپ عدد موجودی کلی */}
+                      {p.availability === 'coming_soon' && <span className="badge-blue">به‌زودی</span>}
+                      {p.availability === 'discontinued' && <span className="badge-red">توقف تولید</span>}
+                      <StockChips stocks={p.stocks} />
+                    </div>
                   </td>
                   <td style={{ padding: '10px 14px' }}>
                     <span className={p.is_active ? 'badge-green' : 'badge-red'}>{p.is_active ? 'فعال' : 'غیرفعال'}</span>

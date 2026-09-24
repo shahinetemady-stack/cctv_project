@@ -13,9 +13,10 @@ class SmsSettingsSerializer(serializers.ModelSerializer):
             "api_key", "line_number",
             "otp_template_id", "order_status_template_id",
             "payment_reminder_template_id", "tier_change_template_id",
-            "partner_approved_template_id", "invoice_confirmed_template_id",
+            "partner_approved_template_id", "partner_request_template_id",
+            "invoice_confirmed_template_id",
             "account_info_template_id",
             "order_status_enabled", "payment_reminder_enabled",
-            "tier_change_enabled", "partner_approved_enabled",
+            "tier_change_enabled", "partner_approved_enabled", "partner_request_enabled",
             "invoice_confirmed_enabled", "account_info_enabled",
         ]

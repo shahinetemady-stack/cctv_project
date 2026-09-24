@@ -4,8 +4,10 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'sonner'
-import { Search, Plus, UserPlus, X, Users, Shield, Check } from 'lucide-react'
+import { Search, Plus, UserPlus, X, Users, Shield, Check, Smartphone } from 'lucide-react'
 import api from '../../services/api'
+import usePermissions from '../../hooks/usePermissions'
+import { formatDate } from '../../utils/date'
 
 const PERM_GROUPS = [
   { label: 'فروش', perms: ['sale_view', 'sale_create', 'sale_edit', 'sale_payment'] },
@@ -14,6 +16,8 @@ const PERM_GROUPS = [
   { label: 'خرید', perms: ['purchase_view', 'purchase_create', 'purchase_edit', 'payment_edit'] },
   { label: 'طرف حساب‌ها', perms: ['contacts_view', 'contacts_create', 'contacts_edit', 'partner_approve'] },
   { label: 'گزارشات مالی', perms: ['reports_view', 'balance_view', 'accounts_edit'] },
+  { label: 'حقوق و دستمزد', perms: ['payroll_view', 'payroll_edit', 'payroll_pay'] },
+  { label: 'هزینه‌ها', perms: ['expenses_view', 'expenses_edit'] },
   { label: 'مدیریت کاربران', perms: ['users_view', 'users_edit'] },
   { label: 'محصولات', perms: ['products_view', 'products_edit'] },
   { label: 'فرمول قیمت', perms: ['pricing_rate_view', 'pricing_costs_view'] },
@@ -486,9 +490,261 @@ function StaffManager({ roles }) {
   )
 }
 
+// ─── درخواست‌های تغییر موبایل ────────────────────────────────
+function PhoneRequestsManager() {
+  const qc = useQueryClient()
+  const [showAll, setShowAll] = useState(false)
+
+  const { data: requests = [], isLoading } = useQuery({
+    queryKey: ['phone-requests', showAll ? 'all' : 'pending'],
+    queryFn: () => api.get('/users/admin/phone-requests/', { params: { status: showAll ? 'all' : 'pending' } }).then(r => r.data),
+  })
+
+  const actionMut = useMutation({
+    mutationFn: ({ id, action }) => api.post(`/users/admin/phone-requests/${id}/${action}/`).then(r => r.data),
+    onSuccess: (d, v) => {
+      qc.invalidateQueries(['phone-requests'])
+      toast.success(v.action === 'approve' ? 'درخواست تأیید شد' : 'درخواست رد شد')
+    },
+    onError: (e) => toast.error(e.response?.data?.error || 'خطا در انجام عملیات'),
+  })
+
+  return (
+    <div className="mb-8">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-white">درخواست‌های تغییر موبایل</h3>
+        <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-steel hover:text-white">
+          <div onClick={() => setShowAll(v => !v)}
+            className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${showAll ? 'bg-brand border-brand' : 'border-white/20'}`}>
+            {showAll && <Check size={12} strokeWidth={3} className="text-white" />}
+          </div>
+          نمایش همه
+        </label>
+      </div>
+
+      {isLoading ? <div className="text-center py-8 text-gray-steel">در حال بارگذاری...</div> :
+       requests.length === 0 ? (
+        <div className="text-center py-8 text-gray-steel text-sm">{showAll ? 'درخواستی ثبت نشده' : 'درخواست در انتظاری نیست'}</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.1)' }}>
+                {['نام کاربر', 'موبایل فعلی', 'موبایل جدید', 'دلیل', 'تاریخ', ...(showAll ? ['وضعیت'] : []), ''].map(h => (
+                  <th key={h} style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {requests.map((r, i) => (
+                <tr key={r.id} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                  <td style={{ padding: '10px 12px', fontWeight: 500 }}>{r.user_name || '—'}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }} dir="ltr">{r.old_phone}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 11 }} dir="ltr">{r.new_phone}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }}>{r.reason || '—'}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }}>{formatDate(r.created_at, { withTime: true })}</td>
+                  {showAll && (
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{
+                        color: r.status === 'approved' ? '#00C896' : r.status === 'rejected' ? '#FF3B3B' : '#FFB020',
+                        background: (r.status === 'approved' ? '#00C896' : r.status === 'rejected' ? '#FF3B3B' : '#FFB020') + '20',
+                        padding: '2px 8px', borderRadius: 20, fontSize: 11,
+                      }}>
+                        {r.status_display || r.status}
+                      </span>
+                    </td>
+                  )}
+                  <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                    {r.status === 'pending' && (
+                      <div className="flex gap-2">
+                        <button onClick={() => actionMut.mutate({ id: r.id, action: 'approve' })} disabled={actionMut.isPending}
+                          className="badge badge-success cursor-pointer disabled:opacity-50">✅ تأیید</button>
+                        <button onClick={() => { if (window.confirm('رد شود؟')) actionMut.mutate({ id: r.id, action: 'reject' }) }} disabled={actionMut.isPending}
+                          className="badge badge-danger cursor-pointer disabled:opacity-50">❌ رد</button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── درخواست‌های تغییر مشخصات ────────────────────────────────
+function ProfileRequestsManager() {
+  const qc = useQueryClient()
+  const [showAll, setShowAll] = useState(false)
+
+  const { data: requests = [], isLoading } = useQuery({
+    queryKey: ['profile-requests', showAll ? 'all' : 'pending'],
+    queryFn: () => api.get('/users/admin/profile-requests/', { params: { status: showAll ? 'all' : 'pending' } }).then(r => r.data),
+  })
+
+  const actionMut = useMutation({
+    mutationFn: ({ id, action }) => api.post(`/users/admin/profile-requests/${id}/${action}/`).then(r => r.data),
+    onSuccess: (d, v) => {
+      qc.invalidateQueries(['profile-requests'])
+      toast.success(v.action === 'approve' ? 'درخواست تأیید و اعمال شد' : 'درخواست رد شد')
+    },
+    onError: (e) => toast.error(e.response?.data?.error || 'خطا در انجام عملیات'),
+  })
+
+  return (
+    <div className="mb-8">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-white">درخواست‌های تغییر مشخصات (نام، شرکت، کد ملی، آدرس)</h3>
+        <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-steel hover:text-white">
+          <div onClick={() => setShowAll(v => !v)}
+            className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${showAll ? 'bg-brand border-brand' : 'border-white/20'}`}>
+            {showAll && <Check size={12} strokeWidth={3} className="text-white" />}
+          </div>
+          نمایش همه
+        </label>
+      </div>
+
+      {isLoading ? <div className="text-center py-8 text-gray-steel">در حال بارگذاری...</div> :
+       requests.length === 0 ? (
+        <div className="text-center py-8 text-gray-steel text-sm">{showAll ? 'درخواستی ثبت نشده' : 'درخواست در انتظاری نیست'}</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.1)' }}>
+                {['نام کاربر', 'موبایل', 'مورد', 'مقدار فعلی', 'مقدار جدید', 'دلیل', 'تاریخ', ...(showAll ? ['وضعیت'] : []), ''].map(h => (
+                  <th key={h} style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {requests.map((r, i) => (
+                <tr key={r.id} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                  <td style={{ padding: '10px 12px', fontWeight: 500 }}>{r.user_name || '—'}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }} dir="ltr">{r.user_phone}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 11 }}>{r.field_display}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }}>{r.old_value || '—'}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 11 }}>{r.new_value}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }}>{r.reason || '—'}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }}>{formatDate(r.created_at, { withTime: true })}</td>
+                  {showAll && (
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{
+                        color: r.status === 'approved' ? '#00C896' : r.status === 'rejected' ? '#FF3B3B' : '#FFB020',
+                        background: (r.status === 'approved' ? '#00C896' : r.status === 'rejected' ? '#FF3B3B' : '#FFB020') + '20',
+                        padding: '2px 8px', borderRadius: 20, fontSize: 11,
+                      }}>
+                        {r.status_display || r.status}
+                      </span>
+                    </td>
+                  )}
+                  <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                    {r.status === 'pending' && (
+                      <div className="flex gap-2">
+                        <button onClick={() => actionMut.mutate({ id: r.id, action: 'approve' })} disabled={actionMut.isPending}
+                          className="badge badge-success cursor-pointer disabled:opacity-50">✅ تأیید</button>
+                        <button onClick={() => { if (window.confirm('رد شود؟')) actionMut.mutate({ id: r.id, action: 'reject' }) }} disabled={actionMut.isPending}
+                          className="badge badge-danger cursor-pointer disabled:opacity-50">❌ رد</button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── جستجوی کاربر برای لینک شریک (async از customer-search) ──
+function UserSearchField({ label, value, onPick, excludeId }) {
+  const [q, setQ] = useState('')
+  const [open, setOpen] = useState(false)
+
+  const { data: results = [] } = useQuery({
+    queryKey: ['customer-search-link', q],
+    queryFn: () => api.get('/accounting/customer-search/', { params: { q } }).then(r => r.data),
+    enabled: q.length >= 2,
+  })
+
+  // طرف حساب‌های دستی (is_contact) کاربر واقعی نیستند — قابل لینک نیستند
+  const users = results.filter(u => !u.is_contact && String(u.id) !== String(excludeId))
+
+  return (
+    <div>
+      <label className="label text-xs mb-1 block">{label} *</label>
+      <div className="relative">
+        <input value={open ? q : (value?.name || q)} onChange={e => { setQ(e.target.value); setOpen(true); if (!e.target.value) onPick(null) }}
+          onFocus={() => setOpen(true)}
+          placeholder="نام یا موبایل..." className="input text-xs" />
+        {open && users.length > 0 && (
+          <div className="absolute z-50 top-full right-0 left-0 mt-1 bg-navy border border-white/10 rounded-xl overflow-hidden max-h-40 overflow-y-auto">
+            {users.map(u => (
+              <button key={u.id} className="w-full text-right px-3 py-2 hover:bg-white/5 border-b border-white/5 last:border-0"
+                onClick={() => { onPick(u); setQ(''); setOpen(false) }}>
+                <div className="text-xs text-white">{u.name}</div>
+                <div className="text-[10px] text-gray-steel" dir="ltr">{u.phone}</div>
+              </button>
+            ))}
+          </div>
+        )}
+        {open && <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />}
+      </div>
+      {value && <div className="text-xs text-green-400 mt-1">✓ {value.name || value.phone} <span dir="ltr" className="text-gray-steel">{value.phone}</span></div>}
+    </div>
+  )
+}
+
+// ─── لینک شریک به حساب اصلی ──────────────────────────────────
+function PartnerLinkManager() {
+  const [partner, setPartner] = useState(null)
+  const [parent, setParent] = useState(null)
+
+  const linkMut = useMutation({
+    mutationFn: (parentAccountId) => api.patch(`/users/admin/users/${partner.id}/link/`, { parent_account_id: parentAccountId }).then(r => r.data),
+    onSuccess: (d) => {
+      if (d.parent_account_id) {
+        toast.success(`شریک به «${d.parent_account_name}» لینک شد`)
+        setParent(null)
+      } else {
+        toast.success('لینک شریک جدا شد')
+      }
+    },
+    onError: (e) => toast.error(e.response?.data?.error || 'خطا در انجام عملیات'),
+  })
+
+  return (
+    <div className="bg-white/5 rounded-xl p-4">
+      <h3 className="text-sm font-semibold text-white mb-1">لینک شریک به حساب اصلی</h3>
+      <div className="text-[10px] text-gray-steel mb-4">
+        شریک با موبایل خودش وارد می‌شود ولی همه سفارش‌ها/کارت‌ها روی حساب اصلی ثبت و دیده می‌شوند.
+      </div>
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <UserSearchField label="حساب شریک" value={partner} onPick={setPartner} excludeId={parent?.id} />
+        <UserSearchField label="حساب اصلی" value={parent} onPick={setParent} excludeId={partner?.id} />
+      </div>
+      <div className="flex gap-2">
+        <button onClick={() => linkMut.mutate(parent.id)} disabled={!partner || !parent || linkMut.isPending}
+          className="btn-primary text-xs px-4 py-2 disabled:opacity-50">
+          {linkMut.isPending ? 'در حال انجام...' : '🔗 لینک'}
+        </button>
+        <button onClick={() => { if (window.confirm('لینک شریک جدا شود؟')) linkMut.mutate(null) }} disabled={!partner || linkMut.isPending}
+          className="btn-secondary text-xs px-3 py-2 disabled:opacity-50">
+          ✂️ جدا کردن لینک
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── صفحه اصلی ───────────────────────────────────────────────
 export default function RolesPage() {
   const qc = useQueryClient()
+  const { can } = usePermissions()
   const [editRole, setEditRole] = useState(null)
   const [showNew, setShowNew] = useState(false)
   const [tab, setTab] = useState('roles')
@@ -512,7 +768,7 @@ export default function RolesPage() {
       <h1 className="font-display font-bold text-2xl text-white mb-6">مدیریت نقش‌ها و پرسنل</h1>
 
       <div className="flex gap-2 mb-6 border-b border-white/10">
-        {[['roles', 'نقش‌ها', Shield], ['staff', 'پرسنل', Users]].map(([k, v, Icon]) => (
+        {[['roles', 'نقش‌ها', Shield], ['staff', 'پرسنل', Users], ['phone', '📝 درخواست‌های مشتریان', Smartphone]].map(([k, v, Icon]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`text-sm px-5 py-2.5 rounded-t-lg border-b-2 transition-all flex items-center gap-2 ${tab === k ? 'border-brand text-white bg-brand/10' : 'border-transparent text-gray-steel hover:text-white'}`}>
             <Icon size={15} /> {v}
@@ -574,6 +830,22 @@ export default function RolesPage() {
       )}
 
       {tab === 'staff' && <StaffManager roles={roles} />}
+
+      {tab === 'phone' && (
+        can('users_edit') ? (
+          <>
+            <PhoneRequestsManager />
+            <ProfileRequestsManager />
+            <PartnerLinkManager />
+          </>
+        ) : (
+          <div className="container-main py-16 text-center">
+            <div className="text-5xl mb-4">🔒</div>
+            <h2 className="font-display font-bold text-xl text-white mb-3">دسترسی محدود</h2>
+            <p className="text-gray-steel text-sm">برای مشاهده این بخش نیاز به دسترسی ویرایش کاربران دارید.</p>
+          </div>
+        )
+      )}
 
       {(showNew || editRole) && (
         <RoleEditor

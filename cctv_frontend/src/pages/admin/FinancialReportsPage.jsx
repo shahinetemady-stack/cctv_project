@@ -39,6 +39,24 @@ function ProfitTab() {
         </div>
       </div>
 
+      {/* اثر تخفیف‌های اسنادی روی سود — روش «تخفیف» در دریافت/پرداخت */}
+      {(s.discount_given > 0 || s.discount_received > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-6">
+          <div className="card p-4 text-center">
+            <div className="text-xs text-gray-steel mb-1">تخفیف داده‌شده به مشتریان</div>
+            <div className="text-base sm:text-lg font-bold text-red-400">−{fmt(s.discount_given)} ریال</div>
+          </div>
+          <div className="card p-4 text-center">
+            <div className="text-xs text-gray-steel mb-1">تخفیف گرفته‌شده از تأمین‌کنندگان</div>
+            <div className="text-base sm:text-lg font-bold text-green-400">+{fmt(s.discount_received)} ریال</div>
+          </div>
+          <div className="card p-4 text-center border border-brand/30">
+            <div className="text-xs text-gray-steel mb-1">سود خالص (بعد از تخفیف‌ها)</div>
+            <div className={`text-base sm:text-lg font-bold ${s.net_profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmt(s.net_profit)} ریال</div>
+          </div>
+        </div>
+      )}
+
       {/* جدول */}
       <div className="card p-5">
         <h3 className="text-sm font-semibold text-white mb-4">جزئیات سود هر فروش</h3>
@@ -88,8 +106,41 @@ function BalanceSheetTab() {
 
   const { assets, liabilities, equity, profit } = data
 
+  const finance = [
+    { name: 'طلب از مشتریان', value: (assets.receivable_sale || 0) + (assets.receivable_irr || 0) + (assets.receivable_cny_irr || 0), color: '#60A5FA' },
+    { name: 'بدهی به تامین‌کنندگان', value: (liabilities.payable_irr || 0) + (liabilities.payable_cny_irr || 0), color: '#F87171' },
+    { name: 'موجودی بانک', value: (assets.cash_irr || 0) + (assets.cash_cny_irr || 0), color: '#34D399' },
+    { name: 'سود ناخالص', value: profit.gross_profit || 0, color: '#FBC02D' },
+  ]
+  const maxFin = Math.max(...finance.map(f => Math.abs(f.value)), 1)
+
   return (
     <div className="space-y-6">
+      {/* وضعیت مالی — خلاصه تصویری (منتقل‌شده از داشبورد) */}
+      <div className="card p-5">
+        <h3 className="text-sm font-semibold text-white mb-4">💹 وضعیت مالی</h3>
+        <div className="flex flex-col gap-4" dir="rtl">
+          {finance.map(f => (
+            <div key={f.name}>
+              <div className="flex items-center justify-between text-xs mb-1">
+                <span className="text-gray-steel">{f.name}</span>
+                <span className="font-bold text-white">{fmt(f.value)} ریال</span>
+              </div>
+              <div className="h-2 rounded-full bg-white/5 overflow-hidden">
+                <div className="h-full rounded-full transition-all duration-700"
+                  style={{ width: `${Math.max((Math.abs(f.value) / maxFin) * 100, f.value ? 3 : 0)}%`, background: f.color }} />
+              </div>
+            </div>
+          ))}
+          <div className="flex items-center justify-between pt-3 border-t border-white/5 text-xs">
+            <span className="text-gray-steel">خالص دارایی</span>
+            <span className={`font-bold ${(equity || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {fmt(equity)} ریال
+            </span>
+          </div>
+        </div>
+      </div>
+
       {/* سود/زیان */}
       <div className="card p-5">
         <h3 className="text-sm font-semibold text-white mb-4">📊 سود و زیان</h3>

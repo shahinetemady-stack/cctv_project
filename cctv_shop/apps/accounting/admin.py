@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     Contact, Account, PurchaseInvoice, PurchaseItem,
-    ExtraCost, Payment, SaleInvoice, SaleItem, SalePayment,
+    ExtraCost, Payment, SaleInvoice, SaleItem, SalePayment, Cheque,
 )
 
 
@@ -50,8 +50,8 @@ class SalePaymentInline(admin.TabularInline):
 
 @admin.register(Contact)
 class ContactAdmin(admin.ModelAdmin):
-    list_display  = ["name", "contact_type", "currency", "phone", "wechat", "is_active"]
-    list_filter   = ["contact_type", "currency", "is_active"]
+    list_display  = ["name", "contact_type", "currency", "has_fx", "phone", "wechat", "is_active"]
+    list_filter   = ["contact_type", "currency", "has_fx", "is_active"]
     search_fields = ["name", "phone", "wechat"]
     list_editable = ["is_active"]
 
@@ -92,6 +92,19 @@ class PurchaseInvoiceAdmin(admin.ModelAdmin):
     calculate_costs.short_description = "محاسبه بهای تمام شده"
 
 
+# ─── Cheque ──────────────────────────────────────────────────
+class ChequeInline(admin.TabularInline):
+    model = Cheque
+    fk_name = "payment"
+    extra = 0
+
+
+@admin.register(Cheque)
+class ChequeAdmin(admin.ModelAdmin):
+    list_display  = ["serial_number", "payment", "bank_branch", "cheque_date", "amount"]
+    list_filter   = ["cheque_date"]
+    search_fields = ["serial_number", "account_number", "bank_branch"]
+
 # ─── Payment ─────────────────────────────────────────────────
 
 @admin.register(Payment)
@@ -102,6 +115,7 @@ class PaymentAdmin(admin.ModelAdmin):
     search_fields = ["contact__name", "reference"]
     date_hierarchy = "date"
     readonly_fields = ["created_by"]
+    inlines = [ChequeInline]
 
     def save_model(self, request, obj, form, change):
         if not obj.created_by:

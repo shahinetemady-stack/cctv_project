@@ -27,6 +27,12 @@ urlpatterns = [
     path("purchase-invoices/<int:pk>/receive/", views.PurchaseInvoiceReceiveView.as_view(), name="purchase-receive"),
 
     path("payments/", views.PaymentListView.as_view(), name="payments"),
+    path("payments/voucher/", views.PaymentVoucherView.as_view(), name="payment-voucher"),
+    path("payments/<int:pk>/reverse/", views.PaymentReverseView.as_view(), name="payment-reverse"),
+    path("cheques/", views.ChequeListView.as_view(), name="cheques"),
+    path("cheques/available/", views.ChequeAvailableView.as_view(), name="cheques-available"),
+    path("cheques/<int:pk>/", views.ChequeDetailView.as_view(), name="cheque-detail"),
+    path("cheques/<int:pk>/action/", views.ChequeActionView.as_view(), name="cheque-action"),
     path("payments/<int:pk>/", views.PaymentDetailView.as_view(), name="payment-detail"),
 
     path("returns/", views.ReturnInvoiceListView.as_view(), name="returns"),

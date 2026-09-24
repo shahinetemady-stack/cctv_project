@@ -124,9 +124,19 @@ def _resolve_seo_object(kind, slug):
 
 def social_meta_view(request, kind, slug):
     from django.http import Http404
+    from django.shortcuts import redirect
 
     obj, title, desc, image = _resolve_seo_object(kind, slug)
     if not obj:
+        # اسلاگ قدیمی (ایندکس گوگل/لینک‌های خارجی) → ۳۰۱ به مسیر جدید تا
+        # اعتبار دامنه حفظ شود؛ بدون این چک خزنده‌ها ۴۰۴ می‌گرفتند.
+        from apps.catalog.models import SlugRedirect
+        red = SlugRedirect.objects.filter(
+            old_slug=slug, new_path__startswith=f"/{kind}/"
+        ).first()
+        if red:
+            path = red.new_path if red.new_path.endswith("/") else red.new_path + "/"
+            return redirect(path, permanent=True)
         raise Http404
 
     site = SiteSettings.get_instance()
@@ -140,11 +150,43 @@ def social_meta_view(request, kind, slug):
         "image_url": request.build_absolute_uri(image.url) if image else None,
         "site_name": site.site_name or "دوربینکار",
     }
+    if kind == "products":
+        context.update(_torob_product_meta(obj, request))
 
     if request.META.get("HTTP_X_BOT_KIND") == "search":
         context.update(_search_page_context(obj, kind, request))
         return render(request, "seo_page.html", context)
     return render(request, "social_meta.html", context)
+
+
+def _torob_product_meta(product, request):
+    """متاهای موردنیاز ترب (torob.com) برای صفحه محصول.
+
+    خزنده ترب JS اجرا نمی‌کند و شناسه/نام/قیمت/موجودی را از متای HTML خام
+    می‌خواند. قیمت همان حداقل قیمت خرده (retail = قیمت مهمان) است که در
+    صفحه محصول نمایش داده می‌شود؛ تومان و بدون جداکننده.
+    """
+    from apps.catalog.pricing import base_prices, formula_prices
+
+    ctx = {
+        "torob_name": product.name,
+        "torob_availability": (
+            "instock" if product.available_stock > 0 and product.availability == "auto"
+            else "outofstock"
+        ),
+    }
+    variants = list(product.variants.filter(is_active=True))
+    if variants:
+        cheapest = min(variants, key=lambda v: formula_prices(v)["retail"])
+        retail = formula_prices(cheapest)["retail"]       # ریال — قیمت خرده نمایشی
+        ctx["torob_price"] = retail // 10                 # تومان
+        disc = float(getattr(cheapest, "discount_percent", 0) or 0)
+        old = base_prices(cheapest)["retail"] if disc > 0 else retail
+        ctx["torob_old_price"] = old // 10                # تومان
+    img = product.main_image
+    if img:
+        ctx["torob_image"] = request.build_absolute_uri(img.image.url)
+    return ctx
 
 
 def _search_page_context(obj, kind, request):

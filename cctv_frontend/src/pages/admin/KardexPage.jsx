@@ -488,7 +488,7 @@ export default function KardexPage() {
                           {m.reference || '—'}
                         </td>
                         <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                          <UserStamp createdBy={m.created_by} />
+                          <UserStamp createdBy={m.created_by} createdAt={m.date} />
                         </td>
                       </tr>
                     ))}

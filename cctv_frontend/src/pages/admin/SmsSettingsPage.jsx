@@ -6,10 +6,10 @@ import api from '../../services/api'
 const EMPTY_FORM = {
   api_key: '', line_number: '',
   otp_template_id: '', order_status_template_id: '', payment_reminder_template_id: '',
-  tier_change_template_id: '', partner_approved_template_id: '', invoice_confirmed_template_id: '',
+  tier_change_template_id: '', partner_approved_template_id: '', partner_request_template_id: '', invoice_confirmed_template_id: '',
   account_info_template_id: '',
   order_status_enabled: true, payment_reminder_enabled: true, tier_change_enabled: true,
-  partner_approved_enabled: true, invoice_confirmed_enabled: true, account_info_enabled: true,
+  partner_approved_enabled: true, partner_request_enabled: true, invoice_confirmed_enabled: true, account_info_enabled: true,
 }
 
 const TEMPLATES = [
@@ -18,6 +18,7 @@ const TEMPLATES = [
   { key: 'payment_reminder_template_id', label: 'یادآوری سررسید بدهی',          params: ['%NAME%', '%AMOUNT%', '%DATE%'] },
   { key: 'tier_change_template_id',    label: 'تغییر سطح همکار',                params: ['%NAME%', '%TIER%'] },
   { key: 'partner_approved_template_id', label: 'تأیید همکار',                  params: ['%NAME%'] },
+  { key: 'partner_request_template_id',  label: 'ثبت درخواست همکاری',           params: ['%NAME%'] },
   { key: 'invoice_confirmed_template_id', label: 'تأیید فاکتور',                params: ['%NAME%', '%NUMBER%'] },
   { key: 'account_info_template_id',   label: 'اطلاعات حساب پرداخت',            params: ['%NAME%', '%AMOUNT%', '%ACCOUNT%', '%HOLDER%'] },
 ]
@@ -27,6 +28,7 @@ const TOGGLES = [
   { key: 'payment_reminder_enabled',  label: 'یادآوری سررسید بدهی' },
   { key: 'tier_change_enabled',       label: 'تغییر سطح همکار' },
   { key: 'partner_approved_enabled',  label: 'تأیید همکار' },
+  { key: 'partner_request_enabled',   label: 'ثبت درخواست همکاری' },
   { key: 'invoice_confirmed_enabled', label: 'تأیید فاکتور' },
   { key: 'account_info_enabled',      label: 'اطلاعات حساب پرداخت' },
 ]

@@ -365,6 +365,30 @@ def notify_tier_change_sms(phone, name, tier_display) -> None:
     )
 
 
+def notify_near_tier_sms(phone, name, tier_display, remaining_display) -> None:
+    """پیامک «نزدیک به آستانه ارتقای سطح» — باقی‌مانده خرید تا سطح بعدی."""
+    from apps.notifications.sms import get_sms_settings
+    _notify_sms(
+        phone, "near_tier",
+        {"NAME": name or "مشتری", "TIER": tier_display, "REMAINING": remaining_display},
+        enabled=get_sms_settings().near_tier_enabled,
+        subject="نزدیک به آستانه ارتقای سطح",
+    )
+
+
+def notify_partner_request_sms(user) -> None:
+    """پیامک «درخواست همکاری ثبت شد» — بلافاصله بعد از ثبت درخواست (در انتظار تأیید ادمین)."""
+    from apps.notifications.sms import get_sms_settings
+    name = f"{user.first_name} {user.last_name}".strip()
+    _notify_sms(
+        user.phone or "", "partner_request",
+        {"NAME": name or "همکار"},
+        enabled=get_sms_settings().partner_request_enabled,
+        user=user,
+        subject="ثبت درخواست همکاری",
+    )
+
+
 def notify_partner_approved_sms(user) -> None:
     """پیامک تأیید درخواست همکاری."""
     from apps.notifications.sms import get_sms_settings

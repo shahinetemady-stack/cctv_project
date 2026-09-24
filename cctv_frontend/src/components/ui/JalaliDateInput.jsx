@@ -59,16 +59,20 @@ export default function JalaliDateInput({ value, onChange, className = 'input te
   }, [jy, jm, jd])
 
   function onTextChange(e) {
-    const v = e.target.value
+    // جداکننده‌ها خودکار گذاشته می‌شوند — کاربر فقط عدد تایپ می‌کند (۱۴۰۵۰۶۱۰ → ۱۴۰۵/۰۶/۱۰)
+    const digits = toEn(e.target.value).replace(/\D/g, '').slice(0, 8)
+    let v = digits
+    if (digits.length > 6) v = `${digits.slice(0, 4)}/${digits.slice(4, 6)}/${digits.slice(6)}`
+    else if (digits.length > 4) v = `${digits.slice(0, 4)}/${digits.slice(4)}`
     setText(v)
-    if (!toEn(v).trim()) { setBadText(false); if (value) onChange(''); return }
+    if (!digits) { setBadText(false); if (value) onChange(''); return }
     const iso = parseJalaliText(v)
     if (iso) {
       setBadText(false)
       if (iso !== value) onChange(iso)
     } else {
       // فقط وقتی ورودی به اندازه کافی کامل شده خطا نشان بده
-      setBadText(toEn(v).replace(/\D/g, '').length >= 7)
+      setBadText(digits.length >= 7)
     }
   }
 

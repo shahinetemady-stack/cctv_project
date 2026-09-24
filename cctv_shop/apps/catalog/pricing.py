@@ -10,6 +10,8 @@ apps/catalog/pricing.py
     سیلور        → month1 (یکماهه)
     گلد          → credit (تو حسابی)
     پلاتینیوم    → credit + گزینه‌های cash و month1 در فرانت
+توجه: این ستون‌ها فقط مبنای «قیمت» هستند — تسویه سیلور/گلد/عمومی همیشه نقدی است و
+انتخاب نوع تسویه (نقدی/توحسابی/یکماهه/دوماهه) فقط برای پلاتینیوم معنا دارد.
 تخفیف واریانت (discount_percent) روی همه انواع قیمت اعمال می‌شود و در
 variant_pricing_payload قیمت اصلی (original_price) برای نمایش خط‌خورده برمی‌گردد.
 """
@@ -92,11 +94,12 @@ def variant_pricing_payload(variant, user):
         payload["discount_percent"] = d
         payload["original_price"] = base_prices(variant)[key]
     if tier == "platinum":
-        payload["options"] = {
-            "credit": prices["credit"],
-            "cash": prices["cash"],
-            "month1": prices["month1"],
-        }
+        payload["options"] = {}
+        if not variant.credit_unavailable:
+            payload["options"]["credit"] = prices["credit"]
+        payload["options"]["cash"] = prices["cash"]
+        if not variant.month1_unavailable:
+            payload["options"]["month1"] = prices["month1"]
         if not variant.month2_unavailable:
             payload["options"]["month2"] = prices["month2"]
     return payload
@@ -111,10 +114,23 @@ def price_for_user(variant, user):
 
 def allowed_settlements(user, variant=None):
     """انواع تسویه مجاز برای کاربر — هر قلم سفارش می‌تواند تسویه متفاوت داشته باشد.
-    دوماهه (month2) فقط برای همکار پلاتینیوم و فقط برای واریانت‌هایی که فروش دوماهه دارند."""
+    دوماهه (month2) فقط برای همکار پلاتینیوم و فقط برای واریانت‌هایی که فروش دوماهه دارند.
+    برای واریانت‌هایی که در لیست قیمت «ندارد» خورده‌اند، توحسابی/یکماهه/دوماهه حذف می‌شوند.
+    اگر کاربر به‌خاطر معوقات در مرحله «فقط نقدی» یا «مسدود» است، فقط نقدی برمی‌گردد."""
+    if not user.is_anonymous:
+        try:
+            from apps.users.services import partner_restriction
+            if partner_restriction(user):
+                return ["cash"]
+        except Exception:
+            pass  # خطا در چک محدودیت نباید قیمت‌نمایشی را بشکند
     _, tier = user_price_key(user)
     if tier == "platinum":
-        base = ["cash", "credit", "month1"]
+        base = ["cash"]
+        if variant is None or not variant.credit_unavailable:
+            base.append("credit")
+        if variant is None or not variant.month1_unavailable:
+            base.append("month1")
         if variant is not None and not variant.month2_unavailable:
             base.append("month2")
         return base
@@ -123,9 +139,13 @@ def allowed_settlements(user, variant=None):
 
 def price_for_settlement(variant, user, settlement_type):
     """قیمت واریانت بر اساس نوع تسویه انتخاب‌شده کاربر برای یک قلم.
-    نقدی برای کاربر عمومی = قیمت مشتری عمومی (retail)، برای همکار = قیمت نقدی."""
-    _, tier = user_price_key(user)
+    عمومی: قیمت مشتری عمومی (retail). سیلور/گلد: تسویه همیشه نقدی است و قیمت از
+    ستون ثابت سطحشان می‌آید (سیلور=یکماهه، گلد=توحسابی) — انتخاب ستون قیمت بر اساس
+    تسویه فقط برای پلاتینیوم است."""
+    key, tier = user_price_key(user)
     prices = formula_prices(variant)
+    if tier in ("silver", "gold"):
+        return prices[key]
     if settlement_type == "cash":
         return prices["cash"] if tier else prices["retail"]
     return prices.get(settlement_type, prices["retail"])

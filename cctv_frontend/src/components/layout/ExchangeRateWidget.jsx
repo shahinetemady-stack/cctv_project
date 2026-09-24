@@ -32,6 +32,10 @@ export default function ExchangeRateWidget() {
   const rate = data?.rate_cny_to_irt
   const canEdit = can('exchange_rate_edit')
 
+  const now = new Date()
+  const weekday = new Intl.DateTimeFormat('fa-IR', { weekday: 'long' }).format(now)
+  const todayDate = new Intl.DateTimeFormat('fa-IR', { day: 'numeric', month: 'long', year: 'numeric' }).format(now)
+
   function openEdit() {
     setValue(rate ? String(rate) : '')
     setEditing(true)
@@ -39,6 +43,13 @@ export default function ExchangeRateWidget() {
 
   return (
     <>
+      <div className="flex items-center justify-between mt-2">
+        <span className="text-[10px]" style={{ color: 'var(--color-text-secondary)' }}>تاریخ امروز</span>
+        <span className="text-[11px] font-bold" style={{ color: 'var(--color-text-secondary)' }}>
+          {weekday}، {todayDate}
+        </span>
+      </div>
+
       <div className="flex items-center justify-between mt-2">
         <span className="text-[10px]" style={{ color: 'var(--color-text-secondary)' }}>نرخ یوان روز</span>
         <span className="flex items-center gap-1">
