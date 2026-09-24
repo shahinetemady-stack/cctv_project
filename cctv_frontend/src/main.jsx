@@ -82,7 +82,7 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       // ?v=11 → URL متفاوت از sw.js قدیمی؛ تضمین می‌کند حتی با کش CDN/مرورگر هم
       // نسخه تازه fetch شود (بررسی آپدیت SW از کش HTTP مرورگر تبعیت می‌کند)
-      navigator.serviceWorker.register('/sw.js?v=11').then(
+      navigator.serviceWorker.register('/sw.js?v=12').then(
         (reg) => {
           console.log('SW registered:', reg.scope)
           // اگر نسخه تازه در راه بود، اجبار به فعال‌سازی فوری (بدون بستن تب‌ها)

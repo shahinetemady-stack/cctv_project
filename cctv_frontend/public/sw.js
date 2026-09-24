@@ -2,7 +2,7 @@
 // Cache-first for static assets — درخواست‌های API اصلاً کش نمی‌شوند
 // (کش شدن پاسخ‌های شخصی مثل سبد خرید باعث می‌شد کاربر سبد پر را خالی ببیند)
 
-const CACHE_NAME = 'cctv-parts-v11';
+const CACHE_NAME = 'cctv-parts-v12';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
