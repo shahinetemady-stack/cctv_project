@@ -13,6 +13,7 @@ POST /api/catalog/products/bulk-upload/ آپلود اکسل (فقط ادمین)
 """
 
 import logging
+import math
 from django.db.models import Count, Prefetch
 from django.http import Http404, HttpResponsePermanentRedirect
 from django_filters.rest_framework import DjangoFilterBackend
@@ -26,6 +27,7 @@ from rest_framework.views import APIView
 from .filters import ProductFilter
 from .models import Category, CategoryBrand, CategorySpecField, ExchangeRateSetting, Package, PackageItem, Product, ProductImage, ProductVariant, SlugRedirect
 from .seo import generate_slug
+from .torob import SITE_BASE_URL as TOROB_SITE_BASE_URL, build_product_payload, verify_torob_token
 from .serializers import (
     CategorySerializer,
     DatasheetPageSerializer,
@@ -1719,3 +1721,89 @@ class PackageImageUploadView(APIView):
         if package.image:
             package.image.delete(save=True)
         return Response(status=204)
+
+
+# ─── Torob Product API v3 ─────────────────────────────────────────────────────
+
+TOROB_PAGE_SIZE = 100
+TOROB_SORTS = {
+    "date_added_desc": "-created_at",
+    "date_updated_desc": "-updated_at",
+}
+
+
+class TorobProductsV3View(APIView):
+    """
+    POST /torob_api/v3/products
+    Torob Product API v3 — ترب لیست محصولات را از اینجا می‌خواند.
+    احراز هویت با JWT هدر X-Torob-Token است (به DRF auth معمولی وابسته نیست).
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        ok, error = verify_torob_token(request)
+        if not ok:
+            return Response({"error": error}, status=403)
+
+        data = request.data
+        if not isinstance(data, dict) or not data:
+            return Response({"error": "بدنه درخواست باید JSON معتبر باشد"}, status=400)
+
+        if "cursor" in data or data.get("sort") == "product_id_desc":
+            return Response({"error": "حالت cursor-based پشتیبانی نمی‌شود"}, status=400)
+
+        qs = (
+            Product.objects.filter(is_active=True)
+            .exclude(availability="discontinued")
+            .select_related("category")
+            .prefetch_related("variants", "images")
+        )
+
+        if "page_urls" in data:
+            urls = data["page_urls"]
+            if not isinstance(urls, list):
+                return Response({"error": "page_urls باید آرایه باشد"}, status=400)
+            prefix = f"{TOROB_SITE_BASE_URL}/products/"
+            slugs = [u[len(prefix):].strip("/") for u in urls if isinstance(u, str) and u.startswith(prefix)]
+            products = list(qs.filter(slug__in=slugs))
+            return self._respond(products, current_page=1)
+
+        if "page_uniques" in data:
+            uniques = data["page_uniques"]
+            if not isinstance(uniques, list):
+                return Response({"error": "page_uniques باید آرایه باشد"}, status=400)
+            ids = [u for u in uniques if str(u).isdigit()]
+            products = list(qs.filter(pk__in=ids))
+            return self._respond(products, current_page=1)
+
+        if "page" in data or "sort" in data:
+            if "page" not in data or "sort" not in data:
+                return Response({"error": "page و sort باید هر دو ارسال شوند"}, status=400)
+            sort = data["sort"]
+            if sort not in TOROB_SORTS:
+                return Response({"error": f"sort نامعتبر است: {sort}"}, status=400)
+            try:
+                page = int(data["page"])
+            except (TypeError, ValueError):
+                return Response({"error": "page باید عدد صحح باشد"}, status=400)
+            if page < 1:
+                return Response({"error": "page از ۱ شروع می‌شود"}, status=400)
+            ordered = qs.order_by(TOROB_SORTS[sort])
+            total = ordered.count()
+            products = list(ordered[(page - 1) * TOROB_PAGE_SIZE: page * TOROB_PAGE_SIZE])
+            return self._respond(products, current_page=page, total=total)
+
+        return Response({"error": "یکی از page_urls، page_uniques یا page+sort الزامی است"}, status=400)
+
+    def _respond(self, products, current_page, total=None):
+        total = len(products) if total is None else total
+        max_pages = math.ceil(total / TOROB_PAGE_SIZE) if total else 0
+        return Response({
+            "api_version": "torob_api_v3",
+            "current_page": current_page,
+            "total": total,
+            "max_pages": max_pages,
+            "next_cursor": None,
+            "products": [build_product_payload(p, self.request) for p in products],
+        })

@@ -250,3 +250,12 @@ DIRECT_PURCHASE_MAX_RIAL = config("DIRECT_PURCHASE_MAX_RIAL", default=200_000_00
 AI_API_KEY  = config("AI_API_KEY",  default="")
 AI_API_BASE = config("AI_API_BASE", default="https://api.moonshot.cn/v1")
 AI_API_MODEL = config("AI_API_MODEL", default="moonshot-v1-8k")
+
+# ─── Torob Product API v3 ────────────────────────────────────────────────────
+# کلید عمومی ed25519 ترب برای بررسی JWT هدر X-Torob-Token — خالی یعنی بدون بررسی (توسعه)
+TOROB_PUBLIC_KEY = config(
+    "TOROB_PUBLIC_KEY",
+    default="-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAt6Mu4T0pBORY11W+QeM35UsmLO3vsf+6yKpFDEImFk0=\n-----END PUBLIC KEY-----",
+)
+# توکن Bearer وب‌هوک ترب — از پشتیبانی ترب گرفته می‌شود؛ خالی یعنی ارسال وب‌هوک غیرفعال
+TOROB_WEBHOOK_TOKEN = config("TOROB_WEBHOOK_TOKEN", default="")

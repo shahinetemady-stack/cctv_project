@@ -10,6 +10,7 @@ from apps.catalog.legacy_redirects import (
 )
 from django.contrib.sitemaps.views import sitemap as sitemap_view
 from config.sitemaps import sitemaps
+from apps.catalog.views import TorobProductsV3View
 
 urlpatterns = [
     # ریدایرکت ۳۰۱ از URLهای سایت قدیمی doorbinkar.com
@@ -22,6 +23,7 @@ urlpatterns = [
     path("sitemap.xml", sitemap_view, {"sitemaps": sitemaps}, name="sitemap"),
     path("llms.txt", llms_txt_view, name="llms-txt"),
     path("", home_view, name="home"),
+    path("torob_api/v3/products", TorobProductsV3View.as_view(), name="torob-products-v3"),
     path("admin/", admin.site.urls),
     path("api/users/", include("apps.users.urls")),
     path("api/catalog/", include("apps.catalog.urls")),

@@ -1,5 +1,14 @@
 # یادداشت پیشرفت پروژه دوربینکار
-> آخرین به‌روزرسانی: ۲۳ سپتامبر ۲۰۲۶ — سازگاری color-mix + دوهسته‌ای‌های دسکتاپ (Win7)
+> آخرین به‌روزرسانی: ۲۵ سپتامبر ۲۰۲۶ — اتصال به ترب (Torob Product API v3)
+
+## ✅ انجام‌شده (۲۵ سپتامبر ۲۰۲۶ — اتصال فروشگاه به ترب)
+- **Torob Product API v3** پیاده و دیپلوی شد: `POST /torob_api/v3/products` (ویو `TorobProductsV3View` در `apps/catalog/views.py`، منطق در `apps/catalog/torob.py`). هر سه حالت درخواست (صفحه‌بندی ۱۰۰تایی با `date_added_desc`/`date_updated_desc`، `page_urls`، `page_uniques`) + خطای 400 برای ورودی نامعتبر. `page_unique = product.id`، `page_url = https://doorbinkar.com/products/{slug}/` (دامنهٔ واقعی سایت doorbinkar.com است — cctvparts.ir که در catalog_admin.py هاردکد شده بود اشتباه/قدیمی است)، قیمت = کمینهٔ `formula_prices["retail"]` واریانت‌ها (ریال، برابر صفحهٔ محصول)، موجودی = `sellable_stock>0 و effective_availability=='auto'`. محصولات غیرفعال/discontinued از فید حذف می‌شوند.
+- **امنیت**: JWT ترب (هدر `X-Torob-Token`، EdDSA با کلید عمومی ترب — دیفالت در settings، قابل override با `TOROB_PUBLIC_KEY`) با PyJWT؛ `audience=request.get_host()`. در DEBUG با نبود هدر، چک رد می‌شود (تست لوکال)؛ اگر هدر باشد همیشه سخت‌گیرانه چک می‌شود. بدون توکن/توکن بد = 403.
+- **Webhook پوش تغییرات**: سیگنال‌های post_save/post_delete روی Product/ProductVariant/ProductImage → صف `torob:dirty` در کش جنگو؛ کامند `push_torob_updates` هر ۵ دقیقه در کران root (لاگ `/var/log/push_torob_updates.log`) به `api.torob.com/update/webhook/v1/` می‌زند. تا گرفتن توکن از پشتیبانی ترب no-op است — توکن را در `TOROB_WEBHOOK_TOKEN` در `.env` سرور بگذار. ⚠️ کش locmem بین ۳ ورکر gunicorn share نمی‌شود؛ هر ورکر صف خودش را دارد (کار می‌کند ولی اگر Redis/Memcached تنظیم شود تمیزتر است).
+- **nginx**: بلاک `location /torob_api/` پروکسی به بک‌اند به `/etc/nginx/sites-enabled/cctv` اضافه شد (بکاپ در `/root/backups/cctv.bak-torob-*` — درس: بکاپ را داخل sites-enabled نگذار، nginx لودش می‌کند). کانفیگ لوکال `deploy/nginx-cctv.conf` هم سینک شد.
+- دیپلوی: بکاپ `/root/backups/backend.bak-torob-*.tgz`، کپی ۸ فایل، `pyjwt[crypto]` روی سرور نصب بود (2.13.0)، ریستارت cctv-backend. اسموک‌تست از بیرون: 403 درست برای بدون‌توکن/توکن‌بد؛ payload محصول در شل سرور سالم (قیمت ۴۱۰٬۰۰۰ ریال برابر سایت).
+- باقی‌مانده سمت کاربر: تیکت به پشتیبانی ترب با آدرس endpoint + درخواست توکن وب‌هوک.
+
 
 ## 🗂 نقشه زیرساخت (مرجع دائمی — قاطی نکن!)
 
