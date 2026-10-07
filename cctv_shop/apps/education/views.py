@@ -159,6 +159,20 @@ from apps.catalog.seo import latin_slugify as _latin_slugify
 from django.utils import timezone
 
 
+def _has_perm(user, code):
+    """چک دسترسی RBAC پرسنل — سوپریوزر همیشه True"""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    sp = getattr(user, 'staff_profile', None)
+    return bool(sp and sp.is_active and sp.has_perm(code))
+
+
+def _forbidden(msg='شما دسترسی لازم برای این عملیات را ندارید'):
+    return Response({'error': msg}, status=403)
+
+
 def _unique_slug(model, base, exclude_pk=None):
     base = _latin_slugify(base) or 'item'
     slug, i = base, 2
@@ -180,7 +194,7 @@ def _article_admin_dict(a):
         'author': a.author, 'tags': a.tags,
         'thumbnail': a.thumbnail.url if a.thumbnail else None,
         'views_count': a.views_count, 'is_published': a.is_published,
-        'publish_at': (lambda dt: timezone.localtime(dt).strftime('%Y-%m-%d %H:%M'))(a.publish_at) if a.publish_at else None,
+        'publish_at': timezone.localtime(a.publish_at).isoformat(timespec='minutes') if a.publish_at else None,
         'created_at': a.created_at.strftime('%Y-%m-%d'),
     }
 
@@ -190,10 +204,14 @@ class AdminArticleListView(APIView):
     permission_classes = [_IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         qs = Article.objects.select_related('category').order_by('-created_at')
         return Response([_article_admin_dict(a) for a in qs])
 
     def post(self, request):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         d = request.data
         if not (d.get('title') or '').strip():
             return Response({'error': 'عنوان الزامی است'}, status=400)
@@ -222,12 +240,16 @@ class AdminArticleDetailView(APIView):
         return Article.objects.select_related('category').filter(pk=pk).first()
 
     def get(self, request, pk):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         a = self._get(pk)
         if a is None:
             return Response({'error': 'یافت نشد'}, status=404)
         return Response(_article_admin_dict(a))
 
     def patch(self, request, pk):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         a = self._get(pk)
         if a is None:
             return Response({'error': 'یافت نشد'}, status=404)
@@ -254,6 +276,8 @@ class AdminArticleDetailView(APIView):
         return Response(_article_admin_dict(a))
 
     def delete(self, request, pk):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         a = self._get(pk)
         if a is None:
             return Response({'error': 'یافت نشد'}, status=404)
@@ -278,10 +302,14 @@ class AdminVideoListView(APIView):
     permission_classes = [_IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         qs = Video.objects.all().order_by('order', '-created_at')
         return Response([_video_admin_dict(v) for v in qs])
 
     def post(self, request):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         d = request.data
         if not (d.get('title') or '').strip():
             return Response({'error': 'عنوان الزامی است'}, status=400)
@@ -309,12 +337,16 @@ class AdminVideoDetailView(APIView):
         return Video.objects.filter(pk=pk).first()
 
     def get(self, request, pk):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         v = self._get(pk)
         if v is None:
             return Response({'error': 'یافت نشد'}, status=404)
         return Response(_video_admin_dict(v))
 
     def patch(self, request, pk):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         v = self._get(pk)
         if v is None:
             return Response({'error': 'یافت نشد'}, status=404)
@@ -340,6 +372,8 @@ class AdminVideoDetailView(APIView):
         return Response(_video_admin_dict(v))
 
     def delete(self, request, pk):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         v = self._get(pk)
         if v is None:
             return Response({'error': 'یافت نشد'}, status=404)
@@ -352,6 +386,8 @@ class AdminArticleCategoryListView(APIView):
     permission_classes = [_IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         cats = ArticleCategory.objects.all().order_by('order', 'name')
         return Response([{
             'id': c.id, 'name': c.name, 'slug': c.slug, 'order': c.order,
@@ -359,6 +395,8 @@ class AdminArticleCategoryListView(APIView):
         } for c in cats])
 
     def post(self, request):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         d = request.data
         name = (d.get('name') or '').strip()
         if not name:
@@ -378,6 +416,8 @@ class AdminArticleImageUploadView(APIView):
     ALLOWED_EXT = ('.jpg', '.jpeg', '.png', '.webp', '.gif')
 
     def post(self, request):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         image = request.FILES.get('image')
         if image is None:
             return Response({'error': 'فایل تصویر ارسال نشده است'}, status=400)
@@ -396,6 +436,8 @@ class AdminArticleCategoryDetailView(APIView):
     permission_classes = [_IsAdminUser]
 
     def delete(self, request, pk):
+        if not _has_perm(request.user, 'content_view'):
+            return _forbidden()
         c = ArticleCategory.objects.filter(pk=pk).first()
         if c is None:
             return Response({'error': 'یافت نشد'}, status=404)

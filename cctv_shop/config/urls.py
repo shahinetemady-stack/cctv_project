@@ -38,5 +38,8 @@ urlpatterns = [
     path("api/assistant/", include("apps.assistant.urls")),
     path("api/payroll/", include("apps.payroll.urls")),
     path("api/expenses/", include("apps.expenses.urls")),
+    path("api/production/", include("apps.production.urls")),
+    path("api/chat/", include("apps.chat.urls")),
+    path("api/publisher/", include("apps.publisher.urls")),
     path("api/leads/", include("apps.leads.urls")),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

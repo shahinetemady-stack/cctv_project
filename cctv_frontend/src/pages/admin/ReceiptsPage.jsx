@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import api from '../../services/api'
 import AmountInput from '../../components/ui/AmountInput'
 import { formatPrice } from '../../utils/format'
-import { formatDate } from '../../utils/date'
+import { formatDate, todayTehran } from '../../utils/date'
 import { mediaUrl } from '../../utils/media'
 import { UserStamp } from '../../components/ui'
 
@@ -23,7 +23,7 @@ const STATUS_BADGE = {
 }
 
 // تاریخ امروز به فرمت YYYY-MM-DD (محلی)
-const todayStr = () => new Date().toLocaleDateString('en-CA')
+const todayStr = todayTehran
 
 // ─── مودال رد فیش (علت الزامی) ───────────────────────────────
 function RejectModal({ receipt, onClose }) {

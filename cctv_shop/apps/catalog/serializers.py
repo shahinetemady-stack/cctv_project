@@ -10,7 +10,7 @@ class CategorySpecFieldSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CategorySpecField
-        fields = ["key", "label", "field_type", "choices", "sort_order"]
+        fields = ["key", "label", "field_type", "choices", "sort_order", "is_filterable"]
 
 
 class CategorySerializer(serializers.ModelSerializer):

@@ -1,4 +1,4 @@
-from datetime import date
+from django.utils import timezone
 
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -220,7 +220,9 @@ class OpenChargesView(APIView):
         from apps.accounting.models import Contact
         from .services import open_charges_for_contact
 
-        contact_id = request.query_params.get("contact_id")
+        contact_id = str(request.query_params.get("contact_id") or "")
+        # id پیشونددار لیست ادغام (c_) را نرمال می‌کند
+        contact_id = contact_id[2:] if contact_id.startswith("c_") else contact_id
         contact = Contact.objects.filter(pk=contact_id).first() if contact_id else None
         if not contact:
             return Response({"error": "طرف حساب نامعتبر"}, status=400)
@@ -366,7 +368,7 @@ class InvestorKardexView(APIView):
         profits = inv.profit_charges.order_by("-year", "-month")
         return Response({
             "investor": InvestorSerializer(inv).data,
-            "principal": investor_principal_at(inv, date.today()),
+            "principal": investor_principal_at(inv, timezone.localdate()),
             "movements": InvestorMovementSerializer(movements, many=True).data,
             "profits": ExpenseChargeSerializer(profits, many=True).data,
         })

@@ -6,9 +6,15 @@ python manage.py sms_payment_reminders
 
 برای هر قسط/سطر تسویه سررسیدگذشته روزی حداکثر یک پیامک ارسال می‌شود
 (تکرار با NotificationLog کنترل می‌شود).
+قاعدهٔ سررسید: نقدی ۳ روز پس از موعد (موعد نقدی = روز صدور)؛ توحسابی/یکماهه/
+دوماهه از فردای موعد. هم فاکتورهای دستی و هم فاکتورهای سفارش سایت پوشش داده
+می‌شوند (هر دو ردیف تسویه دارند).
 """
 
+from datetime import timedelta
+
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.accounting.models import SettlementLine
@@ -20,10 +26,15 @@ class Command(BaseCommand):
     help = "ارسال پیامک یادآوری سررسید بدهی (روزی یک بار برای هر سطر تسویه)"
 
     def handle(self, *args, **options):
-        today = timezone.now().date()
+        today = timezone.localdate()
+        cash_threshold = today - timedelta(days=3)
         lines = (
             SettlementLine.objects
-            .filter(is_active=True, due_date__lt=today, invoice__status="confirmed")
+            .filter(is_active=True, invoice__status="confirmed")
+            .filter(
+                Q(settlement_type="cash", due_date__lte=cash_threshold)
+                | Q(settlement_type__in=["credit", "month1", "month2"], due_date__lt=today)
+            )
             .select_related("invoice", "invoice__customer")
         )
         sent = skipped = 0

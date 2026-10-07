@@ -8,6 +8,7 @@ import { useAfterLoad } from '../../hooks/useAfterLoad'
 // نام موتورها برای نمایش به ادمین
 const ENGINE_NAMES = {
   gemini: 'Gemini', modelscope: 'ModelScope Qwen3', zai: 'z.ai GLM', deepseek: 'DeepSeek', qwen: 'Qwen لوکال',
+  search: '🔎 جستجوی هوشمند',
 }
 
 // ─── هوک ارتفاع خودکار تکست‌اریا ──────────────────────────────
@@ -33,9 +34,107 @@ function TypingDots() {
   )
 }
 
-// ─── صورت ربات (مثل ماسکات Kimi ولی با طلایی سایت) ────────────
-// حالت‌ها: idle | listening (دارد به سوال گوش می‌دهد) | thinking | happy
+// ─── ربات Bumble-Bot — SVG با متریال سه‌بعدی و اعضای متحرک ─────
+// حالت‌ها: idle | listening | thinking | happy — انیمیشن اعضا در index.css (.bot3d-*)
+// چشم‌ها پلک می‌زنند و نگاه می‌چرخانند، دهان تغییر می‌کند، دست‌ها تکان می‌خورند،
+// آنتن‌ها می‌لرزند و تراستر زیر بدن شعله‌ور است.
 function BotFace({ size = 40, state = 'idle' }) {
+  return (
+    <span className={`bot-face bot-3d bot-face-${state}`} style={{ width: size, height: size, flexShrink: 0 }}>
+      <svg viewBox="0 0 120 120" width="100%" height="100%" aria-hidden="true">
+        <defs>
+          <radialGradient id="b3d-body" cx="35%" cy="26%" r="85%">
+            <stop offset="0%" stopColor="#ffe89a" />
+            <stop offset="45%" stopColor="#ffca28" />
+            <stop offset="100%" stopColor="#ef9b0f" />
+          </radialGradient>
+          <radialGradient id="b3d-visor" cx="50%" cy="28%" r="95%">
+            <stop offset="0%" stopColor="#3d3d3d" />
+            <stop offset="60%" stopColor="#191919" />
+            <stop offset="100%" stopColor="#0a0a0a" />
+          </radialGradient>
+          <radialGradient id="b3d-ball" cx="35%" cy="30%" r="80%">
+            <stop offset="0%" stopColor="#ffe082" />
+            <stop offset="100%" stopColor="#f9a825" />
+          </radialGradient>
+          <radialGradient id="b3d-flameg" cx="50%" cy="30%" r="80%">
+            <stop offset="0%" stopColor="#fff9c4" />
+            <stop offset="55%" stopColor="#ffd54f" />
+            <stop offset="100%" stopColor="rgba(255,179,0,0)" />
+          </radialGradient>
+          <linearGradient id="b3d-metal" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#9e9e9e" />
+            <stop offset="50%" stopColor="#e0e0e0" />
+            <stop offset="100%" stopColor="#757575" />
+          </linearGradient>
+          <filter id="b3d-glow" x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="1.7" />
+          </filter>
+        </defs>
+        {/* آنتن‌ها */}
+        <g className="bot3d-ant-l">
+          <line x1="48" y1="27" x2="42" y2="9" stroke="url(#b3d-metal)" strokeWidth="3.4" strokeLinecap="round" />
+          <circle cx="42" cy="7.5" r="5.2" fill="url(#b3d-ball)" />
+        </g>
+        <g className="bot3d-ant-r">
+          <line x1="72" y1="27" x2="78" y2="9" stroke="url(#b3d-metal)" strokeWidth="3.4" strokeLinecap="round" />
+          <circle cx="78" cy="7.5" r="5.2" fill="url(#b3d-ball)" />
+        </g>
+        {/* دست‌ها (بال‌های کناری) */}
+        <g className="bot3d-arm-l">
+          <circle cx="21" cy="58" r="5.6" fill="#5a5a5a" />
+          <ellipse cx="14" cy="70" rx="7.2" ry="16" fill="url(#b3d-body)" transform="rotate(16 14 70)" />
+        </g>
+        <g className="bot3d-arm-r">
+          <circle cx="99" cy="58" r="5.6" fill="#5a5a5a" />
+          <ellipse cx="106" cy="70" rx="7.2" ry="16" fill="url(#b3d-body)" transform="rotate(-16 106 70)" />
+        </g>
+        {/* بدن گوی زرد براق */}
+        <circle cx="60" cy="63" r="40" fill="url(#b3d-body)" />
+        {/* تراستر زیر بدن + شعله */}
+        <path d="M 51 101 L 69 101 L 65.5 108 L 54.5 108 Z" fill="#4a4a4a" />
+        <ellipse className="bot3d-flame" cx="60" cy="112" rx="6.5" ry="5" fill="url(#b3d-flameg)" />
+        {/* برجستگی نور روی بدن */}
+        <ellipse cx="45" cy="37" rx="17" ry="8.5" fill="#ffffff" opacity="0.38" transform="rotate(-20 45 37)" />
+        {/* قاب صورت و ویزور مشکی */}
+        <rect x="25" y="45" width="70" height="41" rx="20.5" fill="#4d4d4d" />
+        <rect x="25" y="45" width="70" height="41" rx="20.5" fill="none" stroke="rgba(255,255,255,0.14)" strokeWidth="1" />
+        <rect x="28" y="48" width="64" height="35" rx="17.5" fill="url(#b3d-visor)" />
+        {/* بازتاب شیشه ویزور */}
+        <ellipse cx="48" cy="54" rx="16" ry="5" fill="#ffffff" opacity="0.07" />
+        {/* هاله درخشش چشم‌ها */}
+        <g fill="#ffd54f" opacity="0.55" filter="url(#b3d-glow)">
+          <ellipse className="bot3d-eye" cx="46" cy="62" rx="6.4" ry="9" />
+          <ellipse className="bot3d-eye" cx="74" cy="62" rx="6.4" ry="9" />
+        </g>
+        {/* چشم‌ها */}
+        <ellipse className="bot3d-eye" cx="46" cy="62" rx="6.4" ry="9" fill="#ffd54f" />
+        <ellipse className="bot3d-eye" cx="74" cy="62" rx="6.4" ry="9" fill="#ffd54f" />
+        {/* چشم‌های هلالی حالت خوشحال */}
+        <g className="bot3d-eye-happy" stroke="#ffd54f" strokeWidth="3.4" strokeLinecap="round" fill="none">
+          <path d="M 39.5 64 Q 46 55.5 52.5 64" />
+          <path d="M 67.5 64 Q 74 55.5 80.5 64" />
+        </g>
+        {/* لبخند */}
+        <path className="bot3d-smile" d="M 48.5 76.5 Q 60 82.5 71.5 76.5" stroke="#ffd54f" strokeWidth="2.9" strokeLinecap="round" fill="none" />
+      </svg>
+    </span>
+  )
+}
+
+// طرح تصویر ثابت (رندر کاربر) — نگه داشته شده برای بازگشت احتمالی
+// eslint-disable-next-line no-unused-vars
+function BotFaceImg({ size = 40, state = 'idle' }) {
+  return (
+    <span className={`bot-face bot-img bot-face-${state}`} style={{ width: size, height: size, flexShrink: 0 }}>
+      <img src="/images/robot.webp" alt="دستیار هوشمند" draggable={false} />
+    </span>
+  )
+}
+
+// طرح قدیمی ربات (گوی طلایی CSS با چشم) — فعلاً نگه داشته شده برای بازگشت احتمالی
+// eslint-disable-next-line no-unused-vars
+function BotFaceClassic({ size = 40, state = 'idle' }) {
   return (
     <span className={`bot-face bot-face-${state}`} style={{ width: size, height: size, flexShrink: 0 }}>
       <span className="bot-eye" />
@@ -351,11 +450,18 @@ export default function SmartSearch() {
 
   return (
     <>
-    <div ref={frameRef} className={`liquid-metal-frame${botAway ? ' bot-away' : ''}`} style={{ boxShadow: 'var(--shadow-card-hover), 0 0 60px rgba(251,192,45,0.10)' }}>
-    <div className="liquid-metal-inner">
-      {/* ناحیه گفتگو — پاسخ زیر سوال، مثل دستیار هوشمند سایت */}
+    <div style={{ position: 'relative' }}>
+      {/* ناحیه گفتگو — اوورلی بیرون از قاب (قاب liquid-metal overflow:hidden دارد و
+          اوورلی داخلش را می‌بُرد). بالای باکس ورودی باز می‌شود تا ارتفاع هیرو ثابت بماند */}
       {started && (
-        <div style={{ maxHeight: 340, overflowY: 'auto', padding: '16px 16px 6px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{
+          position: 'absolute', bottom: 'calc(100% + 10px)', right: 0, left: 0, zIndex: 60,
+          maxHeight: 'min(52vh, 430px)', overflowY: 'auto',
+          padding: '16px 16px 10px', display: 'flex', flexDirection: 'column', gap: 10,
+          background: 'var(--color-bg-primary, #0b1220)',
+          border: '1px solid var(--color-border)', borderRadius: 16,
+          boxShadow: '0 -18px 60px rgba(0,0,0,0.55)',
+        }}>
           {messages.map((m, i) => (
             <div key={i} style={{ textAlign: m.role === 'user' ? 'right' : 'left' }}>
               <div
@@ -406,13 +512,15 @@ export default function SmartSearch() {
         </div>
       )}
 
+    <div ref={frameRef} className={`liquid-metal-frame${botAway ? ' bot-away' : ''}`} style={{ boxShadow: 'var(--shadow-card-hover), 0 0 60px rgba(251,192,45,0.10)' }}>
+    <div className="liquid-metal-inner">
       {/* باکس ورودی — با فوکوس بزرگ‌تر می‌شود؛ گوی ربات بالا می‌ماند */}
       <div
         className="smart-input-wrap"
         style={{
-          display: 'flex', alignItems: 'flex-start', gap: 10,
+          display: 'flex', alignItems: 'flex-start', gap: 10, flexShrink: 0,
           padding: '8px 12px',
-          borderTop: started ? '1px solid var(--color-border)' : 'none',
+          borderTop: 'none',
           transition: 'box-shadow 0.25s ease',
         }}
       >
@@ -431,7 +539,7 @@ export default function SmartSearch() {
           rows={1}
           placeholder={started ? 'سوال بعدی‌ات را بنویس...' : typedPlaceholder}
           style={{
-            flex: 1, alignSelf: 'center', minHeight: focused ? 156 : 24, maxHeight: 200,
+            flex: 1, alignSelf: 'center', minHeight: focused ? (started ? 44 : 96) : 24, maxHeight: 140,
             resize: 'none', overflow: 'hidden',
             background: 'transparent', border: 'none', outline: 'none',
             color: 'var(--color-text-primary)', fontSize: 14, lineHeight: 1.9,
@@ -457,19 +565,17 @@ export default function SmartSearch() {
               transition: 'opacity 0.2s, transform 0.15s',
             }}
           >
-            <BotFace size={40} state={botState} />
+            <BotFace size={60} state={botState} />
           </button>
         </div>
       </div>
     </div>
     </div>
+    </div>
     {showFlyer && createPortal(
       <div ref={flyerRef} className={`bot-flyer${entering ? ' entering' : ''}${exiting ? ' exiting' : ''}${landing ? ' landing' : ''}`}
         style={{ left: origin ? origin.x : posRef.current.x, top: origin ? origin.y : posRef.current.y }}>
-        <span className="bot-face" style={{ width: 36, height: 36 }}>
-          <span className="bot-eye" />
-          <span className="bot-eye" />
-        </span>
+        <BotFace size={54} />
       </div>,
       document.body
     )}

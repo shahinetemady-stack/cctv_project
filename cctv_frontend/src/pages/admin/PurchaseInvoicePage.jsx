@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../../services/api'
-import { formatDate } from '../../utils/date'
+import { formatDate, todayTehran } from '../../utils/date'
 import usePermissions from '../../hooks/usePermissions'
 import AmountInput from '../../components/ui/AmountInput'
 import SearchSelect, { advanceFlow } from '../../components/ui/SearchSelect'
@@ -87,7 +87,7 @@ function InvoiceDetail({ id, onClose, onEdit }) {
   const [payForm, setPayForm] = useState({
     show: false, direction: 'out', payment_type: 'transfer',
     currency: 'CNY', amount: '', rate_irr: '',
-    date: new Date().toISOString().split('T')[0], reference: '',
+    date: todayTehran(), reference: '',
   })
   const [confirmDelete, setConfirmDelete] = useState(false)
 
@@ -129,7 +129,7 @@ function InvoiceDetail({ id, onClose, onEdit }) {
             ) : null}
             {inv.received_at && (
               <div className="text-[10px] text-blue-400 mt-1">
-                دریافت شده در: {new Date(inv.received_at).toLocaleDateString('fa-IR')}
+                دریافت شده در: {new Date(inv.received_at).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}
               </div>
             )}
             {/* حسابرسی — ثبت و ویرایش توسط چه کسی و چه زمانی */}
@@ -347,7 +347,7 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
   const [hdr, setHdr] = useState({
     supplier_id: '',
     invoice_number: '',
-    date: new Date().toISOString().split('T')[0],
+    date: todayTehran(),
     warehouse_id: '',
     warehouse_destination_id: '',
     shipping_contact_id: '',
@@ -428,7 +428,8 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
     onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || (editing ? 'خطا در ویرایش فاکتور' : 'خطا در ثبت سفارش') }),
   })
 
-  const suppliers = contacts.filter(c => ['supplier_cn', 'other'].includes(c.contact_type))
+  // خرید ممکن است از هر طرف حسابی باشد (تامین‌کننده چینی، مشتری، همکار و...) — همه نمایش داده می‌شوند
+  const suppliers = contacts
   const shippers = contacts.filter(c => ['clearance', 'shipping_co'].includes(c.contact_type))
   // انبارهای در راه را اول لیست بگذار
   const transitWarehouses = warehouses.filter(w => TRANSIT_TYPES.includes(w.warehouse_type))
@@ -599,10 +600,10 @@ function NewInvoiceForm({ onClose, onSuccess, editing }) {
               )}
             </div>
             <SearchSelect
-              options={suppliers.map(c => ({ value: c.id, label: c.name, sub: c.phone }))}
+              options={suppliers.map(c => ({ value: c.id, label: c.name, sub: [c.contact_type_display, c.phone].filter(Boolean).join(' — ') }))}
               value={hdr.supplier_id}
               onChange={v => setHdr(h => ({ ...h, supplier_id: v }))}
-              placeholder="جستجو و انتخاب تامین‌کننده..."
+              placeholder="جستجو و انتخاب طرف حساب..."
               flow="pi"
             />
           </div>

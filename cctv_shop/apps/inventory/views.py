@@ -6,6 +6,26 @@ from .models import Warehouse, WarehouseStock, StockMovement, StockTransfer
 from apps.core.utils import user_label
 
 
+# ─── RBAC helpers ────────────────────────────────────────────
+
+def _has_perm(user, code):
+    """چک دسترسی RBAC پرسنل — سوپریوزر همیشه True"""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    sp = getattr(user, 'staff_profile', None)
+    return bool(sp and sp.is_active and sp.has_perm(code))
+
+
+def _has_any_perm(user, *codes):
+    return any(_has_perm(user, c) for c in codes)
+
+
+def _forbidden(msg='شما دسترسی لازم برای این عملیات را ندارید'):
+    return Response({'error': msg}, status=403)
+
+
 class PublicStockView(APIView):
     permission_classes = [AllowAny]
     def get(self, request, variant_id):
@@ -19,6 +39,8 @@ class PublicStockView(APIView):
 class KardexView(APIView):
     permission_classes = [IsAdminUser]
     def get(self, request, variant_id):
+        if not _has_perm(request.user, 'kardex_view'):
+            return _forbidden()
         from apps.accounting.models import SaleInvoice, PurchaseInvoice
         warehouse_id = request.query_params.get("warehouse")
         qs = StockMovement.objects.filter(variant_id=variant_id).select_related("warehouse", "created_by")
@@ -60,6 +82,8 @@ class WarehouseSummaryView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_any_perm(request.user, 'warehouses_view', 'kardex_view', 'purchase_view', 'products_edit', 'categories_view'):
+            return _forbidden()
         warehouses = Warehouse.objects.filter(is_active=True)
         result = []
         for w in warehouses:
@@ -75,6 +99,8 @@ class WarehouseSummaryView(APIView):
 
     def post(self, request):
         """ساخت انبار جدید"""
+        if not _has_any_perm(request.user, 'warehouses_view', 'kardex_view', 'purchase_view', 'products_edit', 'categories_view'):
+            return _forbidden()
         data = request.data
         name = (data.get("name") or "").strip()
         code = (data.get("code") or "").strip()
@@ -104,6 +130,8 @@ class WarehouseDetailView(APIView):
 
     def patch(self, request, pk):
         """ویرایش مشخصات انبار — نام، کد، نوع، نمایش به مشتری، فعال/غیرفعال، آدرس"""
+        if not _has_any_perm(request.user, 'warehouses_view', 'kardex_view', 'purchase_view', 'products_edit', 'categories_view'):
+            return _forbidden()
         try:
             w = Warehouse.objects.get(pk=pk)
         except Warehouse.DoesNotExist:
@@ -144,6 +172,8 @@ class WarehouseDetailView(APIView):
         })
 
     def delete(self, request, pk):
+        if not _has_any_perm(request.user, 'warehouses_view', 'kardex_view', 'purchase_view', 'products_edit', 'categories_view'):
+            return _forbidden()
         try:
             w = Warehouse.objects.get(pk=pk)
         except Warehouse.DoesNotExist:
@@ -162,6 +192,8 @@ class WarehouseStockListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request, pk):
+        if not _has_any_perm(request.user, 'warehouses_view', 'kardex_view', 'purchase_view', 'products_edit', 'categories_view'):
+            return _forbidden()
         stocks = (
             WarehouseStock.objects.filter(warehouse_id=pk, quantity__gt=0)
             .select_related("variant__product")
@@ -180,11 +212,13 @@ class WarehouseStockListView(APIView):
 class TransferListCreateView(APIView):
     """
     GET  /api/inventory/transfers/ — آخرین انتقال‌ها
-    POST /api/inventory/transfers/ — انتقال کالا بین دو انبار
+    POST /api/inventory/transfers/ — انتقال کالا بین دو انبار (تکی یا جمعی با items=[{variant_id, quantity}])
     """
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'warehouses_view'):
+            return _forbidden()
         transfers = StockTransfer.objects.select_related(
             "from_warehouse", "to_warehouse", "variant__product", "transferred_by", "updated_by"
         )[:100]
@@ -204,6 +238,8 @@ class TransferListCreateView(APIView):
         return Response(data)
 
     def post(self, request):
+        if not _has_perm(request.user, 'warehouses_view'):
+            return _forbidden()
         from django.db import transaction
         from apps.catalog.models import ProductVariant
 
@@ -211,49 +247,77 @@ class TransferListCreateView(APIView):
         try:
             from_id  = int(data.get("from_warehouse_id"))
             to_id    = int(data.get("to_warehouse_id"))
-            variant_id = int(data.get("variant_id"))
-            quantity = int(data.get("quantity"))
         except (TypeError, ValueError):
             return Response({"error": "مقادیر ورودی نامعتبر است"}, status=400)
         note = data.get("note", "")
 
         if from_id == to_id:
             return Response({"error": "انبار مبدأ و مقصد نمی‌تواند یکی باشد"}, status=400)
-        if quantity <= 0:
-            return Response({"error": "تعداد باید بزرگ‌تر از صفر باشد"}, status=400)
+
+        # حالت جمعی: items=[{variant_id, quantity}] — حالت تکی (سازگاری قدیمی): variant_id+quantity
+        raw_items = data.get("items")
+        if raw_items is None:
+            raw_items = [{"variant_id": data.get("variant_id"), "quantity": data.get("quantity")}]
+        items = []
+        seen = set()
+        for it in raw_items:
+            try:
+                vid = int(it.get("variant_id"))
+                qty = int(it.get("quantity"))
+            except (TypeError, ValueError, AttributeError):
+                return Response({"error": "مقادیر ورودی نامعتبر است"}, status=400)
+            if qty <= 0:
+                return Response({"error": "تعداد باید بزرگ‌تر از صفر باشد"}, status=400)
+            if vid in seen:
+                return Response({"error": "یک محصول دوبار در لیست آمده — تعدادش را در همان ردیف اصلاح کنید"}, status=400)
+            seen.add(vid)
+            items.append((vid, qty))
+        if not items:
+            return Response({"error": "حداقل یک قلم کالا لازم است"}, status=400)
 
         try:
             from_w = Warehouse.objects.get(pk=from_id, is_active=True)
             to_w   = Warehouse.objects.get(pk=to_id, is_active=True)
-            variant = ProductVariant.objects.get(pk=variant_id, is_active=True)
         except Warehouse.DoesNotExist:
             return Response({"error": "انبار یافت نشد"}, status=404)
-        except ProductVariant.DoesNotExist:
+        variants = {v.id: v for v in ProductVariant.objects.filter(pk__in=seen, is_active=True)}
+        missing = seen - set(variants)
+        if missing:
             return Response({"error": "محصول یافت نشد"}, status=404)
 
         try:
             with transaction.atomic():
-                transfer = StockTransfer.objects.create(
-                    from_warehouse=from_w, to_warehouse=to_w,
-                    variant=variant, quantity=quantity, note=note,
-                    transferred_by=request.user, status=StockTransfer.Status.DONE,
-                )
-                ref = f"TR-{transfer.id}"
-                StockMovement.record(
-                    warehouse=from_w, variant=variant,
-                    movement_type="transfer_out", quantity=-quantity,
-                    reference=ref, note=note, user=request.user,
-                )
-                StockMovement.record(
-                    warehouse=to_w, variant=variant,
-                    movement_type="transfer_in", quantity=quantity,
-                    reference=ref, note=note, user=request.user,
-                )
+                # همه یا هیچ‌کدام — اگر موجودی یک قلم کافی نباشد هیچ انتقالی ثبت نمی‌شود
+                transfer_ids = []
+                for vid, qty in items:
+                    variant = variants[vid]
+                    transfer = StockTransfer.objects.create(
+                        from_warehouse=from_w, to_warehouse=to_w,
+                        variant=variant, quantity=qty, note=note,
+                        transferred_by=request.user, status=StockTransfer.Status.DONE,
+                    )
+                    transfer_ids.append(transfer.id)
+                    ref = f"TR-{transfer.id}"
+                    StockMovement.record(
+                        warehouse=from_w, variant=variant,
+                        movement_type="transfer_out", quantity=-qty,
+                        reference=ref, note=note, user=request.user,
+                    )
+                    StockMovement.record(
+                        warehouse=to_w, variant=variant,
+                        movement_type="transfer_in", quantity=qty,
+                        reference=ref, note=note, user=request.user,
+                    )
         except ValueError as e:
             return Response({"error": str(e)}, status=400)
 
-        return Response({"success": True, "id": transfer.id,
-                         "message": f"{quantity} عدد از «{from_w.name}» به «{to_w.name}» منتقل شد"}, status=201)
+        total_qty = sum(q for _, q in items)
+        if len(items) == 1:
+            msg = f"{total_qty} عدد از «{from_w.name}» به «{to_w.name}» منتقل شد"
+        else:
+            msg = f"{len(items)} قلم کالا (مجموع {total_qty} عدد) از «{from_w.name}» به «{to_w.name}» منتقل شد"
+        return Response({"success": True, "ids": transfer_ids, "count": len(items),
+                         "message": msg}, status=201)
 
 
 class StockMovementCreateView(APIView):
@@ -264,6 +328,8 @@ class StockMovementCreateView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request):
+        if not _has_perm(request.user, 'kardex_edit'):
+            return _forbidden()
         from django.db import transaction
         data = request.data
 
@@ -355,6 +421,8 @@ class AdminStockView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request, variant_id):
+        if not _has_perm(request.user, 'kardex_view'):
+            return _forbidden()
         stocks = WarehouseStock.objects.filter(
             variant_id=variant_id,
             warehouse__is_active=True,

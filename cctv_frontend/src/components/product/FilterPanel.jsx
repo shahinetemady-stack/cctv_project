@@ -275,10 +275,11 @@ export default function FilterPanel({ filters, onChange }) {
   const rootCategories = allCategories.filter(c => !c.parent)
 
   // ویژگی‌های دسته: از ریشه + خود دسته (در صورت انتخاب زیردسته)
+  // فقط تیک‌خورده‌ها (is_filterable) در پنل فیلتر می‌آیند — بقیه فقط در مشخصات محصول دیده می‌شوند
   const specFields = [
     ...(parentCat?.spec_fields || []),
     ...(selectedCat?.spec_fields || []),
-  ]
+  ].filter(f => f.is_filterable !== false)
 
   // برندها فقط از دسته اصلی انتخاب‌شده — از API دسته‌ها می‌آید پس با مدیریت
   // «ویژگی‌های دسته‌ها» همیشه سینک است (افزودن/ویرایش/حذف خودکار اعمال می‌شود)

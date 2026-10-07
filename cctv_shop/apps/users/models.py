@@ -81,7 +81,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         from django.utils import timezone
         from apps.accounting.models import SettlementLine
 
-        today = timezone.now().date()
+        today = timezone.localdate()
         lines = (
             SettlementLine.objects
             .filter(invoice__customer=self, due_date__lt=today, is_active=True)
@@ -153,6 +153,10 @@ class UserProfile(TimeStampedModel):
     is_approved = models.BooleanField(
         default=False, verbose_name="تأیید همکار",
         help_text="ادمین باید این را دستی فعال کند",
+    )
+    approved_at = models.DateTimeField(
+        null=True, blank=True, verbose_name="زمان تأیید همکار",
+        help_text="فقط در لحظه تأیید درخواست همکاری ست می‌شود — با ویرایش پروفایل تغییر نمی‌کند",
     )
     partner_tier = models.CharField(
         max_length=10, blank=True,
@@ -354,6 +358,8 @@ PERMISSIONS = [
     ('purchase_view',    'مشاهده فاکتورهای خرید'),
     ('purchase_create',  'ثبت فاکتور خرید'),
     ('purchase_edit',    'ویرایش/حذف فاکتور خرید'),
+    # دریافت و پرداخت
+    ('payment_view',     'دریافت و پرداخت'),
     ('payment_edit',     'ویرایش/حذف دریافت و پرداخت'),
     # طرف حساب
     ('contacts_view',    'مشاهده طرف حساب‌ها'),
@@ -384,6 +390,36 @@ PERMISSIONS = [
     # هزینه‌ها
     ('expenses_view',    'مشاهده هزینه‌ها'),
     ('expenses_edit',    'ثبت و ویرایش هزینه‌ها'),
+    # تولید (مونتاژ)
+    ('production_view',   'مشاهده امور تولید'),
+    ('production_manage', 'تعریف دستوره و اجرای مونتاژ'),
+    # چت مشتریان
+    ('chat_view',        'مشاهده چت مشتریان'),
+    ('chat_reply',       'پاسخ به چت مشتریان'),
+    # انتشار در پیام‌رسان‌ها
+    ('publisher_view',        'مشاهده انتشار محتوا'),
+    ('publisher_publish',     'ایجاد و انتشار محتوا در پیام‌رسان‌ها'),
+    ('publisher_approve',     'تأیید/رد محتوای آماده انتشار'),
+    ('publisher_credentials', 'مدیریت توکن پیام‌رسان‌ها'),
+    # منوها
+    ('pricelist_view',          'مشاهده لیست قیمت'),
+    ('orders_view',             'مشاهده سفارشات'),
+    ('aging_view',              'مطالبات تاریخ‌گذشته'),
+    ('reject_report_view',      'گزارش رد سفارش‌ها'),
+    ('warehouses_view',         'مشاهده انبارها'),
+    ('content_view',            'مدیریت محتوای آموزشی'),
+    ('packages_view',           'مدیریت پکیج‌ها'),
+    ('backup_view',             'بک‌آپ سیستم'),
+    ('category_fields_view',    'ویژگی‌های دسته‌ها'),
+    ('categories_view',         'مدیریت دسته‌بندی محصولات'),
+    ('shortage_view',           'گزارش مازاد تقاضا'),
+    ('sms_settings_view',       'تنظیمات پیامک'),
+    ('assistant_settings_view', 'ربات هوشمند'),
+    ('club_settings_view',      'باشگاه همکاران'),
+    ('sms_campaign_view',       'کمپین پیامکی'),
+    ('leads_view',              'مخاطبان تبلیغاتی'),
+    ('stats_view',              'آمار سایت'),
+    ('services_view',           'سرویس‌ها و اشتراک‌ها'),
 ]
 
 PERMISSION_CHOICES = [(k, v) for k, v in PERMISSIONS]

@@ -10,3 +10,6 @@ django-import-export>=3.3.0
 djangorestframework-simplejwt>=5.3.0
 holidays>=0.40
 pyjwt[crypto]>=2.8.0
+pyzipper>=0.4.0
+arabic-reshaper>=3.0
+python-bidi>=0.4

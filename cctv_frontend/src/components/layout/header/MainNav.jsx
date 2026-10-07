@@ -173,8 +173,13 @@ export default function MainNav() {
                           />
                         </div>
 
-                        {/* آیتم‌ها */}
-                        <div className="flex-1 p-3 space-y-1 overflow-y-auto min-h-0">
+                        {/* آیتم‌ها — فشرده: توضیحات به tooltip (title) منتقل شده تا منو کوتاه شود؛
+                            این متن‌ها فقط هنگام hover در SPA رندر می‌شدند و برای خزنده‌ها (رندر داینامیک) نقشی نداشتند، پس سئو دست نمی‌خورد */}
+                        <div className={`flex-1 p-2 min-h-0 overflow-y-auto ${
+                          group.id === 'shop' && categories.length > 0
+                            ? 'grid grid-cols-2 gap-x-1 gap-y-0.5 content-start'
+                            : 'space-y-0.5'
+                        }`}>
                           {group.items.map((item, idx) => (
                             <div
                               key={item.href}
@@ -183,41 +188,39 @@ export default function MainNav() {
                             >
                               <Link
                                 to={item.href}
+                                title={item.desc}
                                 onClick={() => { suppressHoverRef.current = true; setHoveredNav(null) }}
-                                className={`group flex items-center gap-3.5 p-3 rounded-xl border transition-all duration-200 ${
+                                className={`group flex items-center gap-2.5 px-2.5 py-2 rounded-xl border transition-all duration-200 ${
                                   isActive(item.href)
                                     ? 'border-[rgba(251,192,45,0.4)] bg-[var(--color-brand-soft)]'
                                     : 'border-transparent hover:border-[rgba(251,192,45,0.3)] hover:bg-[var(--color-brand-softer)]'
                                 }`}
                               >
                                 <span
-                                  className="w-10 h-10 flex-shrink-0 rounded-xl flex items-center justify-center text-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] transition-all duration-200 group-hover:border-transparent group-hover:!bg-[image:var(--gradient-gold)] group-hover:text-black group-hover:shadow-[var(--shadow-gold)]"
+                                  className="w-8 h-8 flex-shrink-0 rounded-lg flex items-center justify-center text-sm border border-[var(--color-border)] bg-[var(--color-bg-secondary)] transition-all duration-200 group-hover:border-transparent group-hover:!bg-[image:var(--gradient-gold)] group-hover:text-black group-hover:shadow-[var(--shadow-gold)]"
                                 >
                                   {item.icon}
                                 </span>
                                 <span className="min-w-0 flex-1">
                                   <span
-                                    className={`block text-[13px] font-bold transition-colors ${
+                                    className={`block text-[13px] font-bold truncate transition-colors ${
                                       isActive(item.href) ? 'text-gold' : 'text-[var(--color-text-primary)] group-hover:text-gold'
                                     }`}
                                   >
                                     {item.label}
-                                  </span>
-                                  <span className="block text-[11px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-                                    {item.desc}
                                   </span>
                                 </span>
                               </Link>
 
                               {/* زیردسته‌های دسته فروشگاه */}
                               {group.id === 'shop' && item.children && item.children.length > 0 && (
-                                <div className="flex flex-wrap gap-2 mt-2 mr-14">
+                                <div className="flex flex-wrap gap-1.5 mt-1.5 mr-10 mb-1">
                                   {item.children.map((child) => (
                                     <Link
                                       key={child.slug}
                                       to={`/categories/${child.slug}`}
                                       onClick={() => setHoveredNav(null)}
-                                      className="text-[11px] px-2.5 py-1 rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-gold hover:border-[rgba(251,192,45,0.4)] hover:bg-[var(--color-brand-softer)] transition-colors"
+                                      className="text-[11px] px-2 py-0.5 rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-gold hover:border-[rgba(251,192,45,0.4)] hover:bg-[var(--color-brand-softer)] transition-colors"
                                     >
                                       {child.name}
                                     </Link>

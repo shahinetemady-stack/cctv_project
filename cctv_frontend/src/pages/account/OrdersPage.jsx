@@ -7,7 +7,7 @@ import { PageLoader } from '../../components/ui'
 import AmountInput from '../../components/ui/AmountInput'
 import useAuthStore from '../../store/useAuthStore'
 import { formatPrice } from '../../utils/format'
-import { formatDate } from '../../utils/date'
+import { formatDate, todayTehran } from '../../utils/date'
 import { mediaUrl } from '../../utils/media'
 
 const STATUS = {
@@ -30,7 +30,7 @@ const RECEIPT_STATUS = {
 }
 
 // تاریخ امروز به فرمت YYYY-MM-DD (محلی، نه UTC)
-const todayStr = () => new Date().toLocaleDateString('en-CA')
+const todayStr = todayTehran
 
 // مبلغ قابل پرداخت سفارش — اولویت با مانده اقلام تسویه، بعد مبلغ تأییدشده، بعد جمع سفارش
 function payableAmount(order) {
@@ -244,7 +244,7 @@ function ProformaInvoice({ order, onClose }) {
             <div style={{textAlign:'left'}}>
               <div style={{fontSize:15,fontWeight:'bold'}}>پیش‌فاکتور</div>
               <div style={{fontSize:11,color:'#666'}}>شماره: {order.order_number}</div>
-              <div style={{fontSize:11,color:'#666'}}>تاریخ: {new Date(order.created_at).toLocaleDateString('fa-IR')}</div>
+              <div style={{fontSize:11,color:'#666'}}>تاریخ: {new Date(order.created_at).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}</div>
             </div>
           </div>
 
@@ -299,7 +299,7 @@ function ProformaInvoice({ order, onClose }) {
               <div style={{fontWeight:'bold',marginBottom:6,color:'#2e7d32'}}>✅ اطلاعات پرداخت</div>
               {order.paid_amount && <div>مبلغ پرداخت شده: {Number(order.paid_amount).toLocaleString('fa-IR')} ریال</div>}
               {order.payment_method && <div>روش پرداخت: {PAYMENT_METHOD[order.payment_method] || order.payment_method}</div>}
-              {order.paid_at && <div>تاریخ پرداخت: {new Date(order.paid_at).toLocaleDateString('fa-IR')}</div>}
+              {order.paid_at && <div>تاریخ پرداخت: {new Date(order.paid_at).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}</div>}
             </div>
           )}
 
@@ -415,7 +415,7 @@ export default function OrdersPage() {
                         </span>
                       )}
                     </div>
-                    <div className="text-xs text-gray-steel mt-0.5">{new Date(order.created_at).toLocaleDateString('fa-IR')}</div>
+                    <div className="text-xs text-gray-steel mt-0.5">{new Date(order.created_at).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}</div>
                   </div>
                   <span className="text-xs px-3 py-1 rounded-full font-medium"
                     style={{color:st.color, background:st.bg}}>{st.label}</span>

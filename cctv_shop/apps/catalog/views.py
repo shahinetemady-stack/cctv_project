@@ -216,6 +216,8 @@ class ProductBrandsManageView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
         rows = (
             Product.objects.exclude(brand__isnull=True).exclude(brand="")
             .values("brand").annotate(count=Count("id")).order_by("brand")
@@ -223,6 +225,8 @@ class ProductBrandsManageView(APIView):
         return Response([{"name": r["brand"], "count": r["count"]} for r in rows])
 
     def post(self, request):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
         src = (request.data.get("from") or "").strip()
         dst = (request.data.get("to") or "").strip()
         if not src or not dst:
@@ -386,6 +390,7 @@ class ProductSearchView(APIView):
         "چی", "چه", "داری", "دارید", "دارم", "داره", "هست", "است", "هستش",
         "پیشنهاد", "پشنهاد", "میدی", "میده", "میدین", "میخوام", "میخواهم", "میخوای",
         "قیمت", "قیمتش", "چقدر", "چقدره", "خوبه", "خوب", "مناسب", "بهترین",
+        "ارزان", "ارزانترین", "ارزان‌ترین", "ترین", "گران", "گرانترین", "گران‌ترین",
         "برای", "لطفا", "لطفاً", "خرید", "بفرمایید", "و", "یا", "با", "از", "که", "رو", "را",
     }
 
@@ -486,6 +491,10 @@ def _has_staff_perm(user, code):
         return True
     sp = getattr(user, 'staff_profile', None)
     return bool(sp and sp.is_active and sp.has_perm(code))
+
+
+def _forbidden(msg='شما دسترسی لازم برای این عملیات را ندارید'):
+    return Response({'error': msg}, status=403)
 
 
 class ExchangeRateView(APIView):
@@ -834,7 +843,8 @@ class ProductPriceHistoryView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
-        from datetime import date, timedelta
+        from datetime import timedelta
+        from django.utils import timezone
         from .models import ProductPriceHistory, Product
         from .pricing import formula_prices
         try:
@@ -853,7 +863,7 @@ class ProductPriceHistoryView(APIView):
         price_irr = formula_prices(variant)['retail']
 
         # ذخیره قیمت امروز — اگر رکورد امروز با مقدار قدیمی/متفاوت ثبت شده باشد، اصلاح می‌شود
-        today = date.today()
+        today = timezone.localdate()
         rec, created = ProductPriceHistory.objects.get_or_create(
             variant=variant, date=today,
             defaults={'price_irr': price_irr, 'price_cny': variant.purchase_price_cny or 0}
@@ -1040,6 +1050,16 @@ class ProductAdminListCreateView(generics.ListCreateAPIView):
     serializer_class = ProductAdminSerializer
     permission_classes = [IsAdminUser]
 
+    def get(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
+        return super().get(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
+        return super().post(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         product = serializer.save()
         ProductVariant.objects.create(
@@ -1058,7 +1078,24 @@ class ProductAdminDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAdminUser]
     lookup_field = "pk"
 
+    def get(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
+        return super().get(request, *args, **kwargs)
+
+    def put(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
+        return super().put(request, *args, **kwargs)
+
+    def patch(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
+        return super().patch(request, *args, **kwargs)
+
     def destroy(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
         from django.db.models.deletion import ProtectedError
         product = self.get_object()
         try:
@@ -1094,6 +1131,8 @@ class ProductImageUploadView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
         product = Product.objects.filter(pk=pk).first()
         if product is None:
             return Response({"error": "محصول یافت نشد"}, status=404)
@@ -1126,6 +1165,8 @@ class ProductImageAdminDetailView(APIView):
     permission_classes = [IsAdminUser]
 
     def patch(self, request, img_id):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
         img = ProductImage.objects.filter(pk=img_id).first()
         if img is None:
             return Response({"error": "تصویر یافت نشد"}, status=404)
@@ -1135,6 +1176,8 @@ class ProductImageAdminDetailView(APIView):
         return Response(ProductImageSerializer(img, context={"request": request}).data)
 
     def delete(self, request, img_id):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
         img = ProductImage.objects.filter(pk=img_id).first()
         if img is None:
             return Response({"error": "تصویر یافت نشد"}, status=404)
@@ -1150,6 +1193,8 @@ class ProductImagePrimaryView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, img_id):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
         img = ProductImage.objects.filter(pk=img_id).first()
         if img is None:
             return Response({"error": "تصویر یافت نشد"}, status=404)
@@ -1171,6 +1216,8 @@ class ProductOpeningStockView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
+        if not _has_staff_perm(request.user, 'products_edit'):
+            return _forbidden()
         from django.db import transaction
         from decimal import Decimal, InvalidOperation
         try:
@@ -1240,12 +1287,16 @@ class ProductOpeningStockView(APIView):
 # ─── فرمول قیمت ────────────────────────────────────────────────
 
 PROFIT_TYPES = [
-    ("profit_cash_percent",   "نقدی"),
-    ("profit_credit_percent", "تو حسابی"),
-    ("profit_month1_percent", "یکماهه"),
-    ("profit_month2_percent", "دوماهه"),
-    ("profit_retail_percent", "مشتری عمومی"),
+    ("profit_cash_percent",   "نقدی",        "platinum"),
+    ("profit_credit_percent", "تو حسابی",    "platinum"),
+    ("profit_month1_percent", "یکماهه",      "platinum"),
+    ("profit_month2_percent", "دوماهه",      "platinum"),
+    ("profit_gold_percent",   "مشتری گلد",   None),
+    ("profit_silver_percent", "مشتری سیلور", None),
+    ("profit_retail_percent", "مشتری عمومی", None),
 ]
+
+PROFIT_GROUP_LABELS = {"platinum": "مشتری پلاتینیوم"}
 
 
 class PricingOverviewView(APIView):
@@ -1258,12 +1309,14 @@ class PricingOverviewView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_staff_perm(request.user, 'pricelist_view'):
+            return _forbidden()
         rate = ExchangeRateSetting.get_instance().rate_cny_to_irt
         categories = [{
             "id": c.id, "name": c.name, "parent": c.parent_id,
             "shipping_cost_cny": float(c.shipping_cost_cny),
             "clearance_cost_cny": float(c.clearance_cost_cny),
-            **{k: float(getattr(c, k)) for k, _ in PROFIT_TYPES},
+            **{k: float(getattr(c, k)) for k, _, _ in PROFIT_TYPES},
         } for c in Category.objects.filter(is_active=True).order_by("sort_order", "name")]
 
         # موجودی به تفکیک انبار — یک کوئری برای همه واریانت‌ها
@@ -1301,7 +1354,7 @@ class PricingOverviewView(APIView):
 
         return Response({
             "rate_cny_to_irt": float(rate),
-            "profit_types": [{"key": k, "label": label} for k, label in PROFIT_TYPES],
+            "profit_types": [{"key": k, "label": label, "group": PROFIT_GROUP_LABELS.get(g)} for k, label, g in PROFIT_TYPES],
             "categories": categories,
             "products": products,
         })
@@ -1329,6 +1382,8 @@ class PricingVariantView(APIView):
     permission_classes = [IsAdminUser]
 
     def patch(self, request, pk):
+        if not _has_staff_perm(request.user, 'pricelist_view'):
+            return _forbidden()
         v = ProductVariant.objects.filter(pk=pk).first()
         if v is None:
             return Response({"error": "واریانت یافت نشد"}, status=404)
@@ -1357,7 +1412,7 @@ class PricingCategoryCostView(APIView):
             return Response({"error": "دسته یافت نشد"}, status=404)
         try:
             _patch_decimal(c, request.data,
-                           ["shipping_cost_cny", "clearance_cost_cny"] + [k for k, _ in PROFIT_TYPES])
+                           ["shipping_cost_cny", "clearance_cost_cny"] + [k for k, _, _ in PROFIT_TYPES])
         except ValueError as e:
             return Response({"error": f"مقدار {e} نامعتبر است"}, status=400)
         c.save()
@@ -1371,7 +1426,7 @@ class PricingCategoryCostView(APIView):
 class CategorySpecFieldSerializer(serializers.ModelSerializer):
     class Meta:
         model = CategorySpecField
-        fields = ["id", "key", "label", "field_type", "choices", "sort_order", "is_active"]
+        fields = ["id", "key", "label", "field_type", "choices", "sort_order", "is_active", "is_filterable"]
         extra_kwargs = {"key": {"required": False}}  # در save() از روی label ساخته می‌شود
 
 
@@ -1464,12 +1519,17 @@ class CategoryAdminListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        # صفحه «ویژگی‌های دسته‌ها» هم لیست دسته‌ها را لازم دارد
+        if not (_has_staff_perm(request.user, 'categories_view') or _has_staff_perm(request.user, 'category_fields_view')):
+            return _forbidden()
         from django.db.models import Count
         cats = Category.objects.annotate(product_count=Count("products"))\
                                .prefetch_related("spec_fields")
         return Response(CategoryAdminSerializer(cats, many=True).data)
 
     def post(self, request):
+        if not _has_staff_perm(request.user, 'categories_view'):
+            return _forbidden()
         s = CategoryAdminSerializer(data=request.data)
         if s.is_valid():
             s.save()
@@ -1486,6 +1546,8 @@ class CategoryAdminDetailView(APIView):
         return get_object_or_404(Category, pk=pk)
 
     def patch(self, request, pk):
+        if not _has_staff_perm(request.user, 'categories_view'):
+            return _forbidden()
         cat = self._get(pk)
         s = CategoryAdminSerializer(cat, data=request.data, partial=True)
         if s.is_valid():
@@ -1498,6 +1560,8 @@ class CategoryAdminDetailView(APIView):
         return Response(s.errors, status=400)
 
     def delete(self, request, pk):
+        if not _has_staff_perm(request.user, 'categories_view'):
+            return _forbidden()
         from django.db.models import ProtectedError
         cat = self._get(pk)
         try:
@@ -1508,17 +1572,16 @@ class CategoryAdminDetailView(APIView):
 
 
 class CategorySpecFieldListView(APIView):
-    """POST /api/catalog/categories/admin/<pk>/fields/ — افزودن ویژگی به دسته"""
+    """POST /api/catalog/categories/admin/<pk>/fields/ — افزودن ویژگی به دسته
+    زیردسته هم می‌تواند ویژگی مستقل داشته باشد (مثل دوربین در برابر دستگاه ضبط) —
+    در سایت و فیلترها ویژگی‌های والد و فرزند با هم ادغام می‌شوند."""
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
+        if not _has_staff_perm(request.user, 'category_fields_view'):
+            return _forbidden()
         from django.shortcuts import get_object_or_404
         cat = get_object_or_404(Category, pk=pk)
-        if cat.parent_id:
-            return Response(
-                {"error": f"زیردسته ویژگی مستقل ندارد — ویژگی‌ها را به دسته اصلی «{cat.parent.name}» اضافه کنید"},
-                status=400,
-            )
         s = CategorySpecFieldSerializer(data=request.data)
         if s.is_valid():
             s.save(category=cat)
@@ -1531,6 +1594,8 @@ class CategoryBrandListView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
+        if not _has_staff_perm(request.user, 'category_fields_view'):
+            return _forbidden()
         from django.shortcuts import get_object_or_404
         cat = get_object_or_404(Category, pk=pk)
         if cat.parent_id:
@@ -1554,6 +1619,8 @@ class CategoryBrandRenameView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
+        if not _has_staff_perm(request.user, 'category_fields_view'):
+            return _forbidden()
         from django.shortcuts import get_object_or_404
         cat = get_object_or_404(Category, pk=pk)
         src = (request.data.get("from") or "").strip()
@@ -1578,6 +1645,8 @@ class CategorySpecFieldDetailView(APIView):
         return get_object_or_404(CategorySpecField, pk=pk)
 
     def patch(self, request, pk):
+        if not _has_staff_perm(request.user, 'category_fields_view'):
+            return _forbidden()
         f = self._get(pk)
         s = CategorySpecFieldSerializer(f, data=request.data, partial=True)
         if s.is_valid():
@@ -1586,6 +1655,8 @@ class CategorySpecFieldDetailView(APIView):
         return Response(s.errors, status=400)
 
     def delete(self, request, pk):
+        if not _has_staff_perm(request.user, 'category_fields_view'):
+            return _forbidden()
         self._get(pk).delete()
         return Response({"deleted": True})
 
@@ -1685,6 +1756,16 @@ class PackageAdminListCreateView(generics.ListCreateAPIView):
     serializer_class = PackageAdminSerializer
     permission_classes = [IsAdminUser]
 
+    def get(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'packages_view'):
+            return _forbidden()
+        return super().get(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'packages_view'):
+            return _forbidden()
+        return super().post(request, *args, **kwargs)
+
 
 class PackageAdminDetailView(generics.RetrieveUpdateDestroyAPIView):
     """GET/PATCH/DELETE /api/catalog/packages/admin/<pk>/ (فقط ادمین)"""
@@ -1692,6 +1773,26 @@ class PackageAdminDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = PackageAdminSerializer
     permission_classes = [IsAdminUser]
     lookup_field = "pk"
+
+    def get(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'packages_view'):
+            return _forbidden()
+        return super().get(request, *args, **kwargs)
+
+    def put(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'packages_view'):
+            return _forbidden()
+        return super().put(request, *args, **kwargs)
+
+    def patch(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'packages_view'):
+            return _forbidden()
+        return super().patch(request, *args, **kwargs)
+
+    def delete(self, request, *args, **kwargs):
+        if not _has_staff_perm(request.user, 'packages_view'):
+            return _forbidden()
+        return super().delete(request, *args, **kwargs)
 
 
 class PackageImageUploadView(APIView):
@@ -1702,6 +1803,8 @@ class PackageImageUploadView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
+        if not _has_staff_perm(request.user, 'packages_view'):
+            return _forbidden()
         package = Package.objects.filter(pk=pk).first()
         if package is None:
             return Response({"error": "پکیج یافت نشد"}, status=404)
@@ -1715,6 +1818,8 @@ class PackageImageUploadView(APIView):
         return Response(PackageAdminSerializer(package, context={"request": request}).data)
 
     def delete(self, request, pk):
+        if not _has_staff_perm(request.user, 'packages_view'):
+            return _forbidden()
         package = Package.objects.filter(pk=pk).first()
         if package is None:
             return Response({"error": "پکیج یافت نشد"}, status=404)
@@ -1753,11 +1858,13 @@ class TorobProductsV3View(APIView):
         if "cursor" in data or data.get("sort") == "product_id_desc":
             return Response({"error": "حالت cursor-based پشتیبانی نمی‌شود"}, status=400)
 
+        # محصولات بدون تصویر از فید حذف می‌شوند — ترب برای هر محصول حداقل یک لینک تصویر معتبر می‌خواهد
         qs = (
-            Product.objects.filter(is_active=True)
+            Product.objects.filter(is_active=True, images__isnull=False)
             .exclude(availability="discontinued")
             .select_related("category")
             .prefetch_related("variants", "images")
+            .distinct()
         )
 
         if "page_urls" in data:

@@ -252,7 +252,9 @@ class OpenPayslipsView(APIView):
         from apps.accounting.models import Contact
         from .services import open_payslips_for_contact
 
-        contact_id = request.query_params.get("contact_id")
+        contact_id = str(request.query_params.get("contact_id") or "")
+        # id پیشونددار لیست ادغام (c_) را نرمال می‌کند
+        contact_id = contact_id[2:] if contact_id.startswith("c_") else contact_id
         contact = Contact.objects.filter(pk=contact_id).first() if contact_id else None
         if not contact:
             return Response({"error": "طرف حساب نامعتبر"}, status=400)

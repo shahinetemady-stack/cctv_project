@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../../services/api'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
-function fmtDate(s) { return s ? new Date(s).toLocaleString('fa-IR') : 'هرگز' }
+function fmtDate(s) { return s ? new Date(s).toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' }) : 'هرگز' }
 
 const STATUS_COLORS = {
   success: '#00C896',
@@ -271,7 +271,7 @@ export default function BackupPage() {
       qc.invalidateQueries(['backup-settings'])
       const log = d.log
       if (log.status === 'success') {
-        const ch = [log.sent_email && 'ایمیل', log.sent_telegram && 'تلگرام'].filter(Boolean).join(' و ')
+        const ch = [log.sent_email && 'ایمیل', log.sent_telegram && 'تلگرام', log.sent_bale && 'بله'].filter(Boolean).join(' و ')
         setMsg({ type: 'success', text: `✅ بک‌اپ گرفته شد — ${log.file_size_mb}MB${ch ? ` (${ch})` : ''}\n📁 ${log.file_path}` })
       } else {
         setMsg({ type: log.status === 'partial' ? 'warning' : 'error', text: log.error || 'خطا' })
@@ -437,14 +437,14 @@ export default function BackupPage() {
           </div>
         </div>
         <div className="bg-yellow-500/10 border-r-2 border-yellow-500 p-3 rounded text-[11px] text-yellow-300 leading-6 mt-3">
-          برای فعال‌سازی، در Windows Task Scheduler دو task بسازید:<br/>
-          <code className="text-white bg-black/30 px-2 py-0.5 rounded">python manage.py run_backup --trigger auto</code> (ساعتی)<br/>
-          <code className="text-white bg-black/30 px-2 py-0.5 rounded">python manage.py run_daily_backup</code> (روزانه)
+          زمان‌بندی روی سرور لینوکسی با <code className="text-white bg-black/30 px-2 py-0.5 rounded">crontab -e</code>:<br/>
+          <code className="text-white bg-black/30 px-2 py-0.5 rounded" dir="ltr">30 23 * * * cd مسیر_پروژه && venv/bin/python manage.py run_daily_backup</code> (روزانه)<br/>
+          روی Windows از Task Scheduler با همین دستورات استفاده کنید.
         </div>
       </div>
 
-      {/* ایمیل + تلگرام */}
-      <div className="grid grid-cols-2 gap-4 mb-4">
+      {/* ایمیل + تلگرام + بله */}
+      <div className="grid grid-cols-3 gap-4 mb-4">
         <div className="card p-5">
           <h2 className="text-sm font-semibold text-white mb-3">📧 ایمیل</h2>
           <label className="flex items-center gap-2 text-xs text-gray-steel mb-3 cursor-pointer">
@@ -466,6 +466,35 @@ export default function BackupPage() {
           <input value={form.telegram_chat_id || ''} onChange={e => set('telegram_chat_id', e.target.value)}
             placeholder="Chat ID" className="input text-xs" />
         </div>
+
+        <div className="card p-5">
+          <h2 className="text-sm font-semibold text-white mb-3">🟢 بله</h2>
+          <label className="flex items-center gap-2 text-xs text-gray-steel mb-3 cursor-pointer">
+            <input type="checkbox" checked={!!form.bale_enabled} onChange={e => set('bale_enabled', e.target.checked)} />
+            فعال
+          </label>
+          <input value={form.bale_token || ''} onChange={e => set('bale_token', e.target.value)}
+            placeholder="توکن بات بله" className="input text-xs mb-2" />
+          <input value={form.bale_chat_id || ''} onChange={e => set('bale_chat_id', e.target.value)}
+            placeholder="Chat ID" className="input text-xs" />
+          <p className="text-[10px] text-gray-steel mt-2 leading-4">
+            ساخت بات: در بله به @BotFather پیام دهید و دستور /newbot را بفرستید.
+          </p>
+        </div>
+      </div>
+
+      {/* رمزنگاری فایل ارسالی */}
+      <div className="card p-5 mb-4">
+        <h2 className="text-sm font-semibold text-white mb-3">🔐 رمزنگاری فایل ارسالی</h2>
+        <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 text-[11px] text-blue-300 mb-3 leading-5">
+          ارسال به ایمیل/تلگرام/بله فقط با فایل رمزگذاری‌شده AES-256 و فقط دیتابیس (بدون media) انجام می‌شود.
+          بدون وارد کردن رمز، هیچ فایلی ارسال نمی‌شود.
+        </div>
+        <input value={form.send_encryption_password || ''} onChange={e => set('send_encryption_password', e.target.value)}
+          placeholder="رمز قوی برای فایل ارسالی" className="input text-xs" />
+        <p className="text-[10px] text-gray-steel mt-2">
+          این رمز را جایی امن نگه دارید — برای باز کردن فایل در WinRAR/7-Zip لازم است.
+        </p>
       </div>
 
       {/* دکمه ذخیره */}
@@ -496,6 +525,7 @@ export default function BackupPage() {
                   const ch = []
                   if (log.sent_email) ch.push('📧')
                   if (log.sent_telegram) ch.push('📲')
+                  if (log.sent_bale) ch.push('🟢')
                   const kind = log.is_daily ? '📅 روزانه' : log.trigger === 'safety' ? '🛡 ایمنی' : '⏰ ساعتی'
                   return (
                     <tr key={log.id} style={{

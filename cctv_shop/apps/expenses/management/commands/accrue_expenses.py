@@ -4,7 +4,7 @@
 
 قابل اجرای دستی: python manage.py accrue_expenses [سال میلادی] [ماه میلادی]
 """
-from datetime import date
+from django.utils import timezone
 
 from django.core.management.base import BaseCommand
 
@@ -23,7 +23,7 @@ class Command(BaseCommand):
         if year and month:
             gy, gm = year, month
         else:
-            today = date.today()
+            today = timezone.localdate()
             gy, gm = (today.year - 1, 12) if today.month == 1 else (today.year, today.month - 1)
 
         booked = accrue_month(gy, gm)

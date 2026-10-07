@@ -6,7 +6,7 @@ import usePermissions from '../../hooks/usePermissions'
 import AmountInput from '../../components/ui/AmountInput'
 import JalaliDateInput from '../../components/ui/JalaliDateInput'
 import SearchSelect from '../../components/ui/SearchSelect'
-import { formatDate } from '../../utils/date'
+import { formatDate, todayTehran } from '../../utils/date'
 import { jalaliToGregorian, gregorianToJalali, JALALI_MONTHS } from '../../utils/jalali'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
@@ -45,8 +45,8 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
   const qc = useQueryClient()
 
   const { data: contacts = [] } = useQuery({
-    queryKey: ['contacts-plain'],
-    queryFn: () => api.get('/accounting/contacts/').then(r => r.data),
+    queryKey: ['contacts-all'],
+    queryFn: () => api.get('/accounting/contacts/', { params: { include_registered: '1', registered_filter: 'all' } }).then(r => r.data),
   })
   const { data: accounts = [] } = useQuery({
     queryKey: ['accounts'],
@@ -63,7 +63,7 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
     amount: editing?.amount ?? '',
     rate_irr: editing?.rate_irr ?? '',
     account_amount: '',  // مبلغ برداشت/واریز به ارز حساب (فقط بین‌ارزی — دستی قابل تغییر)
-    date: editing?.date ?? new Date().toISOString().split('T')[0],
+    date: editing?.date ?? todayTehran(),
     reference: editing?.reference ?? '',
     payslip_id: editing?.payslip_id ?? '',
     expense_charge_id: editing?.expense_charge_id ?? '',
@@ -74,9 +74,26 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
   })
   const [msg, setMsg] = useState(null)
   const [dupPayload, setDupPayload] = useState(null)   // تراکنشی که با هشدار تکراری (۴۰۹) رد شد
+  const [settleTarget, setSettleTarget] = useState('fifo')   // دریافت: تخصیص به فاکتورهای باز یا مانده اول دوره
+  // id عددی خام طرف حساب — لیست ادغام idهای پیشونددار (c_/u_) دارد ولی اندپوینت‌های
+  // سرمایه‌گذار/سر فصل id عددی برمی‌گردانند؛ برای مقایسه، پیشوند حذف می‌شود
+  const rawId = id => String(id).replace(/^[cu]_/, '')
   // عملیات ارزی طرف حساب انتخاب‌شده — بدون فلگ، گزینه/فیلدهای یوانی نمایش داده نمی‌شوند
   const selectedContact = contacts.find(c => String(c.id) === String(form.contact_id))
+  // هنگام ویرایش، id عددیِ ذخیره‌شده روی سند به شکل پیشونددار لیست ادغام نگاشت می‌شود
+  useEffect(() => {
+    const cid = String(form.contact_id || '')
+    if (editing && cid && !/^[cu]_/.test(cid) && contacts.length) {
+      const hit = contacts.find(c => c.id === `c_${cid}`)
+      if (hit) setForm(f => ({ ...f, contact_id: hit.id }))
+    }
+  }, [editing, contacts, form.contact_id])
   const contactHasFx = !selectedContact || selectedContact.has_fx !== false
+  // انتخاب هدف تخصیص فقط وقتی معنا دارد که طرف حساب هم مانده اول دوره داشته باشد
+  // و هم فاکتور باز (وگرنه FIFO خودش به مانده اول دوره می‌رسد یا چیزی برای تسویه نیست)
+  const showSettleTarget = isReceive && !editing && selectedContact
+    && Number(selectedContact.opening_balance_irr || 0) > 0
+    && Number(selectedContact.sale_debt || 0) > 0
   // حالت‌های شبه‌نوع — فقط در پرداخت ریالی معنی دارند؛ در دریافت مثل «همه» رفتار می‌شوند
   const pseudoType = !isReceive && form.currency === 'IRR' ? form.contact_type : ''
   const modeExpense = pseudoType === 'expense'
@@ -87,19 +104,19 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
     queryFn: () => api.get('/expenses/investors/').then(r => r.data),
     enabled: pseudoType === 'investor',
   })
-  const investorContactIds = new Set(investors.map(i => String(i.contact)))
+  const investorContactIds = new Set(investors.map(i => rawId(i.contact)))
   // طرف حساب‌های مرتبط با سر فصل انتخاب‌شده (از هزینه‌های گذشته) — فیلتر انتخابگر طرف حساب در حالت ثبت هزینه
   const { data: categoryContacts = [], isFetched: categoryContactsFetched } = useQuery({
     queryKey: ['category-contacts', form.expense_category_id],
     queryFn: () => api.get(`/expenses/categories/${form.expense_category_id}/contacts/`).then(r => r.data),
     enabled: modeExpense && !!form.expense_category_id,
   })
-  const categoryContactIds = new Set(categoryContacts.map(c => String(c.id)))
+  const categoryContactIds = new Set(categoryContacts.map(c => rawId(c.id)))
   // فهرست طرف حساب‌ها با اعمال فیلتر — نوع واقعی بر اساس contact_type؛ سرمایه‌گذار بر اساس فهرست سرمایه‌گذاران؛ ثبت هزینه بر اساس سر فصل انتخاب‌شده
   const filteredContacts = (() => {
-    if (pseudoType === 'investor') return contacts.filter(c => investorContactIds.has(String(c.id)))
+    if (pseudoType === 'investor') return contacts.filter(c => investorContactIds.has(rawId(c.id)))
     if (pseudoType === 'expense') {
-      return form.expense_category_id ? contacts.filter(c => categoryContactIds.has(String(c.id))) : contacts
+      return form.expense_category_id ? contacts.filter(c => categoryContactIds.has(rawId(c.id))) : contacts
     }
     if (pseudoType) return contacts.filter(c => c.contact_type === pseudoType)
     return contacts
@@ -107,7 +124,7 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
   // در حالت ثبت هزینه، طرف حساب انتخاب‌شده باید زیر سر فصل انتخاب‌شده باشد؛ وگرنه پاک می‌شود (بعد از لود فهرست)
   useEffect(() => {
     if (modeExpense && form.expense_category_id && categoryContactsFetched && form.contact_id
-      && !categoryContactIds.has(String(form.contact_id))) {
+      && !categoryContactIds.has(rawId(form.contact_id))) {
       setForm(f => ({ ...f, contact_id: '' }))
     }
   }, [modeExpense, form.expense_category_id, form.contact_id, categoryContactsFetched, categoryContactIds])
@@ -278,6 +295,7 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
       qc.invalidateQueries(['payments-list'])
       qc.invalidateQueries(['accounts'])
       qc.invalidateQueries(['contacts-all'])
+      qc.invalidateQueries(['contacts-plain'])
       qc.invalidateQueries(['contact-kardex'])
       qc.invalidateQueries(['open-payslips'])
       qc.invalidateQueries(['open-expense-charges'])
@@ -352,6 +370,7 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
       investor_withdraw: (modeInvestor && form.investor_mode === 'withdraw') || null,
       from_account: isDiscount ? null : (form.from_account_id || null),
       to_account: isDiscount ? null : (form.to_account_id || null),
+      ...(showSettleTarget && { settle_target: settleTarget }),
       ...(isEndorseMode && !editing && {
         cheque_mode: 'endorsed',
         cheque_ids: selectedChequeIds,
@@ -392,7 +411,7 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
                   // اعتبار طرف حساب انتخاب‌شده زیر فیلتر/حالت جدید — ناسازگار = پاک شدن انتخاب
                   const valid = !cur ? false
                     : t === '' || t === 'expense' ? true
-                    : t === 'investor' ? investorContactIds.has(String(cur.id))
+                    : t === 'investor' ? investorContactIds.has(rawId(cur.id))
                     : cur.contact_type === t
                   return valid ? base : { ...base, contact_id: '' }
                 })}
@@ -411,6 +430,24 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
               )}
               {modeExpense && form.expense_category_id && categoryContactsFetched && categoryContacts.length === 0 && (
                 <div className="text-[10px] text-gray-steel mt-1">طرفی برای این سر فصل ثبت نشده — بدون طرف حساب ثبت می‌شود.</div>
+              )}
+              {showSettleTarget && (
+                <div className="mt-2 p-2.5 rounded-xl bg-brand/10 border border-brand/20">
+                  <div className="text-[11px] text-gray-steel mb-1.5">
+                    این طرف حساب هم مانده اول دوره دارد ({Number(selectedContact.opening_balance_irr).toLocaleString('fa-IR')} ریال)
+                    و هم فاکتور باز ({Number(selectedContact.sale_debt).toLocaleString('fa-IR')} ریال) — دریافت بابت کدام است؟
+                  </div>
+                  <div className="flex gap-4 text-xs">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-white">
+                      <input type="radio" checked={settleTarget === 'fifo'} onChange={() => setSettleTarget('fifo')} />
+                      فاکتورهای باز (FIFO)
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer text-white">
+                      <input type="radio" checked={settleTarget === 'opening'} onChange={() => setSettleTarget('opening')} />
+                      مانده اول دوره
+                    </label>
+                  </div>
+                </div>
               )}
             </div>
             <div>
@@ -787,13 +824,13 @@ function VoucherForm({ onClose }) {
   const qc = useQueryClient()
   const [form, setForm] = useState({
     from_contact_id: '', to_contact_id: '', currency: 'IRR', amount: '', rate_irr: '',
-    date: new Date().toISOString().split('T')[0], reference: '', note: '',
+    date: todayTehran(), reference: '', note: '',
   })
   const [msg, setMsg] = useState(null)
 
   const { data: contacts = [] } = useQuery({
-    queryKey: ['contacts-plain'],
-    queryFn: () => api.get('/accounting/contacts/').then(r => r.data),
+    queryKey: ['contacts-all'],
+    queryFn: () => api.get('/accounting/contacts/', { params: { include_registered: '1', registered_filter: 'all' } }).then(r => r.data),
   })
 
   const mut = useMutation({
@@ -803,6 +840,7 @@ function VoucherForm({ onClose }) {
       qc.invalidateQueries(['payments-list'])
       qc.invalidateQueries(['accounts'])
       qc.invalidateQueries(['contacts-all'])
+      qc.invalidateQueries(['contacts-plain'])
       qc.invalidateQueries(['contacts'])
       qc.invalidateQueries(['contact-detail'])
       setMsg({ type: 'success', text: r.message || 'سند انتقال ثبت شد' })
@@ -931,7 +969,7 @@ function TransferForm({ onClose }) {
   const qc = useQueryClient()
   const [form, setForm] = useState({
     from_account_id: '', to_account_id: '', amount: '', rate_irr: '',
-    date: new Date().toISOString().split('T')[0], reference: '', note: '',
+    date: todayTehran(), reference: '', note: '',
   })
   const [msg, setMsg] = useState(null)
 
@@ -1117,7 +1155,7 @@ function DocsSearchPanel({ onClose }) {
   const { can } = usePermissions()
   const [q, setQ] = useState('')
   // پیش‌فرض بازه = امروز — تا با باز شدن پنل، اسناد امروز دیده شوند
-  const todayIso = new Date().toLocaleDateString('en-CA')
+  const todayIso = todayTehran()
   const [dateFrom, setDateFrom] = useState(todayIso)
   const [dateTo, setDateTo] = useState(todayIso)
   const [editing, setEditing] = useState(null)
@@ -1492,7 +1530,7 @@ export default function PaymentsPage() {
     <div className="container-main py-8 max-w-3xl">
       <h1 className="font-display font-bold text-2xl text-white mb-6">دریافت و پرداخت</h1>
 
-      {!can('purchase_create') ? (
+      {!can('purchase_create') && !can('payment_view') ? (
         <div className="card p-12 text-center text-gray-steel text-sm">دسترسی ثبت تراکنش ندارید</div>
       ) : (
         <div className="grid grid-cols-2 gap-4">

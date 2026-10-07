@@ -60,7 +60,7 @@ SETTLEMENT_DUE_DAYS = {
 
 def settlement_due_for(settlement_type, from_date=None):
     """موعد تسویه پیش‌فرض برای یک نوع تسویه از تاریخ مشخص (پیش‌فرض: امروز)."""
-    base = from_date or timezone.now().date()
+    base = from_date or timezone.localdate()
     return base + timedelta(days=SETTLEMENT_DUE_DAYS.get(settlement_type, 0))
 
 
@@ -399,7 +399,7 @@ class Order(TimeStampedModel, AuditMixin):
         """موعد تسویه رسیده (سطح سفارش یا هر یک از اقلام) و سفارش هنوز تسویه/لغو نشده."""
         if self.status in (self.Status.PAID, self.Status.CANCELLED, self.Status.REFUNDED, self.Status.REJECTED):
             return False
-        today = timezone.now().date()
+        today = timezone.localdate()
         if self.settlement_due_date and self.settlement_due_date <= today:
             return True
         return self.items.filter(settlement_due_date__lte=today).exists()
@@ -473,7 +473,7 @@ class OrderItem(TimeStampedModel):
             return False
         if self.order.status in (Order.Status.PAID, Order.Status.CANCELLED, Order.Status.REFUNDED, Order.Status.REJECTED):
             return False
-        return self.settlement_due_date <= timezone.now().date()
+        return self.settlement_due_date <= timezone.localdate()
 
 
 # ─── StockReservation ─────────────────────────────────────────────────────────

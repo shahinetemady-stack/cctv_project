@@ -23,6 +23,10 @@ class DashboardStatsView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "dashboard_view"):
+            return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
+
         from apps.accounting.models import SaleInvoice
         from apps.catalog.models import ExchangeRateSetting
 
@@ -117,14 +121,24 @@ class DashboardStatsView(APIView):
         ]
 
         # آخرین سفارش‌های سایت + آخرین فاکتورها (مرتب بر اساس تاریخ)
+        # نام مشتری: نام کامل حساب → نام طرف حساب لینک‌شده → موبایل
+        def _order_customer_name(o):
+            name = o.user.get_full_name()
+            if name:
+                return name
+            prof = getattr(o.user, "profile", None)
+            if prof and prof.linked_contact_id:
+                return prof.linked_contact.name
+            return str(o.user.phone or "-")
+
         last_items = [
             (o.created_at, {
                 "order_number": o.order_number,
-                "user": str(o.user.phone or "-"),
+                "user": _order_customer_name(o),
                 "status": o.status,
                 "amount": int(o.total_amount or 0),
             })
-            for o in Order.objects.select_related("user").order_by("-created_at")[:8]
+            for o in Order.objects.select_related("user", "user__profile", "user__profile__linked_contact").order_by("-created_at")[:8]
         ]
         last_items += [
             (i.created_at, {
@@ -140,6 +154,24 @@ class DashboardStatsView(APIView):
             {**payload, "created_at": timezone.localtime(dt).strftime("%Y-%m-%d %H:%M")}
             for dt, payload in last_items[:8]
         ]
+
+        # هشدار انقضای سرویس‌ها (دامنه/سرور/…) — فقط برای سوپریوزر (اطلاعات حساس)
+        expiring_services = []
+        if request.user.is_superuser:
+            from apps.core.models import ServiceSubscription
+            expiring_services = [
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "category_display": s.get_category_display(),
+                    "provider": s.provider,
+                    "expire_date": s.expire_date.isoformat(),
+                    "days_left": s.days_left,
+                    "auto_renew": s.auto_renew,
+                }
+                for s in ServiceSubscription.objects.filter(is_active=True)
+                if s.days_left <= s.warn_days
+            ]
 
         return Response({
             "sales": {
@@ -170,4 +202,5 @@ class DashboardStatsView(APIView):
             "sales_by_category": sales_by_category,
             "month_label": J_MONTHS[j_today.month - 1],
             "today_label": f"{J_WEEKDAYS[j_today.weekday()]} {_fa(j_today.day)} {J_MONTHS[j_today.month - 1]} {_fa(j_today.year)}",
+            "expiring_services": expiring_services,
         })

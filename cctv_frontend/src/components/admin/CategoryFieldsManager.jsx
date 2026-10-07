@@ -56,16 +56,6 @@ function AddFieldForm({ categoryId, onDone }) {
   )
 }
 
-// ─── نمای زیردسته — ویژگی فقط روی دسته اصلی مدیریت می‌شود ─────
-function InheritedFieldsView({ cat }) {
-  return (
-    <div className="text-[11px] text-gray-steel bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-3 py-2">
-      این زیردسته ویژگی مستقل ندارد و همه ویژگی‌هایش را از «{cat.name}» به ارث می‌برد —
-      برای افزودن یا ویرایش ویژگی، دسته اصلی را انتخاب کنید.
-    </div>
-  )
-}
-
 // ─── مدیریت برندهای یک دسته — زیر ویژگی‌های پایه ──────────────
 function BrandsSection({ cat }) {
   const qc = useQueryClient()
@@ -168,6 +158,16 @@ export default function CategoryFieldsManager({ cat, parentCat = null }) {
     onError: (e) => toast.error(e.response?.data?.error || 'خطا در حذف'),
   })
 
+  // تاگل «نمایش در فیلترهای سایت» یک ویژگی سفارشی
+  const toggleFilterableMut = useMutation({
+    mutationFn: ({ id, is_filterable }) => api.patch(`/catalog/spec-fields/${id}/`, { is_filterable }).then(r => r.data),
+    onSuccess: (d) => {
+      qc.invalidateQueries(['admin-categories-full'])
+      toast.success(d.is_filterable ? 'ویژگی در فیلترهای سایت نمایش داده می‌شود' : 'ویژگی از فیلترهای سایت حذف شد')
+    },
+    onError: (e) => toast.error(e.response?.data?.error || 'خطا'),
+  })
+
   // تاگل مخفی/نمایان یک فیلد پایه در فرم ویرایش محصول
   const toggleHiddenMut = useMutation({
     mutationFn: ({ key, hide }) => {
@@ -207,14 +207,24 @@ export default function CategoryFieldsManager({ cat, parentCat = null }) {
     onError: (e) => toast.error(e.response?.data?.error || 'خطا'),
   })
 
-  // زیردسته‌ها ویژگی مستقل ندارند — نمای فقط‌خواندنی ویژگی‌های دسته اصلی
-  if (parentCat) {
-    return <InheritedFieldsView cat={parentCat} />
-  }
+  // زیردسته هم ویژگی مستقل دارد (مثل تفاوت مشخصات دوربین و دستگاه ضبط) —
+  // ویژگی‌های دسته اصلی به ارث می‌رسد و اینجا فقط ویژگی‌های اختصاصی زیردسته مدیریت می‌شود.
+  // فیلدهای پایه و برندها فقط روی دسته اصلی مدیریت می‌شوند.
+  const isChild = !!parentCat
 
   return (
     <div>
-      {/* ویژگی‌های پایه (از مدل — متصل به کاتالوگ) */}
+      {isChild && (
+        <div className="text-[11px] text-gray-steel bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-3 py-2 mb-4">
+          ویژگی‌های دسته اصلی «{parentCat.name}» به این زیردسته هم می‌رسد —
+          اینجا فقط ویژگی‌های <b className="text-white">اختصاصی «{cat.name}»</b> را مدیریت می‌کنید
+          (برای فیلدهای پایه و برندها، دسته اصلی را انتخاب کنید).
+        </div>
+      )}
+
+      {/* ویژگی‌های پایه (از مدل — متصل به کاتالوگ) — فقط روی دسته اصلی */}
+      {!isChild && (
+      <>
       <div className="text-xs font-bold text-gold mb-1">ویژگی‌های پایه «{cat.name}»</div>
       <div className="text-[10px] text-gray-steel mb-3">بخشی از هسته فروشگاه‌اند (فیلتر/جستجو) — فقط می‌توانید از فرم ویرایش محصول مخفی‌شان کنید.</div>
       <div className="space-y-1.5 mb-5">
@@ -278,6 +288,8 @@ export default function CategoryFieldsManager({ cat, parentCat = null }) {
       </div>
 
       <BrandsSection cat={cat} />
+      </>
+      )}
 
       <div className="text-xs font-bold text-gold mb-3">ویژگی‌های سفارشی «{cat.name}»</div>
 
@@ -291,10 +303,19 @@ export default function CategoryFieldsManager({ cat, parentCat = null }) {
               <span className="text-[10px] text-gray-steel font-mono" dir="ltr">{f.key}</span>
               <span className="badge text-[10px]">{FIELD_TYPE_LABEL[f.field_type]}</span>
               {f.choices && <span className="text-[10px] text-gray-steel">{f.choices}</span>}
-              <button onClick={() => { if (window.confirm(`ویژگی «${f.label}» حذف شود؟`)) deleteFieldMut.mutate(f.id) }}
-                className="mr-auto text-red-400 hover:text-red-300 p-0.5" title="حذف ویژگی">
-                <X size={14} />
-              </button>
+              <span className="mr-auto flex items-center gap-1.5">
+                <button onClick={() => toggleFilterableMut.mutate({ id: f.id, is_filterable: !f.is_filterable })}
+                  className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${f.is_filterable !== false
+                    ? 'border-brand/50 text-brand bg-brand/10'
+                    : 'border-white/10 text-gray-steel hover:text-white'}`}
+                  title={f.is_filterable !== false ? 'در فیلترهای سایت فعال است — برای حذف کلیک کنید' : 'در فیلترهای سایت نیست — برای افزودن کلیک کنید'}>
+                  {f.is_filterable !== false ? '✓ فیلتر سایت' : 'فیلتر سایت'}
+                </button>
+                <button onClick={() => { if (window.confirm(`ویژگی «${f.label}» حذف شود؟`)) deleteFieldMut.mutate(f.id) }}
+                  className="text-red-400 hover:text-red-300 p-0.5" title="حذف ویژگی">
+                  <X size={14} />
+                </button>
+              </span>
             </div>
           ))}
         </div>

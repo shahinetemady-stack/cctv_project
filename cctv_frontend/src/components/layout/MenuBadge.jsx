@@ -17,6 +17,7 @@ export default function MenuBadge({ badgeKey }) {
     : badgeKey === 'partners' ? data?.partners_pending
     : badgeKey === 'salesDue' ? data?.sales_due
     : badgeKey === 'receipts' ? data?.receipts_pending
+    : badgeKey === 'chat' ? data?.chat_unread
     : null
   if (!n) return null
   const links = {
@@ -24,6 +25,7 @@ export default function MenuBadge({ badgeKey }) {
     salesDue: '/admin/sales?due=1',
     partners: null,
     receipts: '/admin/receipts',
+    chat: '/admin/chat',
   }
   const link = links[badgeKey]
   return (

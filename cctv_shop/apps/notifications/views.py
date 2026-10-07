@@ -21,14 +21,35 @@ from .serializers import SmsSettingsSerializer
 logger = logging.getLogger(__name__)
 
 
+# ─── RBAC helpers ────────────────────────────────────────────
+
+def _has_perm(user, code):
+    if user.is_superuser:
+        return True
+    sp = getattr(user, 'staff_profile', None)
+    return bool(sp and sp.is_active and sp.has_perm(code))
+
+
+def _has_any_perm(user, *codes):
+    return any(_has_perm(user, c) for c in codes)
+
+
+def _forbidden(msg='شما دسترسی لازم برای این عملیات را ندارید'):
+    return Response({'error': msg}, status=403)
+
+
 class SmsSettingsView(APIView):
     """GET/PUT تنظیمات پیامک — فقط ادمین"""
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'sms_settings_view'):
+            return _forbidden()
         return Response(SmsSettingsSerializer(SmsSettings.get_instance()).data)
 
     def put(self, request):
+        if not _has_perm(request.user, 'sms_settings_view'):
+            return _forbidden()
         settings_obj = SmsSettings.get_instance()
         serializer = SmsSettingsSerializer(settings_obj, data=request.data, partial=True)
         if not serializer.is_valid():
@@ -83,6 +104,8 @@ class SmsCampaignSegmentsView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'sms_campaign_view'):
+            return _forbidden()
         return Response({
             "segments": [
                 {"key": key, "label": label, "count": len(_segment_phones(key))}
@@ -96,6 +119,8 @@ class SmsCampaignSendView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request):
+        if not _has_perm(request.user, 'sms_campaign_view'):
+            return _forbidden()
         segment = request.data.get("segment", "")
         text = str(request.data.get("text") or "").strip()
         if segment not in SEGMENTS:

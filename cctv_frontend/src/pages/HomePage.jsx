@@ -800,7 +800,7 @@ export default function HomePage() {
       {/* ══════════════════════════════════════════════
           HERO — افکت برد بازگشتی (چپ) + متن و باکس هوشمند (راست)
       ══════════════════════════════════════════════ */}
-      <section className="hero-board" style={{ position: 'relative', overflow: 'hidden', minHeight: '92vh', display: 'flex', alignItems: 'center' }}>
+      <section className="hero-board" style={{ position: 'relative', overflow: 'hidden', minHeight: '92svh', display: 'flex', alignItems: 'center' }}>
         {/* بک‌گراند متحرک — دای سیلیکون که سلول‌به‌سلول از بردهای واقعی ساخته می‌شود */}
         <LazyBoardCanvas />
 
@@ -831,12 +831,14 @@ export default function HomePage() {
               فقط کافیه توی کادر زیر هر سوالی داری ازش بپرسی.
             </p>
 
-            {/* باکس جستجو و مشاوره هوشمند — بلافاصله زیر متن، در مسیر نگاه کاربر */}
-            <div className="animate-slide-up" style={{ animationDelay: '220ms', marginTop: 30 }}>
+            {/* باکس جستجو و مشاوره هوشمند — بلافاصله زیر متن، در مسیر نگاه کاربر
+                بدون animation-delay: تأخیر باعث می‌شد بعد از حذف اسپلش باکس «پاپ» شود */}
+            <div className="animate-slide-up" style={{ marginTop: 30 }}>
               <Suspense fallback={
                 <div className="liquid-metal-frame" style={{ boxShadow: 'var(--shadow-card-hover), 0 0 60px rgba(251,192,45,0.10)' }}>
                   <div className="liquid-metal-inner">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', minHeight: 56 }}>
+                    {/* minHeight ۶۰ = ارتفاع ردیف واقعی SmartSearch (BotFace سایز ۶۰) تا swap بدون تغییر ارتفاع باشد */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', minHeight: 60 }}>
                       <span style={{ flex: 1, color: 'var(--color-text-muted)', fontSize: 14, lineHeight: 1.9 }}>مثلاً بپرس: لنز دارک لایت چی داری؟</span>
                     </div>
                   </div>

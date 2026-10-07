@@ -496,7 +496,7 @@ function CampaignsTab({ meta }) {
                   <div className="text-xs text-gray-steel flex flex-wrap gap-4">
                     <span>ارسال: {fmt(c.sent_count)} از {fmt(c.total_targets)}</span>
                     {c.failed_count > 0 && <span className="text-red-400">ناموفق: {fmt(c.failed_count)}</span>}
-                    <span>{c.created_at ? new Date(c.created_at).toLocaleDateString('fa-IR') : ''}</span>
+                    <span>{c.created_at ? new Date(c.created_at).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' }) : ''}</span>
                   </div>
                   {c.status === 'draft' && (
                     <button onClick={() => handleSend(c)} disabled={sendMut.isPending}
@@ -550,7 +550,7 @@ const SOURCE_GUIDES = [
 function RunStatus({ run }) {
   if (!run) return <div className="text-xs text-gray-steel mb-3">هنوز اجرایی ثبت نشده</div>
   const at = run.finished_at || run.started_at
-  const when = at ? new Date(at).toLocaleString('fa-IR') : ''
+  const when = at ? new Date(at).toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' }) : ''
   if (run.status === 'running') {
     return (
       <div className="text-xs mb-3 flex items-center gap-2 text-brand">

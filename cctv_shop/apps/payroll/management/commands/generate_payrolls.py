@@ -7,7 +7,7 @@
     python manage.py generate_payrolls           # ماه قبل
     python manage.py generate_payrolls 2026 8    # ماه مشخص
 """
-from datetime import date
+from django.utils import timezone
 
 from django.core.management.base import BaseCommand
 
@@ -27,7 +27,7 @@ class Command(BaseCommand):
         if year and month:
             gy, gm = year, month
         else:
-            today = date.today()
+            today = timezone.localdate()
             gy, gm = (today.year - 1, 12) if today.month == 1 else (today.year, today.month - 1)
 
         result = services.generate_month(gy, gm)

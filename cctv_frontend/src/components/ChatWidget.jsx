@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import api from '../services/api'
 import useAuthStore from '../store/useAuthStore'
+import { StaffChatPanel } from './SupportChatWidget'
 
 // ─── ویجت چت دستیار هوشمند (موتورهای ابری + Qwen لوکال پشتیبان) ─────────────
 // نام موتورها برای نمایش به ادمین
@@ -11,17 +13,33 @@ const ENGINE_NAMES = {
 
 export default function ChatWidget() {
   const isAdmin = useAuthStore(s => s.isAdmin)
+  const user = useAuthStore(s => s.user)
   const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState('bot')   // 'bot' = ربات هوشمند | 'staff' = گفتگو با پرسنل
   const [engineName, setEngineName] = useState('')  // موتور اصلی — فقط برای ادمین
   const [messages, setMessages] = useState([
     { role: 'assistant', content: 'سلام! من دستیار هوشمند دوربینکار هستم. درباره محصولات، قیمت یا انتخاب تجهیزات سؤال دارید؟' },
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const bottomRef = useRef(null)
+  const botListRef = useRef(null)
 
+  // حالت «پرسنل» برای همه کاربران لاگین‌شده — مشتری با پشتیبانی، پرسنل هم با هم (و با ادمین)
+  // چت می‌کنند؛ پرسنل در نقش «پاسخ‌دهنده» از پنل ادمین استفاده می‌کند.
+  const canStaffChat = !!user
+  // بج پاسخ‌های خوانده‌نشده پرسنل روی دکمه شناور (پول ۶۰ثانیه)
+  const { data: unreadData } = useQuery({
+    queryKey: ['chat-unread'],
+    queryFn: () => api.get('/chat/mine/unread/').then(r => r.data),
+    refetchInterval: 60000,
+    enabled: canStaffChat,
+  })
+  const staffUnread = (open && mode === 'staff') ? 0 : (unreadData?.unread || 0)
+
+  // فقط داخل کانتینر پیام‌ها اسکرول شود — scrollIntoView کل صفحه را هم جابه‌جا می‌کرد
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = botListRef.current
+    if (el) el.scrollTop = el.scrollHeight
   }, [messages, loading, open])
 
   // موتور اصلی ربات — فقط برای ادمین و فقط وقتی چت باز می‌شود
@@ -72,6 +90,15 @@ export default function ChatWidget() {
           boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
         }}>
         {open ? '✕' : '💬'}
+        {staffUnread > 0 && (
+          <span style={{
+            position: 'absolute', top: -4, right: -4, minWidth: 20, height: 20, padding: '0 5px',
+            borderRadius: 10, background: '#ef4444', color: '#fff', fontSize: 11, fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            {staffUnread.toLocaleString('fa-IR')}
+          </span>
+        )}
       </button>
 
       {/* پنل چت */}
@@ -84,16 +111,38 @@ export default function ChatWidget() {
           boxShadow: '0 10px 30px rgba(0,0,0,0.4)',
         }}>
           <div className="px-4 py-3 text-sm font-bold flex items-center justify-between" style={{ background: 'var(--color-bg-secondary)', borderBottom: '1px solid var(--color-border)' }}>
-            <span>🤖 دستیار هوشمند دوربینکار</span>
-            {/* نام موتور (اصلی یا موتور واقعی آخرین پاسخ) — فقط برای ادمین */}
-            {isAdmin() && headerEngine && (
+            <span>{mode === 'bot' ? '🤖 دستیار هوشمند دوربینکار' : '👤 گفتگو با پرسنل'}</span>
+            {/* نام موتور (اصلی یا موتور واقعی آخرین پاسخ) — فقط برای ادمین و در حالت ربات */}
+            {mode === 'bot' && isAdmin() && headerEngine && (
               <span className="text-[10px] font-normal px-2 py-0.5 rounded-full" style={{ background: 'var(--color-brand)', color: '#000' }}>
                 {headerEngine}
               </span>
             )}
           </div>
 
-          <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+          {/* سلکتور حالت: ربات هوشمند / پرسنل — فقط کاربر لاگین‌شده غیرپرسنل */}
+          {canStaffChat && (
+            <div className="flex text-[11px]" style={{ borderBottom: '1px solid var(--color-border)' }}>
+              {[['bot', '🤖 ربات هوشمند'], ['staff', '👤 پرسنل']].map(([k, label]) => (
+                <button key={k} onClick={() => setMode(k)}
+                  className="flex-1 py-1.5 transition-colors"
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: mode === k ? 'var(--color-brand)' : 'var(--color-text-secondary)',
+                    borderBottom: mode === k ? '2px solid var(--color-brand)' : '2px solid transparent',
+                    fontWeight: mode === k ? 700 : 400,
+                  }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {mode === 'staff' && canStaffChat ? (
+            <StaffChatPanel />
+          ) : (
+          <>
+          <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2" ref={botListRef}>
             {messages.map((m, i) => (
               <div key={i} style={{ textAlign: m.role === 'user' ? 'left' : 'right' }}>
                 <div className="inline-block px-3 py-2 rounded-xl text-xs leading-6 whitespace-pre-wrap"
@@ -137,7 +186,6 @@ export default function ChatWidget() {
                 {isAdmin() && engineName ? `در حال پاسخ با ${engineName}… ⏳` : 'در حال فکر کردن… ⏳'}
               </div>
             )}
-            <div ref={bottomRef} />
           </div>
 
           <div className="flex gap-2 p-2" style={{ borderTop: '1px solid var(--color-border)' }}>
@@ -155,6 +203,8 @@ export default function ChatWidget() {
               ارسال
             </button>
           </div>
+          </>
+          )}
         </div>
       )}
     </>

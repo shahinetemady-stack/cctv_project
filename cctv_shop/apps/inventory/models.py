@@ -106,13 +106,14 @@ class StockTransfer(AuditMixin):
 
 def get_variant_cost_irr(variant):
     """بهای تمام‌شده ریالی یک کالا برای ارزش‌گذاری موجودی:
-    آخرین فاکتور خرید با هزینه ثبت‌شده؛ اگر خریدی ثبت نشده بود، قیمتِ آخرین حرکت «موجودی اول دوره»؛
-    و در نبود هر دو، برآورد از قیمت خرید یوان کاتالوگ × نرخ روز (تا بهای صفر گزارش نشود)."""
+    آخرین فاکتور خرید با هزینه ثبت‌شده؛ اگر خریدی ثبت نشده بود، قیمتِ آخرین حرکت
+    «موجودی اول دوره» یا «تولید مونتاژ» (بهای تمام‌شده مونتاژ)؛
+    و در نبود هیچ‌کدام، برآورد از قیمت خرید یوان کاتالوگ × نرخ روز (تا بهای صفر گزارش نشود)."""
     pi = variant.purchase_items.filter(unit_cost_irr__gt=0).order_by('-invoice__date').first()
     if pi:
         return pi.unit_cost_irr
     opening = StockMovement.objects.filter(
-        variant=variant, movement_type='opening', unit_price__gt=0
+        variant=variant, movement_type__in=('opening', 'assembly_in'), unit_price__gt=0
     ).order_by('-created_at').first()
     if opening:
         return opening.unit_price
@@ -132,6 +133,8 @@ class StockMovement(AuditMixin):
         TRANSFER_OUT = "transfer_out", "انتقال خروجی"
         ADJUSTMENT   = "adjustment",   "تعدیل موجودی"
         RETURN    = "return",    "مرجوعی"
+        ASSEMBLY_OUT = "assembly_out", "مصرف مونتاژ"
+        ASSEMBLY_IN  = "assembly_in",  "تولید مونتاژ"
 
     warehouse   = models.ForeignKey(Warehouse, on_delete=models.PROTECT,
                     related_name="movements", verbose_name="انبار")

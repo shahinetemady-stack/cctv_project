@@ -5,16 +5,18 @@ from django.core.files.base import ContentFile
 from PIL import Image
 
 MAX_SIDE = 1200   # حداکثر ضلع — کارت‌ها حداکثر ~۳۰۰px نمایش می‌دهند (رتینا ×۲ تا ۴)
+MIN_SIDE = 900    # حداقل ضلع — ترب تصاویر زیر ۶۰۰px را نمایش نمی‌دهد و ۹۰۰×۹۰۰ را توصیه می‌کند
 QUALITY = 82      # کیفیت WebP — تعادل حجم/کیفیت
 
 
 def compress_product_image(uploaded_file):
-    """یک فایل آپلودشده را به WebP (حداکثر ۱۲۰۰px) تبدیل می‌کند و ContentFile برمی‌گرداند."""
+    """یک فایل آپلودشده را به WebP (بین ۹۰۰ تا ۱۲۰۰px) تبدیل می‌کند و ContentFile برمی‌گرداند."""
     img = Image.open(uploaded_file)
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGBA" if "transparency" in img.info else "RGB")
-    if max(img.size) > MAX_SIDE:
-        ratio = MAX_SIDE / max(img.size)
+    side = max(img.size)
+    if side > MAX_SIDE or side < MIN_SIDE:
+        ratio = (MAX_SIDE if side > MAX_SIDE else MIN_SIDE) / side
         img = img.resize(
             (round(img.width * ratio), round(img.height * ratio)),
             Image.LANCZOS,

@@ -7,6 +7,7 @@ import AmountInput, { parseAmount } from '../../components/ui/AmountInput'
 import JalaliDateInput from '../../components/ui/JalaliDateInput'
 import SearchSelect from '../../components/ui/SearchSelect'
 import { jalaliToGregorian, gregorianToJalali, JALALI_MONTHS, jalaliText } from '../../utils/jalali'
+import { todayTehran, todayTehranParts } from '../../utils/date'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 
@@ -59,7 +60,7 @@ function PayModal({ slip, onClose }) {
   const qc = useQueryClient()
   const remaining = Math.max(0, Number(slip.net_amount || 0) - Number(slip.paid_amount || 0))
   const [accountId, setAccountId] = useState('')
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [date, setDate] = useState(todayTehran())
   const [amount, setAmount] = useState(String(remaining))
   const [msg, setMsg] = useState(null)
 
@@ -282,8 +283,7 @@ function PayslipsTab() {
   const qc = useQueryClient()
   const [detailId, setDetailId] = useState(null)
   const [payFor, setPayFor] = useState(null)
-  const now = new Date()
-  const [curJy, curJm] = gregorianToJalali(now.getFullYear(), now.getMonth() + 1, now.getDate())
+  const [curJy, curJm] = gregorianToJalali(...todayTehranParts())
   const [jy, setJy] = useState(curJy)
   const [jm, setJm] = useState(curJm)
   const [gy, gm] = jalaliToGregorian(jy, jm, 1)
@@ -698,7 +698,7 @@ function LeaveBonusTab() {
   const { can } = usePermissions()
   const qc = useQueryClient()
   const editable = can('payroll_edit')
-  const todayIso = new Date().toISOString().split('T')[0]
+  const todayIso = todayTehran()
 
   const [leaveForm, setLeaveForm] = useState({ staff: '', leave_type: 'entitled', days_count: '1', date: todayIso, reason: '' })
   const [bonusForm, setBonusForm] = useState({ staff: '', amount: '', note: '', date: todayIso })

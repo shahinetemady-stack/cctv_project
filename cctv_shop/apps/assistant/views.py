@@ -7,11 +7,9 @@
 
 import json
 import logging
-import os
 import re
 import time
 
-import requests
 from django.conf import settings as dj_settings
 from django.core.cache import cache
 from django.db.models import Q
@@ -21,14 +19,27 @@ from rest_framework.views import APIView
 
 from apps.catalog.models import Product
 
+from .engine import _ask_ollama, _engine_chain
 from .models import FAQ, AssistantSettings, LearnedQA
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
-MODEL = "qwen2.5:3b"
-TIMEOUT = 140  # روی CPU نسل پاسخ کند است — باید زیر nginx/gunicorn (150s) بماند
-CLOUD_TIMEOUT = 40  # سرویس‌های ابری (Gemini/z.ai/…) — رایگان‌ها گاهی تا ~۳۰ ثانیه طول می‌کشند
+
+# ─── RBAC helpers ────────────────────────────────────────────
+
+def _has_perm(user, code):
+    if user.is_superuser:
+        return True
+    sp = getattr(user, 'staff_profile', None)
+    return bool(sp and sp.is_active and sp.has_perm(code))
+
+
+def _has_any_perm(user, *codes):
+    return any(_has_perm(user, c) for c in codes)
+
+
+def _forbidden(msg='شما دسترسی لازم برای این عملیات را ندارید'):
+    return Response({'error': msg}, status=403)
 
 # اعداد فارسی/عربی → لاتین (کاربر «۲ مگاپیکسل» می‌نویسد)
 FA_TO_EN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
@@ -61,6 +72,7 @@ SYSTEM_PROMPT = """تو دستیار فروشگاه اینترنتی «دورب�
 - اگر پیام مشتری فقط سلام و احوال‌پرسی یا تشکر بود (مثل «سلام»، «ممنون»، «خداحافظ»)، کوتاه و محترمانه جواب بده و «هیچ محصولی پیشنهاد نده» و از کاتالوگ چیزی معرفی نکن — فقط بپرس چه قطعه‌ای برای مونتاژ لازم دارد.
 - پیام‌های کوتاه پیگیری (مثل «مدلای بیشتری بده»، «ارزان‌ترش چی؟»، «کدومش موجوده؟») ادامهٔ همان موضوع قبلی گفتگو هستند — از روی تاریخچه گفتگو بفهم منظور مشتری چیست و همان موضوع را ادامه بده، موضوع را عوض نکن.
 - در پایان «هر» پاسخ فنی، قدم بعدی مشتری را حدس بزن و با یک جمله کوتاه پیشنهادش بده — مثلاً اگر برد خواست، به لنز و کیس سازگارش اشاره کن («این برد با لنز ۵ مگاپیکسل و کیس ۳۸ سازگار است؛ دام می‌خواهی یا بولت؟»)؛ اگر لنز خواست، به هولدر و کابل اشاره کن. هدف این است که مشتری برای کامل‌کردن سفارشش راهنمایی شود — فقط یک جمله، کوتاه و طبیعی، نه لیست تبلیغاتی.
+- اگر سؤال «مقایسه» دو یا چند محصول بود (مثل «h4p با h2p چه فرقی دارد؟»)، محور پاسخ «تفاوت‌ها»ست نه شباهت‌ها: هر محصول را جداگانه و با نام دقیق خودش بررسی کن و تفاوت‌ها را نقطه‌وار بگو (سنسور، پردازنده، رزولوشن، قابلیت‌ها، قیمت، کاربرد)؛ از شباهت‌ها حداکثر در نیم‌جمله بگو. هرگز وسط پاسخ از یکی به دیگری بپری یا محصول سوم را جای یکی از آن‌ها تحلیل نکن — و اگر دیتاشیت یکی از آن‌ها در کانتکست نیست، صادقانه بگو اطلاعاتش در دسترس نیست.
 - هرگز خطوط «اطلاعات محصولات» را عیناً یا با همان قالب تکرار نکن؛ با جمله‌های خودت، کوتاه و طبیعی جواب بده و جواب را با کلماتی مثل «همین» یا «بله،» شروع نکن.
 - اگر از هویت یا توانایی‌هایت پرسیدند، بگو: «من ربات هوشمند دوربینکار هستم و به دیتاشیت‌های سایت دسترسی دارم؛ می‌توانم منطبق‌ترین محصول با خواسته شما را پیدا کنم.»
 لحن و سبک (پرسنای نگارش):
@@ -70,6 +82,37 @@ SYSTEM_PROMPT = """تو دستیار فروشگاه اینترنتی «دورب�
 - وقتی پیشنهاد محصول می‌دهی، دلیل فنی بگو (مثلاً «این برد سنسور سونی ۳۳۵ دارد و برای نور کم مناسب است») نه دلیل بازاریابی.
 - کاملاً انسان‌نویس بنویس: طول جمله‌ها متنوع، قضاوت فنی صریح و تجربه‌محور، توصیه عملی قابل اجرا. بدون کلیشه‌های ماشینی مثل «در دنیای امروز»، «با پیشرفت فناوری»، «همان‌طور که می‌دانید»، «در نهایت».
 - ادعای فنی باید دقیق و محتاطانه باشد؛ مدل و عدد واقعی بزن و چیزی جعل نکن."""
+
+
+# ─── دیتاشیت‌های استخراج‌شده (datasheets.json — کامند extract_datasheets) ───
+_DS_CACHE = {"mtime": 0, "data": {}}
+
+
+def _datasheets() -> dict:
+    """خواندن datasheets.json با کش مبتنی بر mtime — روی هر درخواست دیسک خوانده نمی‌شود."""
+    path = dj_settings.BASE_DIR / "datasheets.json"
+    try:
+        mtime = path.stat().st_mtime
+        if mtime != _DS_CACHE["mtime"]:
+            _DS_CACHE["data"] = json.loads(path.read_text(encoding="utf-8"))
+            _DS_CACHE["mtime"] = mtime
+    except OSError:
+        _DS_CACHE["data"] = {}
+    return _DS_CACHE["data"]
+
+
+def _datasheet_context(products, per_product: int = 1500) -> str:
+    """متن دیتاشیت محصولات مرتبط برای کانتکست مدل — مرجع معتبر فنی (RAG)."""
+    ds = _datasheets()
+    blocks = []
+    for p in products:
+        entry = ds.get(p.slug)
+        if entry and entry.get("text"):
+            blocks.append(f"### دیتاشیت «{entry['name']}»:\n{entry['text'][:per_product]}")
+    if not blocks:
+        return ""
+    return ("\n\nمتن دیتاشیت محصول (مرجع معتبر فنی — برای سؤال‌های فنی از همین استفاده کن و "
+            "اگر چیزی در آن نیست بگو در دیتاشیت نیامده):\n" + "\n\n".join(blocks))
 
 
 def _product_dict(p: Product, user=None) -> dict:
@@ -125,6 +168,10 @@ def _spec_summary(p: Product) -> str:
         parts.append(p.modem_type)
     if p.sim_card:
         parts.append("سیم‌کارت‌خور")
+    # مشخصات داینامیک دسته (رزولوشن، نوع لنز، دید در شب و…) — همان دیتاشیت صفحه محصول
+    for k, v in (p.dynamic_specs or {}).items():
+        if v not in (None, "", False) and len(parts) < 14:
+            parts.append(f"{k}: {v}")
     if p.short_description:
         parts.append(p.short_description[:100])
     return "، ".join(parts)
@@ -189,7 +236,21 @@ def _find_products(query: str, limit: int = 4):  # limit کم = پرامپت ک�
             return 0
         # تطابق کلمات مهم‌ترین فاکتور است؛ موجودی فقط امتیاز تشویقی می‌گیرد تا
         # محصول نامرتبطِ موجود بالاتر از تطابق دقیقِ ناموجود قرار نگیرد
-        return matched * 2 + (3 if mp_hit else 0) + (1 if p.available_stock > 0 else 0)
+        base = matched * 2 + (3 if mp_hit else 0) + (1 if p.available_stock > 0 else 0)
+        # تطابق توکنِ کامل در مدل/نام — کوئری مدل دقیق (مثل «2053») باید فقط همان
+        # محصول را بدهد، نه هر محصولی که «2053» در توضیح/سنسورش آمده (مثل F38)
+        model = (p.model_number or "").lower()
+        name = p.name.lower()
+        for w in words:
+            if not w:
+                continue
+            if w == model:
+                base += 30
+            elif re.search(rf"(^|[^a-z0-9]){re.escape(w)}([^a-z0-9]|$)", model):
+                base += 15
+            elif re.search(rf"(^|[^a-z0-9]){re.escape(w)}([^a-z0-9]|$)", name):
+                base += 8
+        return base
 
     pool = []
     if mp_variants:  # تطابق دقیق مگاپیکسل حتماً وارد pool شود — وگرنه ممکن است قبل از اسکورینگ حذف شود
@@ -199,7 +260,9 @@ def _find_products(query: str, limit: int = 4):  # limit کم = پرامپت ک�
         pool = list(qs.filter(mp_q)[:limit])
     pool += [p for p in qs.filter(q).distinct()[: limit * 6] if p not in pool]
     scored = sorted(((score(p), p) for p in pool), key=lambda t: -t[0])
-    products = [p for s, p in scored if s > 0][:limit]
+    # اگر تطابق قوی (توکن کامل در مدل/نام) هست، تطابق‌های ضعیف (فقط توضیح/کلمات‌کلیدی) حذف شوند
+    strong = [p for s, p in scored if s >= 10]
+    products = strong[:limit] if strong else [p for s, p in scored if s > 0][:limit]
     if not products:  # هیچ تطابقی نبود — چند محصول جدید به‌عنوان پیشنهاد کلی
         return list(qs.order_by("-created_at")[:3]), True
     return products, False
@@ -228,93 +291,6 @@ def _faq_context(faqs) -> str:
         return ""
     body = "\n".join(f"س: {f.question}\nج: {f.answer[:300]}" for f in faqs)
     return "\n\nپاسخ‌های آماده فروشگاه (اگر سؤال مشتری به این‌ها مربوط است، «همین» را جواب بده وگرنه نادیده بگیر):\n" + body
-
-
-def _ask_ollama(messages: list) -> str:
-    resp = requests.post(
-        OLLAMA_URL,
-        json={"model": MODEL, "messages": messages, "stream": False,
-              "keep_alive": "30m",  # مدل در حافظه بماند — درخواست‌های بعدی سریع‌تر
-              "options": {"num_predict": 170, "temperature": 0.3}},
-        timeout=TIMEOUT,
-    )
-    resp.raise_for_status()
-    return resp.json()["message"]["content"].strip()
-
-
-def _ask_gemini(messages: list, api_key: str, model: str, proxy: str = "") -> str:
-    """فراخوانی Google Gemini (REST) — قالب چت OpenAI-like به فرمت Gemini تبدیل می‌شود.
-    سرور ایران به گوگل دسترسی ندارد؛ اگر پروکسی ست شده باشد، فقط همین درخواست از آن رد می‌شود."""
-    system = ""
-    contents = []
-    for m in messages:
-        if m["role"] == "system":
-            system += m["content"] + "\n"
-        else:
-            contents.append({
-                "role": "model" if m["role"] == "assistant" else "user",
-                "parts": [{"text": m["content"]}],
-            })
-    resp = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        params={"key": api_key},
-        json={
-            "system_instruction": {"parts": [{"text": system}]},
-            "contents": contents,
-            "generationConfig": {"maxOutputTokens": 500, "temperature": 0.3},
-        },
-        proxies={"http": proxy, "https": proxy} if proxy else None,
-        timeout=CLOUD_TIMEOUT,
-    )
-    resp.raise_for_status()
-    return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-
-
-# سرویس‌های ابری OpenAI-compatible — هر سه از ایران مستقیم در دسترس‌اند (بدون پروکسی)
-OPENAI_COMPAT_PROVIDERS = {
-    "modelscope": {"base_url": "https://api-inference.modelscope.cn/v1", "key_field": "ms_api_key", "model_field": "ms_model"},
-    # حالت «فکر کردن» GLM پیش‌فرض روشن است و با کانتکست بزرگ فارسی تایم‌اوت می‌خورد — خاموشش می‌کنیم
-    "zai":        {"base_url": "https://api.z.ai/api/paas/v4",           "key_field": "zai_api_key", "model_field": "zai_model",
-                   "extra": {"thinking": {"type": "disabled"}},
-                   "timeout": 20},  # ربات رایگان — اگر ۲۰ ثانیه جواب نداد سریع برو سراغ بعدی
-    "deepseek":   {"base_url": "https://api.deepseek.com",               "key_field": "ds_api_key",  "model_field": "ds_model"},
-}
-
-
-def _ask_openai_compat(messages: list, base_url: str, api_key: str, model: str, extra: dict | None = None,
-                       timeout: int = CLOUD_TIMEOUT) -> str:
-    """فراخوانی سرویس‌های OpenAI-compatible (ModelScope / z.ai / DeepSeek) — پیام‌ها همان قالب چت است."""
-    resp = requests.post(
-        f"{base_url}/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={"model": model, "messages": messages, "max_tokens": 500, "temperature": 0.3, **(extra or {})},
-        timeout=timeout,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
-
-
-def _engine_chain(st):
-    """زنجیرهٔ موتورها به ترتیب اولویت: اول موتور انتخاب‌شده، بعد بقیهٔ کلیددارها، آخر Qwen لوکال.
-    خروجی: لیست (نام موتور، تابع فراخوانی با ورودی messages)."""
-    chain = []
-    gemini_key = st.gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
-    gemini = ("gemini", lambda msgs: _ask_gemini(msgs, gemini_key, st.gemini_model, st.gemini_proxy))
-    providers = {
-        "gemini": gemini if (st.gemini_enabled and gemini_key) else None,
-    }
-    for name, cfg in OPENAI_COMPAT_PROVIDERS.items():
-        key = getattr(st, cfg["key_field"])
-        providers[name] = (
-            (name, lambda msgs, c=cfg, k=key, m=getattr(st, cfg["model_field"]): _ask_openai_compat(msgs, c["base_url"], k, m, c.get("extra"), c.get("timeout", CLOUD_TIMEOUT)))
-            if key else None
-        )
-    ordered = [st.provider] + [p for p in ("gemini", "modelscope", "zai", "deepseek") if p != st.provider]
-    for name in ordered:
-        if providers.get(name):
-            chain.append(providers[name])
-    chain.append(("qwen", _ask_ollama))
-    return chain
 
 
 CATALOG_CACHE_TTL = 30 * 60  # کاتالوگ نیم‌ساعته بازسازی می‌شود
@@ -438,6 +414,28 @@ class AssistantChatView(APIView):
         wants_expensive = bool(re.search(r"گران", message)) and not wants_cheap
         price_intent = wants_cheap or wants_expensive
 
+        # کد قطعهٔ تنها (مثل «2053» یا «MC-F46») → فقط جستجوی هوشمند، بدون هوش مصنوعی
+        code_q = message.translate(FA_TO_EN_DIGITS).strip()
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9\-+]{1,19}", code_q):
+            products, is_fallback = _find_products(code_q, limit=4)
+            dicts = []
+            for p in products:
+                d = _product_dict(p, request.user)
+                d["specs"] = _spec_summary(p)
+                dicts.append(d)
+            if dicts and not is_fallback:
+                # متن فقط برچسب باشد — نام/قیمت در کارت محصول می‌آید و تکرار نشود
+                return Response({
+                    "reply": f"نتیجه برای «{message}»:",
+                    "products": dicts,
+                    "engine": "search",
+                })
+            return Response({
+                "reply": f"محصولی با کد «{message}» پیدا نشد — می‌توانید از جستجوی پیشرفته سایت (doorbinkar.com/products) استفاده کنید.",
+                "products": [],
+                "engine": "search",
+            })
+
         products, is_fallback = _find_products(message, limit=200 if price_intent else 4)
 
         # سؤال پیگیری بدون کلمهٔ محصولی («مدلای بیشتری بده»، «ارزان‌ترش چی؟»، «چه رنگاییش داری؟»)
@@ -559,6 +557,7 @@ class AssistantChatView(APIView):
             lines = "(محصولی یافت نشد)"
 
         user_content = (f"اطلاعات محصولات فروشگاه:\n{lines}"
+                        f"{_datasheet_context(products)}"
                         f"{_faq_context(_find_faqs(message))}"
                         f"{_learned_context(message)}"
                         f"\n\nپیام مشتری: {message}")
@@ -764,6 +763,8 @@ class AssistantSettingsView(APIView):
               "learn_from_gemini"]
 
     def get(self, request):
+        if not _has_perm(request.user, 'assistant_settings_view'):
+            return _forbidden()
         st = AssistantSettings.get_instance()
         return Response({
             **{f: getattr(st, f) for f in self.FIELDS},
@@ -772,6 +773,8 @@ class AssistantSettingsView(APIView):
         })
 
     def put(self, request):
+        if not _has_perm(request.user, 'assistant_settings_view'):
+            return _forbidden()
         st = AssistantSettings.get_instance()
         data = request.data
         if "provider" in data and data["provider"] in dict(AssistantSettings.PROVIDERS):

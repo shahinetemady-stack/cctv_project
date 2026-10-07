@@ -73,17 +73,27 @@ const icons = {
   leads: (
     <I><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></I>
   ),
+  publisher: (
+    <I><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></I>
+  ),
+  studio: (
+    <I><path d="m22 8-6 4 6 4V8z"/><rect x="2" y="6" width="14" height="12" rx="2"/></I>
+  ),
+  factory: (
+    <I><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/><line x1="7" y1="18" x2="7.01" y2="18"/><line x1="12" y1="18" x2="12.01" y2="18"/><line x1="17" y1="18" x2="17.01" y2="18"/></I>
+  ),
 }
 
 const ADMIN_MENU = [
   { label: 'داشبورد',            path: '/admin/dashboard',         perm: 'dashboard_view', icon: icons.dashboard },
-  { label: 'لیست قیمت',          path: '/admin/pricing',           perm: 'products_edit',  icon: icons.financial },
-  { label: 'سفارشات',            path: '/admin/orders-management', perm: 'sale_view',      icon: icons.orders,    badgeKey: 'orders' },
+  { label: 'لیست قیمت',          path: '/admin/pricing',           perm: 'pricelist_view', icon: icons.financial },
+  { label: 'سفارشات',            path: '/admin/orders-management', perm: 'orders_view',    icon: icons.orders,    badgeKey: 'orders' },
+  { label: 'چت مشتریان',        path: '/admin/chat',              perm: 'chat_view',      icon: icons.sms,       badgeKey: 'chat' },
   { label: 'فیش‌های واریزی',     path: '/admin/receipts',          perm: 'sale_payment',   icon: icons.payments, badgeKey: 'receipts' },
-  { label: 'مطالبات تاریخ‌گذشته', path: '/admin/aging',            perm: 'reports_view',   icon: icons.balance },
+  { label: 'مطالبات تاریخ‌گذشته', path: '/admin/aging',            perm: 'aging_view',     icon: icons.balance },
   { label: 'فاکتور فروش',        path: '/admin/sales',             perm: 'sale_view',      icon: icons.saleInvoice, badgeKey: 'salesDue' },
   { label: 'فاکتور خرید',        path: '/admin/purchases',         perm: 'purchase_view',  icon: icons.purchases },
-  { label: 'دریافت و پرداخت',    path: '/admin/payments',          perm: 'reports_view',   icon: icons.payments },
+  { label: 'دریافت و پرداخت',    path: '/admin/payments',          perm: 'payment_view',   icon: icons.payments },
   { label: 'برگشت از فروش و خرید', path: '/admin/returns',         perm: 'return_view',    icon: icons.returns },
   { label: 'طرف حساب‌ها',       path: '/admin/contacts',          perm: 'contacts_view',  icon: icons.contacts, badgeKey: 'partners' },
   // ─── گروه تاشو: گزارشات ───
@@ -91,10 +101,10 @@ const ADMIN_MENU = [
     label: 'گزارشات',
     icon: icons.financial,
     children: [
-      { label: 'گزارش رد سفارش‌ها', path: '/admin/reject-report', perm: 'sale_view',     icon: icons.orders },
+      { label: 'گزارش رد سفارش‌ها', path: '/admin/reject-report', perm: 'reject_report_view', icon: icons.orders },
       { label: 'بانک',              path: '/admin/banks',         perm: 'balance_view',  icon: icons.bank },
       { label: 'کاردکس موجودی',     path: '/admin/kardex',        perm: 'kardex_view',   icon: icons.kardex },
-      { label: 'انبارها',           path: '/admin/warehouses',    perm: 'kardex_view',   icon: icons.kardex },
+      { label: 'انبارها',           path: '/admin/warehouses',    perm: 'warehouses_view', icon: icons.kardex },
     ],
   },
   // ─── گروه تاشو: رسیدگی به محتویات سایت ───
@@ -102,9 +112,12 @@ const ADMIN_MENU = [
     label: 'رسیدگی به محتویات سایت',
     icon: icons.products,
     children: [
-      { label: 'محتوی',          path: '/admin/content',  perm: 'products_edit', icon: icons.fields },
+      { label: 'محتوی',          path: '/admin/content',  perm: 'content_view', icon: icons.fields },
+      { label: 'انتشار در پیام‌رسان‌ها', path: '/admin/publisher', perm: 'publisher_view', icon: icons.publisher },
+      { label: 'استودیو محتوا', path: '/admin/content-studio', perm: 'publisher_view', icon: icons.studio },
       { label: 'مدیریت محصولات', path: '/admin/products', perm: 'products_edit', icon: icons.products },
-      { label: 'پکیج‌ها',        path: '/admin/packages', perm: 'products_edit', icon: icons.kardex },
+      { label: 'تولید (مونتاژ)', path: '/admin/production', perm: 'production_view', icon: icons.factory },
+      { label: 'پکیج‌ها',        path: '/admin/packages', perm: 'packages_view', icon: icons.kardex },
     ],
   },
   // ─── گروه تاشو در انتهای منو — آیتم‌های کم‌کاربردتر ───
@@ -115,17 +128,19 @@ const ADMIN_MENU = [
       { label: 'حقوق و دستمزد',      path: '/admin/payroll',           perm: 'payroll_view',  icon: icons.payroll },
       { label: 'هزینه‌ها',           path: '/admin/expenses',          perm: 'expenses_view', icon: icons.expenses },
       { label: 'لاگ فعالیت‌ها',      path: '/admin/logs',            perm: 'users_view',    icon: icons.roles },
-      { label: 'بک‌آپ سیستم',        path: '/admin/backup',          perm: 'reports_view',  icon: icons.backup, superuserOnly: true },
+      { label: 'بک‌آپ سیستم',        path: '/admin/backup',          perm: 'backup_view',   icon: icons.backup },
       { label: 'نقش‌ها و پرسنل',     path: '/admin/roles',           perm: 'users_edit',    icon: icons.roles },
-      { label: 'ویژگی‌های دسته‌ها',  path: '/admin/category-fields', perm: 'products_edit', icon: icons.fields },
-      { label: 'مدیریت دسته‌بندی محصولات', path: '/admin/categories', perm: 'products_edit', icon: icons.categories },
-      { label: 'گزارش مالی پیشرفته', path: '/admin/financial',       perm: 'reports_view',  icon: icons.financial, superuserOnly: true },
-      { label: 'مازاد تقاضا',        path: '/admin/shortage',        perm: 'kardex_view',   icon: icons.kardex },
-      { label: 'تنظیمات پیامک',      path: '/admin/sms-settings',    superuserOnly: true,   icon: icons.sms },
-      { label: 'ربات هوشمند',        path: '/admin/assistant-settings', superuserOnly: true, icon: icons.bot },
-      { label: 'باشگاه همکاران',     path: '/admin/club-settings',   superuserOnly: true,   icon: icons.contacts },
-      { label: 'کمپین پیامکی',       path: '/admin/sms-campaign',    superuserOnly: true,   icon: icons.sms },
-      { label: 'مخاطبان تبلیغاتی',   path: '/admin/leads',           superuserOnly: true,   icon: icons.leads },
+      { label: 'ویژگی‌های دسته‌ها',  path: '/admin/category-fields', perm: 'category_fields_view', icon: icons.fields },
+      { label: 'مدیریت دسته‌بندی محصولات', path: '/admin/categories', perm: 'categories_view', icon: icons.categories },
+      { label: 'گزارش مالی پیشرفته', path: '/admin/financial',       perm: 'reports_view',  icon: icons.financial },
+      { label: 'مازاد تقاضا',        path: '/admin/shortage',        perm: 'shortage_view', icon: icons.kardex },
+      { label: 'تنظیمات پیامک',      path: '/admin/sms-settings',    perm: 'sms_settings_view', icon: icons.sms },
+      { label: 'ربات هوشمند',        path: '/admin/assistant-settings', perm: 'assistant_settings_view', icon: icons.bot },
+      { label: 'باشگاه همکاران',     path: '/admin/club-settings',   perm: 'club_settings_view', icon: icons.contacts },
+      { label: 'کمپین پیامکی',       path: '/admin/sms-campaign',    perm: 'sms_campaign_view', icon: icons.sms },
+      { label: 'مخاطبان تبلیغاتی',   path: '/admin/leads',           perm: 'leads_view',    icon: icons.leads },
+      { label: 'آمار سایت',          path: '/admin/stats',           perm: 'stats_view',    icon: icons.financial },
+      { label: 'سرویس‌ها و اشتراک‌ها', path: '/admin/services',      perm: 'services_view', icon: icons.backup },
     ],
   },
 ]

@@ -152,7 +152,7 @@ function DashboardTab() {
             {data.recent_orders.map(o => (
               <div key={o.order_number} className="flex items-center justify-between py-2.5 text-xs">
                 <span className="font-mono text-gray-300">{o.order_number}</span>
-                <span className="text-gray-steel">{new Date(o.date).toLocaleDateString('fa-IR')}</span>
+                <span className="text-gray-steel">{new Date(o.date).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}</span>
                 <span className={statusColor[o.status]}>{statusLabel[o.status] || o.status_display}</span>
                 <span className="font-bold text-white">{fmt(o.total_amount)} ریال</span>
               </div>
@@ -227,7 +227,7 @@ function KardexTab() {
                     onClick={() => it.inv_items?.length > 0 && setExpanded(expanded === i ? null : i)}
                     className={`border-b border-white/5 ${it.inv_items?.length ? 'cursor-pointer hover:bg-white/5' : ''}`}>
                     <td className="px-3 py-2.5 text-gray-steel whitespace-nowrap">
-                      {it.date ? new Date(it.date).toLocaleDateString('fa-IR') : '—'}
+                      {it.date ? new Date(it.date).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' }) : '—'}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
                       <span className="px-2 py-0.5 rounded-full text-[10px]"
@@ -251,7 +251,7 @@ function KardexTab() {
                   </tr>
                   {expanded === i && it.inv_items?.map((sub, j) => (
                     <tr key={`${i}-${j}`} className="border-b border-white/5 bg-brand/5">
-                      <td className="px-3 py-1.5 text-gray-steel text-[10px]">{new Date(it.date).toLocaleDateString('fa-IR')}</td>
+                      <td className="px-3 py-1.5 text-gray-steel text-[10px]">{new Date(it.date).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}</td>
                       <td />
                       <td className="px-3 py-1.5 text-gray-steel">
                         <span className="mr-1">↳</span> {sub.product_name}
@@ -279,7 +279,7 @@ function KardexTab() {
             <tbody>
               {flatItems.map((it, i) => (
                 <tr key={i} className="border-b border-white/5">
-                  <td className="px-3 py-2.5 text-gray-steel whitespace-nowrap">{new Date(it.date).toLocaleDateString('fa-IR')}</td>
+                  <td className="px-3 py-2.5 text-gray-steel whitespace-nowrap">{new Date(it.date).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}</td>
                   <td className="px-3 py-2.5 font-mono text-gray-300 whitespace-nowrap">{it.inv_number}</td>
                   <td className="px-3 py-2.5 text-gray-300">{it.product_name} <span className="text-gray-steel text-[10px]" dir="ltr">[{it.sku}]</span></td>
                   <td className="px-3 py-2.5">{fmt(it.quantity)}</td>
@@ -318,7 +318,7 @@ function OrderCard({ order }) {
         <div>
           <div className="font-mono text-sm font-semibold">{order.order_number}</div>
           <div className="text-xs text-gray-steel mt-0.5">
-            {new Date(order.created_at).toLocaleDateString('fa-IR')}
+            {new Date(order.created_at).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -348,7 +348,7 @@ function OrderCard({ order }) {
           {order.settlement_due_date && order.settlement_type !== 'cash' && (
             <span className={order.is_settlement_due ? 'text-alert-red font-bold' : 'text-gray-steel'}>
               {order.is_settlement_due ? '⚠️ سررسید تسویه: ' : 'موعد تسویه: '}
-              {new Date(order.settlement_due_date).toLocaleDateString('fa-IR')}
+              {new Date(order.settlement_due_date).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}
             </span>
           )}
         </div>
@@ -375,7 +375,7 @@ function OrderCard({ order }) {
                 {item.settlement_type && item.settlement_type !== 'cash' && (
                   <span className="mr-1 text-brand">
                     ({item.settlement_display}
-                    {item.settlement_due_date && ` — ${new Date(item.settlement_due_date).toLocaleDateString('fa-IR')}`})
+                    {item.settlement_due_date && ` — ${new Date(item.settlement_due_date).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}`})
                   </span>
                 )}
               </span>

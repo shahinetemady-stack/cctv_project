@@ -1,23 +1,20 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import api from '../../services/api'
+import { daysAgoTehran, todayTehran } from '../../utils/date'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 
-// تاریخ محلی YYYY-MM-DD برای n روز قبل
-const daysAgo = (n) => {
-  const d = new Date()
-  d.setDate(d.getDate() - n)
-  return d.toLocaleDateString('en-CA')
-}
+// تاریخ YYYY-MM-DD برای n روز قبل — به وقت ایران
+const daysAgo = daysAgoTehran
 
 const QUICK_RANGES = [
   { label: 'ماه گذشته', get: () => {
       // ماه میلادی گذشته — از اولین تا آخرین روز
-      const d = new Date()
-      const first = new Date(d.getFullYear(), d.getMonth() - 1, 1)
-      const last = new Date(d.getFullYear(), d.getMonth(), 0)
-      return [first.toLocaleDateString('en-CA'), last.toLocaleDateString('en-CA')]
+      const [y, m] = todayTehran().split('-').map(Number)
+      const first = new Date(Date.UTC(y, m - 2, 1))
+      const last = new Date(Date.UTC(y, m - 1, 0))
+      return [first.toISOString().split('T')[0], last.toISOString().split('T')[0]]
     } },
   { label: '۳۰ روز اخیر', get: () => [daysAgo(30), daysAgo(0)] },
   { label: '۹۰ روز اخیر', get: () => [daysAgo(90), daysAgo(0)] },

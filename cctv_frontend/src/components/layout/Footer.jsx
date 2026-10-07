@@ -205,14 +205,23 @@ export default function Footer() {
           {/* ستون برند */}
           <div>
             <div className="flex items-center gap-2.5 mb-5">
-              <div
-                className="w-10 h-10 rounded-xl flex items-center justify-center"
-                style={{ background: 'var(--gradient-gold)', boxShadow: 'var(--shadow-gold)' }}
-              >
-                <svg className="w-5 h-5" style={{ color: 'var(--color-brand-contrast)' }} fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.889L15 14v-4zM3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
-                </svg>
-              </div>
+              {settings?.site_logo ? (
+                <img
+                  src={settings.site_logo}
+                  alt={settings?.site_name || 'لوگو'}
+                  loading="lazy"
+                  className="h-10 w-auto object-contain"
+                />
+              ) : (
+                <div
+                  className="w-10 h-10 rounded-xl flex items-center justify-center"
+                  style={{ background: 'var(--gradient-gold)', boxShadow: 'var(--shadow-gold)' }}
+                >
+                  <svg className="w-5 h-5" style={{ color: 'var(--color-brand-contrast)' }} fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.889L15 14v-4zM3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
+                  </svg>
+                </div>
+              )}
               <span className="font-display font-bold text-[var(--color-text-primary)] text-lg tracking-tight">
                 {settings?.site_name || 'فروشگاه قطعات دوربین'}
               </span>
@@ -351,7 +360,7 @@ export default function Footer() {
         {/* ─── نوار پایانی ─── */}
         <div className="border-t border-[var(--color-border)] py-5 mb-2 flex flex-col md:flex-row items-center justify-between gap-3">
           <span className="text-xs text-[var(--color-text-muted)]">
-            © ۱۳۹۲ تا {new Date().toLocaleDateString('fa-IR', { year: 'numeric' })} {settings?.site_name || 'فروشگاه قطعات دوربین مداربسته'} — تمامی حقوق محفوظ است
+            © ۱۳۹۲ تا {new Date().toLocaleDateString('fa-IR', { year: 'numeric', timeZone: 'Asia/Tehran' })} {settings?.site_name || 'فروشگاه قطعات دوربین مداربسته'} — تمامی حقوق محفوظ است
           </span>
           <div className="flex items-center gap-2">
             <span className="badge badge-gold !text-[10px]">ساخته شده با ❤️ در ایران</span>

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '../../services/api'
-import { formatDate } from '../../utils/date'
+import { formatDate, todayTehran } from '../../utils/date'
 import usePermissions from '../../hooks/usePermissions'
 import AmountInput from '../../components/ui/AmountInput'
 import SearchSelect from '../../components/ui/SearchSelect'
@@ -161,7 +161,7 @@ function NewReturnForm({ onSuccess }) {
   const [hdr, setHdr] = useState({
     source_invoice_id: '',
     warehouse_id: '',
-    date: new Date().toISOString().split('T')[0],
+    date: todayTehran(),
     note: '',
   })
   const [items, setItems] = useState([{ variant_id: '', quantity: '', unit_price: '' }])

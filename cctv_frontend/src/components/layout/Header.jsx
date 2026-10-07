@@ -112,7 +112,7 @@ export default function Header() {
 
       {/* ─── نوار هدر — پیل شناور (مدل Modern Header) ────────── */}
       <header
-        className={`site-header pt-safe animate-header-in ${scrolled ? 'scrolled' : ''}`}
+        className={`site-header pt-safe ${scrolled ? 'scrolled' : ''}`}
       >
         {/* خط اسکن متحرک روی لبه بالا */}
         <div className="hd-scan" aria-hidden="true" />

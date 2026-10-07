@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Search } from 'lucide-react'
@@ -50,9 +50,12 @@ export default function PricingPage() {
   })
   const profitTypes = data?.profit_types || []
 
-  // پر کردن state محلی از داده سرور
+  // پر کردن state محلی از داده سرور — فقط یک بار؛ وگرنه refetch خودکار react-query
+  // (مثلاً با refocus پنجره) مقدارهای تایپ‌شده و ذخیره‌نشده را با داده سرور بازنویسی می‌کرد
+  const hydrated = useRef(false)
   useEffect(() => {
-    if (!data) return
+    if (!data || hydrated.current) return
+    hydrated.current = true
     setRate(String(data.rate_cny_to_irt || ''))
     setCats(Object.fromEntries(data.categories.map(c => [c.id, {
       shipping_cost_cny: String(c.shipping_cost_cny || 0),
@@ -165,6 +168,46 @@ export default function PricingPage() {
   const th = { padding: '8px 8px', textAlign: 'center', color: 'var(--color-text-secondary)', fontWeight: 500, fontSize: 11, whiteSpace: 'nowrap' }
   const td = { padding: '6px 8px', borderBottom: '0.5px solid var(--color-border)' }
 
+  // ── گروه‌بندی ستون‌های قیمت (پلاتینیوم | گلد | سیلور | عمومی) ──
+  // خط جداکننده قوی روی لبه چپ ستونِ مرزی (در RTL یعنی «بعد از» آن ستون)
+  const GROUP_SEP = '2px solid var(--color-border-strong)'
+  const isGroupEdge = (i) => {
+    const t = profitTypes[i], n = profitTypes[i + 1]
+    if (!n || !t.group) return true      // آخرین ستون یا ستون تک‌نفره (بدون گروه)
+    return t.group !== n.group
+  }
+  // سلول‌های سربرگ دو ردیفه — ردیف اول سرگروه‌ها، ردیف دوم زیرستون‌های گروه‌دار
+  const groupHeaderRows = (subSuffix = '') => {
+    const row1 = []
+    let i = 0
+    while (i < profitTypes.length) {
+      const t = profitTypes[i]
+      if (t.group) {
+        let j = i
+        while (j < profitTypes.length && profitTypes[j].group === t.group) j++
+        row1.push(
+          <th key={`g-${t.group}`} colSpan={j - i}
+            style={{ ...th, color: 'var(--color-text)', fontWeight: 700, fontSize: 12, paddingBottom: 2, borderLeft: GROUP_SEP, background: 'var(--color-brand-softer)' }}>
+            {t.group}
+          </th>
+        )
+        i = j
+      } else {
+        row1.push(
+          <th key={t.key} rowSpan={2}
+            style={{ ...th, color: 'var(--color-text)', fontWeight: 700, borderLeft: GROUP_SEP, background: 'var(--color-brand-softer)' }}>
+            {t.label}
+          </th>
+        )
+        i++
+      }
+    }
+    const row2 = profitTypes.flatMap((t, idx) => t.group ? [
+      <th key={t.key} style={{ ...th, paddingTop: 2, ...(isGroupEdge(idx) ? { borderLeft: GROUP_SEP } : {}) }}>{t.label}{subSuffix}</th>
+    ] : [])
+    return { row1, row2 }
+  }
+
   return (
     <div className="container-main py-8 max-w-7xl">
       <h1 className="font-display font-bold text-2xl text-white mb-6">لیست قیمت</h1>
@@ -218,11 +261,14 @@ export default function PricingPage() {
         <div className="overflow-x-auto">
           <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: '100%' }}>
             <thead>
+              <tr style={{ borderBottom: '0.5px solid var(--color-border)' }}>
+                <th rowSpan={2} style={{ ...th, textAlign: 'right' }}>دسته</th>
+                <th rowSpan={2} style={th}>حمل (یوان)</th>
+                <th rowSpan={2} style={th}>ترخیص (یوان)</th>
+                {groupHeaderRows(' ٪').row1}
+              </tr>
               <tr style={{ borderBottom: '0.5px solid var(--color-border-strong)' }}>
-                <th style={{ ...th, textAlign: 'right' }}>دسته</th>
-                <th style={th}>حمل (یوان)</th>
-                <th style={th}>ترخیص (یوان)</th>
-                {profitTypes.map(t => <th key={t.key} style={th}>{t.label} ٪</th>)}
+                {groupHeaderRows(' ٪').row2}
               </tr>
             </thead>
             <tbody>
@@ -249,8 +295,8 @@ export default function PricingPage() {
                             data-navgroup="cats" data-navcol={f} onKeyDown={handleNavKey} />
                         </td>
                       ))}
-                      {profitTypes.map(t => (
-                        <td key={t.key} style={{ ...td, textAlign: 'center' }}>
+                      {profitTypes.map((t, ti) => (
+                        <td key={t.key} style={{ ...td, textAlign: 'center', ...(isGroupEdge(ti) ? { borderLeft: GROUP_SEP } : {}) }}>
                           <AmountInput value={cats[c.id]?.[t.key] || ''}
                             onChange={e => setCats(s => ({ ...s, [c.id]: { ...s[c.id], [t.key]: e.target.value } }))}
                             onBlur={() => saveCat(c.id)} placeholder="٪" className="input-dark text-xs w-14 text-center"
@@ -278,12 +324,16 @@ export default function PricingPage() {
       <div className="card overflow-x-auto">
         <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: '100%' }}>
           <thead>
+            {/* ردیف اول سربرگ: سرگروه‌ها — چهار ستون نقدی/توحسابی/یکماهه/دوماهه زیر «مشتری پلاتینیوم» */}
+            <tr style={{ borderBottom: '0.5px solid var(--color-border)' }}>
+              <th rowSpan={2} style={{ ...th, textAlign: 'right', position: 'sticky', right: 0, background: 'var(--color-bg-elevated)', zIndex: 2 }}>محصول</th>
+              <th rowSpan={2} style={th}>قیمت یوان</th>
+              <th rowSpan={2} style={th}>تخفیف ٪</th>
+              <th rowSpan={2} style={th}>موجودی</th>
+              {groupHeaderRows().row1}
+            </tr>
             <tr style={{ borderBottom: '0.5px solid var(--color-border-strong)' }}>
-              <th style={{ ...th, textAlign: 'right', position: 'sticky', right: 0, background: 'var(--color-bg-elevated)', zIndex: 2 }}>محصول</th>
-              <th style={th}>قیمت یوان</th>
-              <th style={th}>تخفیف ٪</th>
-              <th style={th}>موجودی</th>
-              {profitTypes.map(t => <th key={t.key} style={th}>{t.label}</th>)}
+              {groupHeaderRows().row2}
             </tr>
           </thead>
           <tbody>
@@ -327,18 +377,19 @@ export default function PricingPage() {
                       <StockChips stocks={v.stocks} />
                     </div>
                   </td>
-                  {profitTypes.map(t => {
+                  {profitTypes.map((t, ti) => {
                     // ستون‌های توحسابی/یکماهه/دوماهه — قابل علامت‌گذاری «ندارد» برای هر واریانت
                     const unavailField = {
                       profit_credit_percent: 'credit_unavailable',
                       profit_month1_percent: 'month1_unavailable',
                       profit_month2_percent: 'month2_unavailable',
                     }[t.key]
+                    const sep = isGroupEdge(ti) ? { borderLeft: GROUP_SEP } : {}
                     if (unavailField) {
                       const off = vars[v.id]?.[unavailField]
                       const busy = saving === `${unavailField}-${v.id}`
                       return (
-                        <td key={t.key} style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                        <td key={t.key} style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap', ...sep }}>
                           {off ? (
                             <button onClick={() => toggleUnavailable(v.id, unavailField, t.label)} disabled={busy}
                               title="برای فعال‌سازی مجدد کلیک کنید"
@@ -360,7 +411,7 @@ export default function PricingPage() {
                       )
                     }
                     return (
-                      <td key={t.key} style={{ ...td, textAlign: 'center', fontWeight: 700, whiteSpace: 'nowrap' }}
+                      <td key={t.key} style={{ ...td, textAlign: 'center', fontWeight: 700, whiteSpace: 'nowrap', ...sep }}
                         className="text-gold text-sm">
                         {fmt(priceFor(t.key))}
                       </td>

@@ -9,7 +9,7 @@ import { mediaUrl } from '../../utils/media'
 import { UserStamp } from '../../components/ui'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
-function fmtDate(iso) { return iso ? new Date(iso).toLocaleDateString('fa-IR') : '—' }
+function fmtDate(iso) { return iso ? new Date(iso).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' }) : '—' }
 
 const DELIVERY_STATUS = [
   { value: 'pending',    label: '⏳ در انتظار ارسال', color: '#FF9500' },

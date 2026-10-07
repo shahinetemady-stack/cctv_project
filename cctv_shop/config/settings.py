@@ -57,6 +57,9 @@ INSTALLED_APPS = [
     "apps.assistant",
     "apps.payroll",
     "apps.expenses",
+    "apps.production",
+    "apps.chat",
+    "apps.publisher",
     "django.contrib.humanize",
 
 ]
@@ -134,6 +137,17 @@ LANGUAGE_CODE = "fa-ir"
 TIME_ZONE = "Asia/Tehran"
 USE_I18N = True
 USE_TZ = True
+
+# ─── Cache ────────────────────────────────────────────────────────────────────
+# FileBased چون پیش‌فرض locmem بین پروسه‌ها share نمی‌شود و صف وب‌هوک ترب
+# (نوشته‌شده توسط ورکرهای gunicorn، خوانده‌شده توسط کران push_torob_updates)
+# و فلگ‌های روزانه (ارزیابی باشگاه/بستانکاری) هرگز بین پروسه‌ها منتقل نمی‌شدند.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": BASE_DIR / ".cache",
+    }
+}
 
 # ─── Static & Media ───────────────────────────────────────────────────────────
 STATIC_URL = "/static/"

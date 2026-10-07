@@ -12,6 +12,8 @@ import { filterAdminMenu } from '../../config/adminMenu'
 import MenuBadge from './MenuBadge'
 import OrderNotifier from './OrderNotifier'
 import BackToTop from './BackToTop'
+import AppBadge from '../AppBadge'
+import InstallPrompt from './InstallPrompt'
 // چت‌بات با تأخیر و به‌صورت چانک جدا لود می‌شود تا لود اولیه سبک بماند
 const ChatWidget = lazy(() => import('../ChatWidget'))
 
@@ -444,10 +446,14 @@ export default function Layout() {
       </div>
       {/* اعلان لحظه‌ای سفارش/فیش جدید برای پرسنل */}
       {isStaff && <OrderNotifier />}
-      {/* چت‌بات دستیار هوشمند — همه صفحات؛ بعد از idle لود می‌شود */}
+      {/* چت‌بات دستیار هوشمند + گفتگو با پرسنل — همه صفحات؛ بعد از idle لود می‌شود */}
       <LazyChat />
+      {/* نشان تعداد پیام خوانده‌نشده روی آیکون وب‌اپ نصب‌شده (PWA) */}
+      <AppBadge />
       {/* دکمه شناور بازگشت به بالای صفحه — همه صفحات */}
       <BackToTop />
+      {/* بنر پیشنهاد نصب وب‌اپ — فقط صفحات عمومی سایت */}
+      {!isAdminPage && <InstallPrompt />}
       {/* Mobile Admin Drawer — از طریق دکمه «منو» در ناوبری پایین باز می‌شود */}
       {isStaff && (
         <AdminMobileDrawer

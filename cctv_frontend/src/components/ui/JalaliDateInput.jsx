@@ -2,9 +2,10 @@
 // مقدار به صورت ISO میلادی (YYYY-MM-DD) پاس می‌شود
 import { useState, useEffect } from 'react'
 import { gregorianToJalali, jalaliToGregorian, jalaliMonthDays, JALALI_MONTHS } from '../../utils/jalali'
+import { todayTehranParts } from '../../utils/date'
 
-// سال جلالی جاری — پیش‌فرض برای وقتی کاربر هنوز سالی انتخاب نکرده
-const CURRENT_JY = gregorianToJalali(...(() => { const d = new Date(); return [d.getFullYear(), d.getMonth() + 1, d.getDate()] })())[0]
+// سال جلالی جاری — پیش‌فرض برای وقتی کاربر هنوز سالی انتخاب نکرده (به وقت ایران)
+const CURRENT_JY = gregorianToJalali(...todayTehranParts())[0]
 
 const toEn = (s) => String(s || '')
   .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))

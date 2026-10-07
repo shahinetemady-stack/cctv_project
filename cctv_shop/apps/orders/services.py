@@ -99,7 +99,7 @@ def _create_sale_invoice_for_order(order: Order, created_by=None):
     from apps.orders.models import settlement_due_for
 
     items = list(order.items.select_related("variant").all())
-    today = timezone.now().date()
+    today = timezone.localdate()
     invoice = SaleInvoice.objects.create(
         source=SaleInvoice.InvoiceSource.ORDER,
         status=SaleInvoice.Status.CONFIRMED,
@@ -355,7 +355,7 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
         update_fields.append("settlement_due_date")
     order.admin_notes = (
         (order.admin_notes + "\n" if order.admin_notes else "")
-        + f"تأیید توسط {admin_user} در {timezone.now().strftime('%Y-%m-%d %H:%M')}"
+        + f"تأیید توسط {admin_user} در {timezone.localtime().strftime('%Y-%m-%d %H:%M')}"
     )
     order.save(update_fields=update_fields)
     if has_cash_item:
@@ -390,7 +390,7 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
     # کسر موجودی از طریق رزروهای سفارش مدیریت می‌شود — deduct_from_inventory صدا زده نمی‌شود.
     from apps.accounting.models import SaleInvoice, SaleItem, SettlementLine
 
-    confirm_date = timezone.now().date()
+    confirm_date = timezone.localdate()
     invoice = SaleInvoice.objects.create(
         source=SaleInvoice.InvoiceSource.ORDER,
         status=SaleInvoice.Status.CONFIRMED,
@@ -546,7 +546,7 @@ def cancel_order(order: Order, reason: str = "manual") -> Order:
     order.status = Order.Status.CANCELLED
     order.admin_notes = (
         (order.admin_notes + "\n" if order.admin_notes else "")
-        + f"[کنسل] دلیل: {reason} — {timezone.now().strftime('%Y-%m-%d %H:%M')}"
+        + f"[کنسل] دلیل: {reason} — {timezone.localtime().strftime('%Y-%m-%d %H:%M')}"
     )
     order.save(update_fields=["status", "admin_notes", "updated_at"])
 
@@ -564,7 +564,7 @@ def due_settlements_queryset():
     علاوه بر منطق per-item قدیمی، سفارش‌هایی هم شامل می‌شوند که ردیف تسویهٔ
     فعال فاکتور فروششان سررسید رسیده و هنوز مانده دارد."""
     from django.db.models import Q, Sum, F
-    today = timezone.now().date()
+    today = timezone.localdate()
     credit_types = [Order.Settlement.CREDIT, Order.Settlement.MONTH1, Order.Settlement.MONTH2]
     closed_statuses = [
         Order.Status.PAID, Order.Status.CANCELLED,
@@ -601,7 +601,7 @@ def due_settlements_queryset():
 
 def due_items(order):
     """اقلام سررسیدرسیده یک سفارش (برای متن هشدار)."""
-    today = timezone.now().date()
+    today = timezone.localdate()
     return order.items.filter(
         settlement_due_date__lte=today,
     ).exclude(settlement_type=Order.Settlement.CASH)
@@ -615,7 +615,7 @@ def send_due_settlement_reminders() -> int:
     from apps.notifications.models import NotificationLog
     from apps.notifications.services import notify_settlement_due
 
-    today = timezone.now().date()
+    today = timezone.localdate()
     sent = 0
     for order in due_settlements_queryset():
         already = NotificationLog.objects.filter(
@@ -653,7 +653,7 @@ def apply_customer_credit(user, actor=None) -> int:
     profile.save(update_fields=["payment_credit_irr", "updated_at"])
     result = settle_customer_fifo(
         user, credit,
-        date=timezone.now().date(), actor=actor, method="transfer",
+        date=timezone.localdate(), actor=actor, method="transfer",
         note="تخصیص خودکار از بستانکاری مشتری (اضافه‌واریزی قبلی)",
     )
     applied = credit - result["leftover"]

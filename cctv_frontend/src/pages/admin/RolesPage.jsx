@@ -9,19 +9,24 @@ import api from '../../services/api'
 import usePermissions from '../../hooks/usePermissions'
 import { formatDate } from '../../utils/date'
 
+// هر منوی پنل ادمین یک کد دسترسی مستقل دارد — تیک هر کدام همان منو و API متناظرش را باز/بسته می‌کند
 const PERM_GROUPS = [
-  { label: 'فروش', perms: ['sale_view', 'sale_create', 'sale_edit', 'sale_payment'] },
+  { label: 'داشبورد', perms: ['dashboard_view'] },
+  { label: 'سفارشات و فاکتور فروش', perms: ['orders_view', 'sale_view', 'sale_create', 'sale_edit', 'sale_payment'] },
   { label: 'برگشت از فروش و خرید', perms: ['return_view', 'return_create', 'return_edit'] },
-  { label: 'انبار و کاردکس', perms: ['kardex_view', 'kardex_edit'] },
-  { label: 'خرید', perms: ['purchase_view', 'purchase_create', 'purchase_edit', 'payment_edit'] },
+  { label: 'خرید', perms: ['purchase_view', 'purchase_create', 'purchase_edit'] },
+  { label: 'دریافت و پرداخت', perms: ['payment_view', 'payment_edit'] },
   { label: 'طرف حساب‌ها', perms: ['contacts_view', 'contacts_create', 'contacts_edit', 'partner_approve'] },
-  { label: 'گزارشات مالی', perms: ['reports_view', 'balance_view', 'accounts_edit'] },
+  { label: 'گزارشات مالی', perms: ['reports_view', 'aging_view', 'reject_report_view', 'balance_view', 'accounts_edit'] },
+  { label: 'انبار و کاردکس', perms: ['kardex_view', 'kardex_edit', 'warehouses_view', 'shortage_view'] },
   { label: 'حقوق و دستمزد', perms: ['payroll_view', 'payroll_edit', 'payroll_pay'] },
   { label: 'هزینه‌ها', perms: ['expenses_view', 'expenses_edit'] },
-  { label: 'مدیریت کاربران', perms: ['users_view', 'users_edit'] },
-  { label: 'محصولات', perms: ['products_view', 'products_edit'] },
-  { label: 'فرمول قیمت', perms: ['pricing_rate_view', 'pricing_costs_view'] },
-  { label: 'داشبورد', perms: ['dashboard_view'] },
+  { label: 'کاربران و سیستم', perms: ['users_view', 'users_edit', 'backup_view', 'exchange_rate_edit'] },
+  { label: 'محصولات و محتوا', perms: ['products_view', 'products_edit', 'pricelist_view', 'packages_view', 'categories_view', 'category_fields_view', 'content_view', 'pricing_rate_view', 'pricing_costs_view'] },
+  { label: 'تولید (مونتاژ)', perms: ['production_view', 'production_manage'] },
+  { label: 'چت مشتریان', perms: ['chat_view', 'chat_reply'] },
+  { label: 'انتشار در پیام‌رسان‌ها', perms: ['publisher_view', 'publisher_publish', 'publisher_approve', 'publisher_credentials'] },
+  { label: 'ابزارهای مدیریتی', perms: ['sms_settings_view', 'sms_campaign_view', 'leads_view', 'assistant_settings_view', 'club_settings_view', 'stats_view', 'services_view'] },
 ]
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
@@ -305,7 +310,7 @@ function StaffManager({ roles }) {
   const [showAdd, setShowAdd] = useState(false)
   const [addMode, setAddMode] = useState('search') // search | new
   const [form, setForm] = useState({ user_id: '', role_id: '', employee_id: '', department: '' })
-  const [newUser, setNewUser] = useState({ phone: '', first_name: '', last_name: '', password: '' })
+  const [newUser, setNewUser] = useState({ phone: '', first_name: '', last_name: '', password: '', role_id: '', employee_id: '', department: '' })
   const [userSearch, setUserSearch] = useState('')
   const [selectedUser, setSelectedUser] = useState(null)
   const [showUserDrop, setShowUserDrop] = useState(false)
@@ -322,25 +327,46 @@ function StaffManager({ roles }) {
     enabled: userSearch.length >= 2,
   })
 
-  const createUserMut = useMutation({
-    mutationFn: (d) => api.post('/accounting/staff/create-user/', d).then(r => r.data),
-    onSuccess: (data) => {
-      setSelectedUser({ id: data.user_id, name: data.name, phone: data.phone })
-      setForm(f => ({ ...f, user_id: data.user_id }))
-      setAddMode('search')
-      toast.success(`کاربر ${data.name} ساخته شد`)
+  const resetAddForm = () => {
+    setShowAdd(false)
+    setForm({ user_id: '', role_id: '', employee_id: '', department: '' })
+    setNewUser({ phone: '', first_name: '', last_name: '', password: '', role_id: '', employee_id: '', department: '' })
+    setSelectedUser(null)
+    setUserSearch('')
+  }
+
+  // ساخت کاربر + ثبت پرسنل در یک مرحله — قبلاً فقط کاربر ساخته می‌شد و در لیست نمی‌آمد
+  const createStaffMut = useMutation({
+    mutationFn: async (d) => {
+      const res = await api.post('/accounting/staff/create-user/', {
+        phone: d.phone, password: d.password,
+        first_name: d.first_name, last_name: d.last_name,
+      }).then(r => r.data)
+      await api.post('/accounting/staff/', {
+        user_id: res.user_id,
+        role_id: d.role_id,
+        employee_id: d.employee_id,
+        department: d.department,
+      })
+      return res
     },
-    onError: (e) => toast.error(e.response?.data?.error || 'خطا در ساخت کاربر'),
+    onSuccess: () => {
+      qc.invalidateQueries(['staff'])
+      resetAddForm()
+      toast.success('پرسنل ثبت شد')
+    },
+    onError: (e) => {
+      qc.invalidateQueries(['staff'])
+      const msg = e.response?.data?.error || 'خطا در ثبت پرسنل'
+      toast.error(msg.includes('قبلاً ثبت شده') ? `${msg} — از حالت «جستجوی کاربر موجود» استفاده کنید` : msg)
+    },
   })
 
   const addMut = useMutation({
     mutationFn: (d) => api.post('/accounting/staff/', d).then(r => r.data),
     onSuccess: () => {
       qc.invalidateQueries(['staff'])
-      setShowAdd(false)
-      setForm({ user_id: '', role_id: '', employee_id: '', department: '' })
-      setSelectedUser(null)
-      setUserSearch('')
+      resetAddForm()
       toast.success('پرسنل ثبت شد')
     },
     onError: (e) => toast.error(e.response?.data?.error || 'خطا در ثبت پرسنل'),
@@ -392,14 +418,33 @@ function StaffManager({ roles }) {
                   <input value={newUser.last_name} onChange={e => setNewUser(u => ({...u, last_name: e.target.value}))}
                     className="input text-xs" placeholder="اختیاری" />
                 </div>
+                <div>
+                  <label className="label text-xs mb-1 block">نقش *</label>
+                  <select value={newUser.role_id} onChange={e => setNewUser(u => ({...u, role_id: e.target.value}))} className="input text-xs">
+                    <option value="">انتخاب نقش...</option>
+                    {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label text-xs mb-1 block">کد پرسنلی</label>
+                  <input value={newUser.employee_id} onChange={e => setNewUser(u => ({...u, employee_id: e.target.value}))} className="input text-xs" placeholder="اختیاری" />
+                </div>
+                <div>
+                  <label className="label text-xs mb-1 block">بخش</label>
+                  <input value={newUser.department} onChange={e => setNewUser(u => ({...u, department: e.target.value}))} className="input text-xs" placeholder="مثلاً: فروش" />
+                </div>
               </div>
-              <button onClick={() => createUserMut.mutate(newUser)} disabled={!newUser.phone || !newUser.password || createUserMut.isPending}
-                className="btn-primary text-xs px-4 py-2 disabled:opacity-50">
-                {createUserMut.isPending ? 'در حال ساخت...' : 'ساخت کاربر'}
-              </button>
-              {selectedUser && <div className="text-xs text-green-400">✓ کاربر ساخته شد: {selectedUser.name || selectedUser.phone}</div>}
+              <div className="flex gap-2">
+                <button onClick={() => createStaffMut.mutate(newUser)}
+                  disabled={!newUser.phone || !newUser.password || !newUser.role_id || createStaffMut.isPending}
+                  className="btn-primary text-xs px-4 py-2 disabled:opacity-50">
+                  {createStaffMut.isPending ? 'در حال ثبت...' : 'ثبت پرسنل'}
+                </button>
+                <button onClick={resetAddForm} className="btn-secondary text-xs px-4 py-2">انصراف</button>
+              </div>
             </div>
           ) : (
+          <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label text-xs mb-1 block">جستجوی کاربر *</label>
@@ -438,12 +483,15 @@ function StaffManager({ roles }) {
               <input value={form.department} onChange={e => setForm(f => ({ ...f, department: e.target.value }))} className="input text-xs" placeholder="مثلاً: فروش" />
             </div>
           </div>
-          )}
           <div className="flex gap-2">
             <button onClick={() => addMut.mutate(form)} disabled={!form.user_id || !form.role_id || addMut.isPending}
-              className="btn-primary text-xs px-4 py-2 disabled:opacity-50">ذخیره</button>
-            <button onClick={() => setShowAdd(false)} className="btn-secondary text-xs px-4 py-2">انصراف</button>
+              className="btn-primary text-xs px-4 py-2 disabled:opacity-50">
+              {addMut.isPending ? 'در حال ثبت...' : 'ثبت پرسنل'}
+            </button>
+            <button onClick={resetAddForm} className="btn-secondary text-xs px-4 py-2">انصراف</button>
           </div>
+          </div>
+          )}
         </div>
       )}
 

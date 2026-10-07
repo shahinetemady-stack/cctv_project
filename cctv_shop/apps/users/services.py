@@ -331,7 +331,7 @@ def partner_restriction(user):
         return None
 
     st = get_club_settings()
-    today = timezone.now().date()
+    today = timezone.localdate()
     worst = "warning"
     for line in lines:
         from datetime import date as date_cls

@@ -7,6 +7,7 @@ import AmountInput, { parseAmount } from '../../components/ui/AmountInput'
 import JalaliDateInput from '../../components/ui/JalaliDateInput'
 import SearchSelect from '../../components/ui/SearchSelect'
 import { jalaliToGregorian, gregorianToJalali, JALALI_MONTHS, jalaliText, jalaliMonthDays } from '../../utils/jalali'
+import { todayTehran, todayTehranParts } from '../../utils/date'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 
@@ -186,7 +187,7 @@ function ChargeDetailModal({ chargeId, onClose }) {
 // ─── مودال هزینه تکرارشونده (جدید / ویرایش) ───────────────────
 function RecurringFormModal({ recurring, onClose }) {
   const qc = useQueryClient()
-  const todayIso = new Date().toISOString().split('T')[0]
+  const todayIso = todayTehran()
   const [form, setForm] = useState({
     title: recurring?.title || '',
     category: recurring ? String(recurring.category ?? '') : '',
@@ -372,8 +373,7 @@ function RecurringKardexModal({ recurringId, onClose }) {
 // ─── مودال صدور سند ماه ───────────────────────────────────────
 function AccrueModal({ onClose }) {
   const qc = useQueryClient()
-  const now = new Date()
-  const [curJy, curJm] = gregorianToJalali(now.getFullYear(), now.getMonth() + 1, now.getDate())
+  const [curJy, curJm] = gregorianToJalali(...todayTehranParts())
   const [jy, setJy] = useState(curJy)
   const [jm, setJm] = useState(curJm)
   const [gy, gm] = jalaliToGregorian(jy, jm, 1)
@@ -506,7 +506,7 @@ function RecurringTab() {
 // ─── مودال ثبت هزینه متفرقه ───────────────────────────────────
 function GeneralChargeModal({ onClose }) {
   const qc = useQueryClient()
-  const todayIso = new Date().toISOString().split('T')[0]
+  const todayIso = todayTehran()
   const [form, setForm] = useState({
     title: '', category: '', amount: '', date: todayIso, contact: '', notes: '',
   })
@@ -607,8 +607,7 @@ function GeneralTab() {
   const [addOpen, setAddOpen] = useState(false)
   const [detailId, setDetailId] = useState(null)
 
-  const now = new Date()
-  const [curJy, curJm] = gregorianToJalali(now.getFullYear(), now.getMonth() + 1, now.getDate())
+  const [curJy, curJm] = gregorianToJalali(...todayTehranParts())
   const [jy, setJy] = useState(curJy)
   const [jm, setJm] = useState(curJm)
   const monthLabel = `${JALALI_MONTHS[jm - 1]} ${jy.toLocaleString('fa-IR')}`
@@ -864,7 +863,7 @@ function InvestorEditModal({ investor, onClose }) {
 // ─── مودال گردش سرمایه (واریز / برداشت) ───────────────────────
 function MovementModal({ investor, onClose }) {
   const qc = useQueryClient()
-  const todayIso = new Date().toISOString().split('T')[0]
+  const todayIso = todayTehran()
   const [form, setForm] = useState({
     movement_type: 'deposit', date: todayIso, amount: '', account: '', note: '',
   })

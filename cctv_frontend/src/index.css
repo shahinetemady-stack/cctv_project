@@ -1383,6 +1383,65 @@ select.input option { background: var(--color-bg-elevated); }
   border: 2.5px solid var(--color-brand-contrast); border-bottom: none;
 }
 @keyframes bot-bob { 0%, 100% { transform: translateY(2px); } 50% { transform: translateY(-2px); } }
+/* نسخه تصویر ثابت ربات (رندر کاربر) — fallback نگه‌داشته‌شده */
+.bot-face.bot-img { background: none; box-shadow: none; gap: 0; }
+.bot-face.bot-img img {
+  width: 100%; height: 100%; display: block; pointer-events: none;
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.4)) drop-shadow(0 0 8px rgba(255, 195, 45, 0.30));
+}
+
+/* ─── ربات Bumble-Bot سه‌بعدی (SVG) — چشم/دهان/دست/آنتن/تراستر متحرک ─── */
+.bot-face.bot-3d { background: none; box-shadow: none; gap: 0; }
+.bot-face.bot-3d::before { display: none; }
+.bot-face.bot-3d svg { display: block; overflow: visible; filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.4)); }
+.bot3d-eye, .bot3d-eye-happy, .bot3d-smile,
+.bot3d-arm-l, .bot3d-arm-r, .bot3d-ant-l, .bot3d-ant-r, .bot3d-flame { transform-box: fill-box; }
+.bot3d-eye { transform-origin: center; transition: opacity 0.15s ease; }
+.bot3d-eye-happy { opacity: 0; transition: opacity 0.15s ease; }
+.bot3d-smile { transform-origin: center; transition: transform 0.2s ease; }
+.bot3d-arm-l { transform-origin: 70% 12%; }
+.bot3d-arm-r { transform-origin: 30% 12%; }
+.bot3d-ant-l, .bot3d-ant-r { transform-origin: 50% 100%; }
+/* شعله تراستر — همیشه پربپر */
+.bot3d-flame { transform-origin: 50% 0; animation: bot3d-flame 0.45s ease-in-out infinite alternate; }
+@keyframes bot3d-flame { from { transform: scaleY(0.75); opacity: 0.5; } to { transform: scaleY(1.2); opacity: 0.95; } }
+/* بیکار: نگاه چپ‌وراست + پلک هر چند ثانیه */
+.bot-face-idle .bot3d-eye { animation: bot3d-idle-eyes 6s ease-in-out infinite; }
+@keyframes bot3d-idle-eyes {
+  0%, 18% { transform: translateX(0); }
+  24%, 30% { transform: translateX(2.2px); }
+  36%, 48% { transform: translateX(0); }
+  54%, 60% { transform: translateX(-2.2px); }
+  66%, 88% { transform: translateX(0); }
+  91% { transform: scaleY(1); }
+  94% { transform: scaleY(0.1); }
+  97%, 100% { transform: scaleY(1); }
+}
+/* گوش‌دادن: چشم‌ها بزرگ‌تر و خیره به متن کاربر + دست‌ها کمی بالا */
+.bot-face-listening .bot3d-eye { animation: bot3d-listen 2.2s ease-in-out infinite; }
+@keyframes bot3d-listen { 0%, 100% { transform: scale(1.18) translateY(1px); } 50% { transform: scale(1.18) translateY(2.4px); } }
+.bot-face-listening .bot3d-arm-l { animation: bot3d-armraise-l 1.6s ease-in-out infinite; }
+.bot-face-listening .bot3d-arm-r { animation: bot3d-armraise-r 1.6s ease-in-out infinite; }
+@keyframes bot3d-armraise-l { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(-14deg); } }
+@keyframes bot3d-armraise-r { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(14deg); } }
+/* فکرکردن: نگاه بالا و چپ‌وراست + لبخند جمع‌شده + لرزش آنتن */
+.bot-face-thinking .bot3d-eye { animation: bot3d-think-look 1.1s ease-in-out infinite; }
+@keyframes bot3d-think-look { 0%, 100% { transform: translateY(-2.4px) translateX(-2px); } 50% { transform: translateY(-2.4px) translateX(2px); } }
+.bot-face-thinking .bot3d-smile { transform: scaleY(0.4); }
+.bot-face-thinking .bot3d-ant-l { animation: bot3d-ant-wob 0.9s ease-in-out infinite; }
+.bot-face-thinking .bot3d-ant-r { animation: bot3d-ant-wob 0.9s ease-in-out 0.15s infinite; }
+@keyframes bot3d-ant-wob { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
+/* خوشحال: چشم هلالی + لبخند بزرگ‌تر + دست‌تکان‌دادن */
+.bot-face-happy .bot3d-eye { opacity: 0; }
+.bot-face-happy .bot3d-eye-happy { opacity: 1; }
+.bot-face-happy .bot3d-smile { transform: scale(1.18) translateY(-1px); }
+.bot-face-happy .bot3d-arm-l { animation: bot3d-wave-l 0.7s ease 2; }
+.bot-face-happy .bot3d-arm-r { animation: bot3d-wave-r 0.7s ease 2; }
+@keyframes bot3d-wave-l { 0%, 100% { transform: rotate(0deg); } 30% { transform: rotate(-38deg); } 60% { transform: rotate(-14deg); } }
+@keyframes bot3d-wave-r { 0%, 100% { transform: rotate(0deg); } 30% { transform: rotate(38deg); } 60% { transform: rotate(14deg); } }
+/* پلک زدن هنگام پرواز به سمت خانه */
+.bot-flyer .bot3d-eye { animation: bot3d-blink 3s ease-in-out infinite; }
+@keyframes bot3d-blink { 0%, 91%, 100% { transform: scaleY(1); } 94% { transform: scaleY(0.1); } 97% { transform: scaleY(1); } }
 /* هاله پالس‌دار روی ::before — انیمیت opacity به‌جای box-shadow (composite-only) */
 .bot-face { position: relative; }
 .bot-face::before {

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '../../services/api'
 import { UserStamp } from '../../components/ui'
+import SearchSelect, { advanceFlow } from '../../components/ui/SearchSelect'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 
@@ -165,16 +166,18 @@ function StocksModal({ warehouse, onClose }) {
   )
 }
 
-// ─── مودال انتقال کالا بین انبارها ──────────────────────────
+// ─── مودال انتقال کالا بین انبارها (تکی و جمعی) ───────────────
+function newRow() {
+  return { variant_id: '', quantity: 0 }
+}
+
 function TransferModal({ warehouses, presetFrom, onClose }) {
   const qc = useQueryClient()
-  const searchRef = useRef(null)
 
   const [form, setForm] = useState({
-    from_warehouse_id: presetFrom || '', to_warehouse_id: '', variant_id: '', quantity: '', note: '',
+    from_warehouse_id: presetFrom || '', to_warehouse_id: '', note: '',
   })
-  const [search, setSearch] = useState('')
-  const [showDropdown, setShowDropdown] = useState(false)
+  const [items, setItems] = useState([newRow()]) // [{variant_id, quantity}]
   const [msg, setMsg] = useState(null)
 
   const { data: variantsData } = useQuery({
@@ -182,29 +185,33 @@ function TransferModal({ warehouses, presetFrom, onClose }) {
     queryFn: () => api.get('/catalog/variants/').then(r => r.data),
   })
 
+  // موجودی انبار مبدأ — برای نمایش «موجود» کنار هر ردیف
+  const { data: fromStocks = [] } = useQuery({
+    queryKey: ['warehouse-stocks', form.from_warehouse_id],
+    queryFn: () => api.get(`/inventory/warehouses/${form.from_warehouse_id}/stocks/`).then(r => r.data),
+    enabled: !!form.from_warehouse_id,
+  })
+  const stockMap = useMemo(
+    () => Object.fromEntries(fromStocks.map(s => [String(s.variant_id), s.quantity])),
+    [fromStocks]
+  )
+
   const allVariants = Array.isArray(variantsData)
     ? variantsData
     : (variantsData?.results || variantsData?.data || [])
 
-  const filtered = useMemo(() => {
-    if (!search) return allVariants.slice(0, 30)
-    const q = search.toLowerCase()
-    return allVariants.filter(v =>
-      (v.product_name || '').toLowerCase().includes(q) ||
-      (v.sku || '').toLowerCase().includes(q) ||
-      (v.category || '').toLowerCase().includes(q)
-    ).slice(0, 30)
-  }, [allVariants, search])
-
-  const selectedInfo = allVariants.find(v => String(v.id) === String(form.variant_id))
-
-  useEffect(() => {
-    function onClickOutside(e) {
-      if (searchRef.current && !searchRef.current.contains(e.target)) setShowDropdown(false)
-    }
-    document.addEventListener('mousedown', onClickOutside)
-    return () => document.removeEventListener('mousedown', onClickOutside)
-  }, [])
+  // گزینه‌های هر ردیف: فقط کالاهای انبار مبدأ که در ردیف‌های دیگر انتخاب نشده‌اند
+  function rowOptions(item) {
+    if (!form.from_warehouse_id) return []
+    const others = new Set(items.filter(i => i !== item && i.variant_id).map(i => String(i.variant_id)))
+    return allVariants
+      .filter(v => stockMap[String(v.id)] !== undefined && !others.has(String(v.id)))
+      .map(v => ({
+        value: v.id,
+        label: v.product_name,
+        sub: `${v.sku || ''} | موجودی: ${Number(stockMap[String(v.id)]).toLocaleString('fa-IR')}`,
+      }))
+  }
 
   const transferMut = useMutation({
     mutationFn: (payload) => api.post('/inventory/transfers/', payload).then(r => r.data),
@@ -218,23 +225,52 @@ function TransferModal({ warehouses, presetFrom, onClose }) {
     onError: (e) => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا در انتقال' }),
   })
 
+  function updateRow(idx, patch) {
+    setItems(list => list.map((it, i) => i === idx ? { ...it, ...patch } : it))
+  }
+
+  function addRow() {
+    setItems(list => [...list, newRow()])
+  }
+
+  function removeRow(idx) {
+    setItems(list => list.filter((_, i) => i !== idx))
+  }
+
+  function handleQtyEnter(idx, e) {
+    if (idx === items.length - 1) addRow()
+    setTimeout(() => advanceFlow('tr', e.target), 60)
+  }
+
   function handleSubmit() {
     if (!form.from_warehouse_id || !form.to_warehouse_id)
       return setMsg({ type: 'error', text: 'انبار مبدأ و مقصد را انتخاب کنید' })
     if (String(form.from_warehouse_id) === String(form.to_warehouse_id))
       return setMsg({ type: 'error', text: 'انبار مبدأ و مقصد نمی‌تواند یکی باشد' })
-    if (!form.variant_id)
-      return setMsg({ type: 'error', text: 'محصول را انتخاب کنید' })
-    const qty = Number(form.quantity)
-    if (!qty || qty <= 0)
-      return setMsg({ type: 'error', text: 'تعداد معتبر وارد کنید' })
+    const validItems = items.filter(i => i.variant_id)
+    if (validItems.length === 0)
+      return setMsg({ type: 'error', text: 'حداقل یک قلم کالا انتخاب کنید' })
+    for (const i of validItems) {
+      const name = allVariants.find(v => String(v.id) === String(i.variant_id))?.product_name || `#${i.variant_id}`
+      const qty = Number(i.quantity)
+      if (!qty || qty <= 0)
+        return setMsg({ type: 'error', text: `تعداد «${name}» معتبر نیست` })
+      const avail = stockMap[String(i.variant_id)]
+      if (avail !== undefined && qty > avail)
+        return setMsg({ type: 'error', text: `موجودی «${name}» در انبار مبدأ ${avail} عدد است` })
+    }
     setMsg(null)
-    transferMut.mutate({ ...form, quantity: qty })
+    transferMut.mutate({
+      ...form,
+      items: validItems.map(i => ({ variant_id: i.variant_id, quantity: Number(i.quantity) })),
+    })
   }
+
+  const totalQty = items.reduce((s, i) => s + (Number(i.quantity) || 0), 0)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="card p-6 w-full max-w-lg">
+      <div className="card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <h2 className="font-bold text-white text-lg">🔀 انتقال کالا بین انبارها</h2>
           <button onClick={onClose} className="text-gray-steel hover:text-white text-2xl">×</button>
@@ -245,7 +281,7 @@ function TransferModal({ warehouses, presetFrom, onClose }) {
             <div>
               <label className="label text-xs mb-1 block">از انبار *</label>
               <select value={form.from_warehouse_id}
-                onChange={e => setForm(f => ({ ...f, from_warehouse_id: e.target.value }))}
+                onChange={e => { setForm(f => ({ ...f, from_warehouse_id: e.target.value })); setItems([newRow()]) }}
                 className="input text-sm">
                 <option value="">انتخاب کنید</option>
                 {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
@@ -262,47 +298,67 @@ function TransferModal({ warehouses, presetFrom, onClose }) {
             </div>
           </div>
 
-          <div ref={searchRef} className="relative">
-            <label className="label text-xs mb-1 block">محصول *</label>
-            <input
-              value={selectedInfo ? `${selectedInfo.product_name} (${selectedInfo.sku})` : search}
-              onChange={e => {
-                setSearch(e.target.value)
-                setForm(f => ({ ...f, variant_id: '' }))
-                setShowDropdown(true)
-              }}
-              onFocus={() => setShowDropdown(true)}
-              className="input text-sm"
-              placeholder="جستجوی نام یا SKU محصول..."
-            />
-            {showDropdown && !selectedInfo && (
-              <div className="absolute z-10 w-full mt-1 card max-h-60 overflow-y-auto p-1">
-                {filtered.length === 0 ? (
-                  <div className="text-center py-4 text-gray-steel text-xs">محصولی یافت نشد</div>
-                ) : filtered.map(v => (
-                  <button key={v.id} type="button"
-                    onClick={() => { setForm(f => ({ ...f, variant_id: v.id })); setShowDropdown(false) }}
-                    className="w-full text-right px-3 py-2 rounded-lg hover:bg-white/10 text-sm">
-                    {v.product_name}
-                    <span className="text-gray-steel text-xs mr-2" dir="ltr">{v.sku}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+          {/* اقلام انتقال — همان ساختار ردیف‌های فاکتور: کالا + تعداد */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="label text-xs">اقلام انتقال *</label>
+              <span className="text-[10px] text-gray-steel">
+                {items.filter(i => i.variant_id).length} قلم — مجموع {totalQty} عدد
+              </span>
+            </div>
+            <div className="space-y-3">
+              {items.map((i, idx) => {
+                const avail = i.variant_id ? stockMap[String(i.variant_id)] : undefined
+                const over = avail !== undefined && Number(i.quantity) > avail
+                return (
+                  <div key={idx} className="bg-white/5 rounded-xl p-3">
+                    <div className="grid grid-cols-4 gap-3">
+                      <div className="col-span-3">
+                        <label className="label text-[10px] mb-1 block">کالا *</label>
+                        <SearchSelect
+                          options={rowOptions(i)}
+                          value={i.variant_id}
+                          onChange={val => updateRow(idx, { variant_id: val })}
+                          placeholder={form.from_warehouse_id ? 'جستجوی کالا (نام یا کد)...' : 'ابتدا انبار مبدأ را انتخاب کنید'}
+                          className="input text-xs" flow="tr"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] mb-1 block">تعداد *</label>
+                        <input type="number" min="0" value={i.quantity} data-flow="tr"
+                          onChange={e => updateRow(idx, { quantity: e.target.value })}
+                          onFocus={e => e.target.select()}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              handleQtyEnter(idx, e)
+                            }
+                          }}
+                          className="input text-xs" dir="ltr" />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between mt-2">
+                      <div className="text-[10px] text-gray-steel">
+                        {avail !== undefined && (
+                          <>موجودی انبار مبدأ: <b className={over ? 'text-red-400' : 'text-green-400'}>{fmt(avail)}</b>
+                          {over && <span className="text-red-400 mr-1">(بیشتر از موجودی!)</span>}</>
+                        )}
+                      </div>
+                      {items.length > 1 && (
+                        <button onClick={() => removeRow(idx)} className="text-xs text-red-400">× حذف</button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            <button type="button" onClick={addRow} className="text-xs text-brand mt-3">+ افزودن کالا</button>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label text-xs mb-1 block">تعداد *</label>
-              <input type="number" min="1" value={form.quantity}
-                onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))}
-                className="input text-sm" placeholder="0" dir="ltr" />
-            </div>
-            <div>
-              <label className="label text-xs mb-1 block">توضیحات</label>
-              <input value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
-                className="input text-sm" placeholder="اختیاری" />
-            </div>
+          <div>
+            <label className="label text-xs mb-1 block">توضیحات</label>
+            <input value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
+              className="input text-sm" placeholder="اختیاری" />
           </div>
         </div>
 
@@ -311,9 +367,9 @@ function TransferModal({ warehouses, presetFrom, onClose }) {
         )}
 
         <div className="flex gap-3 mt-5">
-          <button onClick={handleSubmit} disabled={transferMut.isPending}
+          <button onClick={handleSubmit} disabled={transferMut.isPending || !items.some(i => i.variant_id)}
             className="btn-primary flex-1 text-sm py-2.5 disabled:opacity-50">
-            {transferMut.isPending ? 'در حال انتقال...' : '✓ انجام انتقال'}
+            {transferMut.isPending ? 'در حال انتقال...' : items.filter(i => i.variant_id).length > 1 ? `✓ انتقال ${items.filter(i => i.variant_id).length} قلم کالا` : '✓ انجام انتقال'}
           </button>
           <button onClick={onClose} className="btn-secondary text-sm py-2.5 px-6">انصراف</button>
         </div>

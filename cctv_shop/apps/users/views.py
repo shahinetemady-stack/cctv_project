@@ -24,7 +24,9 @@ import hashlib
 import logging
 import random
 from datetime import timedelta
+from django.db.models import Q
 from django.utils import timezone
+from apps.core.utils import iso_local as _iso_local
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
@@ -49,6 +51,23 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ─── RBAC helpers ────────────────────────────────────────────
+
+def _has_perm(user, code):
+    if user.is_superuser:
+        return True
+    sp = getattr(user, 'staff_profile', None)
+    return bool(sp and sp.is_active and sp.has_perm(code))
+
+
+def _has_any_perm(user, *codes):
+    return any(_has_perm(user, c) for c in codes)
+
+
+def _forbidden(msg='شما دسترسی لازم برای این عملیات را ندارید'):
+    return Response({'error': msg}, status=403)
 
 
 # ─── Register ─────────────────────────────────────────────────────────────────
@@ -409,6 +428,17 @@ class AdminPartnerListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
+        if request.query_params.get("recent", "").lower() == "true":
+            # تازه‌ایجادشده‌ها — همه کاربران از هر مسیر (ثبت‌نام خود سایت، درخواست همکاری،
+            # ساخته‌شده از پنل) — مرتب بر اساس زمان ساخت حساب، ۵۰ تای آخر
+            qs = (
+                UserProfile.objects
+                .select_related("user")
+                .order_by("-user__date_joined")[:50]
+            )
+            return Response(AdminPartnerListSerializer(qs, many=True, context={"request": request}).data)
         qs = (
             UserProfile.objects
             .filter(user_type=UserProfile.UserType.PARTNER)
@@ -418,8 +448,9 @@ class AdminPartnerListView(APIView):
         if request.query_params.get("pending", "").lower() == "true":
             qs = qs.filter(is_approved=False)
         elif request.query_params.get("approved", "").lower() == "true":
-            # تازه‌تأییدشده‌ها — مرتب بر اساس زمان تأیید (آخرین به‌روزرسانی پروفایل)
-            qs = qs.filter(is_approved=True).order_by("-updated_at")
+            # تازه‌تأییدشده‌ها — مرتب بر اساس زمان واقعی تأیید (نه آخرین ویرایش پروفایل)
+            from django.db.models import F
+            qs = qs.filter(is_approved=True).order_by(F("approved_at").desc(nulls_last=True))
         return Response(AdminPartnerListSerializer(qs, many=True, context={"request": request}).data)
 
 
@@ -431,6 +462,8 @@ class AdminApprovePartnerView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, user_id):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         try:
             profile = UserProfile.objects.select_related("user").get(
                 user__id=user_id,
@@ -444,9 +477,12 @@ class AdminApprovePartnerView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         data = serializer.validated_data
+        was_approved = profile.is_approved
         profile.is_approved  = data["is_approved"]
         profile.credit_limit = data.get("credit_limit", profile.credit_limit)
         if data["is_approved"]:
+            if not was_approved:
+                profile.approved_at = timezone.now()
             if data.get("partner_tier"):
                 # تغییر دستی سطح → پاک شدن نشان «پلاتینیوم خودکار»
                 profile.platinum_auto_granted = False
@@ -456,6 +492,7 @@ class AdminApprovePartnerView(APIView):
             profile.user_type = UserProfile.UserType.PUBLIC
             profile.partner_tier = ""
             profile.platinum_auto_granted = False
+            profile.approved_at = None
         if data.get("notes"):
             profile.notes = (
                 (profile.notes + "\n" if profile.notes else "")
@@ -499,6 +536,8 @@ class ClubSettingsView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'club_settings_view'):
+            return _forbidden()
         from .services import get_club_settings, find_downgrade_risks, snoozed_risk_count
         st = get_club_settings()
         at_risk = find_downgrade_risks(limit=50)
@@ -518,6 +557,8 @@ class ClubSettingsView(APIView):
         })
 
     def put(self, request):
+        if not _has_perm(request.user, 'club_settings_view'):
+            return _forbidden()
         from .models import PartnerClubSettings
         from .services import invalidate_club_settings_cache
         serializer = ClubSettingsSerializer(data=request.data)
@@ -541,6 +582,8 @@ class ClubAtRiskSnoozeView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request):
+        if not _has_perm(request.user, 'club_settings_view'):
+            return _forbidden()
         from .services import snooze_downgrade_risk
         phones = request.data.get("phones") or []
         days = request.data.get("days") or 30
@@ -585,6 +628,8 @@ class ClubEvaluateView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request):
+        if not _has_perm(request.user, 'club_settings_view'):
+            return _forbidden()
         from .services import evaluate_partner_tiers
         result = evaluate_partner_tiers()
         logger.info(f"[CLUB] ارزیابی دستی سطوح توسط {request.user.phone}: {result['upgraded']} ارتقا")
@@ -609,11 +654,15 @@ class PartnerGuaranteeListCreateView(APIView):
         return {"profile": get_object_or_404(UserProfile, user__id=user_id)}
 
     def get(self, request, user_id=None, contact_id=None):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         subject = self._resolve(user_id, contact_id)
         qs = subject["profile"].guarantees.all() if "profile" in subject else subject["contact"].guarantees.all()
         return Response(GuaranteeSerializer(qs, many=True, context={"request": request}).data)
 
     def post(self, request, user_id=None, contact_id=None):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         subject = self._resolve(user_id, contact_id)
         serializer = GuaranteeSerializer(data=request.data)
         if not serializer.is_valid():
@@ -633,6 +682,8 @@ class PartnerGuaranteeDeleteView(APIView):
     permission_classes = [IsAdminUser]
 
     def delete(self, request, gid, user_id=None, contact_id=None):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         from .models import PartnerGuarantee
         flt = {"id": gid}
         if contact_id is not None:
@@ -657,15 +708,33 @@ class AdminBadgesView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        from apps.accounting.views import _has_any_perm
+        if not _has_any_perm(request.user, "orders_view", "sale_view", "chat_view"):
+            return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
         from apps.orders.models import Order
         from apps.orders.services import due_settlements_queryset, send_due_settlement_reminders
-        from apps.accounting.models import SaleInvoice, PaymentReceipt
+        from apps.accounting.models import SaleInvoice, PaymentReceipt, SettlementLine
         from .models import PhoneChangeRequest, ProfileChangeRequest
+        from django.db.models import Q, Sum, F
         from django.utils import timezone
-        due_qs = SaleInvoice.objects.filter(
-            settlement='credit', due_date__lte=timezone.now().date(),
-        ).exclude(status='cancelled')
-        sales_due = sum(1 for i in due_qs if i.remaining_amount > 0)
+        today = timezone.localdate()
+        # فاکتورهای سررسیدرسیده با مانده — همه انواع تسویه (نقدی هم) بر اساس
+        # ردیف‌های تسویه: نقدی از فردای موعد، بقیه از خود روز موعد
+        due_inv_ids = set(
+            SettlementLine.objects.filter(is_active=True)
+            .filter(
+                Q(settlement_type="cash", due_date__lt=today)
+                | Q(settlement_type__in=["credit", "month1", "month2"], due_date__lte=today)
+            )
+            .exclude(invoice__status="cancelled")
+            .annotate(paid=Sum("allocations__amount"))
+            .filter(Q(paid__isnull=True) | Q(amount__gt=F("paid")))
+            .values_list("invoice_id", flat=True)
+        )
+        sales_due = sum(
+            1 for i in SaleInvoice.objects.filter(id__in=due_inv_ids).prefetch_related("settlement_lines")
+            if i.remaining_amount > 0
+        )
         # هشدارهای سررسید تسویه سفارش‌های سایت — روزی یک بار، تنبل هنگام باز شدن پنل
         try:
             send_due_settlement_reminders()
@@ -675,7 +744,7 @@ class AdminBadgesView(APIView):
         try:
             from django.core.cache import cache
             from .services import get_club_settings, evaluate_partner_tiers
-            today = timezone.now().date().isoformat()
+            today = timezone.localdate().isoformat()
             if get_club_settings().auto_evaluate_enabled and cache.get("club_eval_day") != today:
                 cache.set("club_eval_day", today, timeout=60 * 60 * 48)
                 evaluate_partner_tiers()
@@ -684,7 +753,7 @@ class AdminBadgesView(APIView):
         # اعمال خودکار بستانکاری مشتریان (اضافه‌واریزی) به بدهی‌های باز — روزی یک بار
         try:
             from django.core.cache import cache
-            today = timezone.now().date().isoformat()
+            today = timezone.localdate().isoformat()
             if cache.get("credit_apply_day") != today:
                 cache.set("credit_apply_day", today, timeout=60 * 60 * 48)
                 from apps.orders.services import apply_customer_credit
@@ -703,7 +772,20 @@ class AdminBadgesView(APIView):
                 status=PaymentReceipt.Status.PENDING,
             ).count(),
                 "phone_requests": PhoneChangeRequest.objects.filter(status="pending").count(),
-            "profile_requests": ProfileChangeRequest.objects.filter(status="pending").count(),})
+            "profile_requests": ProfileChangeRequest.objects.filter(status="pending").count(),
+            "chat_unread": self._chat_unread(request.user),})
+
+    @staticmethod
+    def _chat_unread(user):
+        """خوانده‌نشده‌های چت — سوپریوزر: همه؛ پرسنل: گفتگوهای اختصاص‌یافته به خودش + عمومی."""
+        try:
+            from apps.chat.models import ChatMessage
+            qs = ChatMessage.objects.filter(from_staff=False, is_read=False)
+            if not user.is_superuser:
+                qs = qs.filter(Q(conversation__assigned_to=user) | Q(conversation__assigned_to__isnull=True))
+            return qs.count()
+        except Exception:
+            return 0
 
 class ActivityLogListView(APIView):
     """
@@ -713,6 +795,8 @@ class ActivityLogListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'users_view'):
+            return _forbidden()
         from .models import ActivityLog
         qs = ActivityLog.objects.select_related('user')
         p = request.query_params
@@ -737,7 +821,7 @@ class ActivityLogListView(APIView):
                 'method': a.method,
                 'path': a.path,
                 'status': a.status,
-                'created_at': a.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                'created_at': _iso_local(a.created_at),
             } for a in rows],
         })
 
@@ -786,6 +870,8 @@ class AdminPhoneRequestsView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         from .models import PhoneChangeRequest
 
         qs = PhoneChangeRequest.objects.select_related("user")
@@ -886,6 +972,8 @@ class AdminProfileRequestsView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         from .models import ProfileChangeRequest
 
         qs = ProfileChangeRequest.objects.select_related("user", "user__profile")
@@ -933,10 +1021,7 @@ class AdminProfileRequestActionView(APIView):
 
 
 def _has_users_edit(user):
-    if user.is_superuser:
-        return True
-    sp = getattr(user, "staff_profile", None)
-    return bool(sp and sp.has_perm("users_edit"))
+    return _has_perm(user, "users_edit")
 
 
 class AdminLinkAccountView(APIView):

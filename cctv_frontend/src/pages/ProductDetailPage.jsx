@@ -346,7 +346,7 @@ export default function ProductDetailPage() {
     setAdding(true)
     try {
       // نحوه تسویه این قلم — پلاتینیوم همان گزینه انتخابی روی صفحه؛ سیلور/گلد/عمومی همیشه نقدی
-      // (ستون یکماهه/توحسابی فقط مبنای قیمت آن‌هاست و در price_for_settlement لحاظ می‌شود)
+      // (ستون مشتری سیلور/گلد فقط مبنای قیمت آن‌هاست و در price_for_settlement لحاظ می‌شود)
       const tier = pricing?.tier
       const settlement = tier === 'platinum' ? payOption : 'cash'
       if (isPartner()) {

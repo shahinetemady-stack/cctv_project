@@ -7,9 +7,9 @@ apps/catalog/pricing.py
     — تومان، رند به بالای هزار
 قیمت نمایشی هر کاربر بر اساس سطح همکاری تعیین می‌شود:
     مهمان/عمومی → retail (مشتری عمومی)
-    سیلور        → month1 (یکماهه)
-    گلد          → credit (تو حسابی)
-    پلاتینیوم    → credit + گزینه‌های cash و month1 در فرانت
+    سیلور        → silver (ستون مشتری سیلور)
+    گلد          → gold (ستون مشتری گلد)
+    پلاتینیوم    → credit + گزینه‌های cash و month1/month2 در فرانت (سرگروه مشتری پلاتینیوم)
 توجه: این ستون‌ها فقط مبنای «قیمت» هستند — تسویه سیلور/گلد/عمومی همیشه نقدی است و
 انتخاب نوع تسویه (نقدی/توحسابی/یکماهه/دوماهه) فقط برای پلاتینیوم معنا دارد.
 تخفیف واریانت (discount_percent) روی همه انواع قیمت اعمال می‌شود و در
@@ -25,6 +25,8 @@ PROFIT_FIELDS = {
     "credit": "profit_credit_percent",
     "month1": "profit_month1_percent",
     "month2": "profit_month2_percent",
+    "gold":   "profit_gold_percent",
+    "silver": "profit_silver_percent",
     "retail": "profit_retail_percent",
 }
 
@@ -77,9 +79,9 @@ def user_price_key(user):
     if not is_partner:
         return "retail", None
     tier = profile.partner_tier or ""
-    if tier == "silver":
-        return "month1", tier
-    if tier in ("gold", "platinum"):
+    if tier in ("silver", "gold"):
+        return tier, tier
+    if tier == "platinum":
         return "credit", tier
     return "retail", None
 
@@ -140,7 +142,7 @@ def allowed_settlements(user, variant=None):
 def price_for_settlement(variant, user, settlement_type):
     """قیمت واریانت بر اساس نوع تسویه انتخاب‌شده کاربر برای یک قلم.
     عمومی: قیمت مشتری عمومی (retail). سیلور/گلد: تسویه همیشه نقدی است و قیمت از
-    ستون ثابت سطحشان می‌آید (سیلور=یکماهه، گلد=توحسابی) — انتخاب ستون قیمت بر اساس
+    ستون خودشان می‌آید (سیلور=silver، گلد=gold) — انتخاب ستون قیمت بر اساس
     تسویه فقط برای پلاتینیوم است."""
     key, tier = user_price_key(user)
     prices = formula_prices(variant)

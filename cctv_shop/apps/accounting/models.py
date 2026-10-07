@@ -747,8 +747,12 @@ class SaleInvoice(AuditMixin):
 
     @property
     def paid_amount(self):
+        # مبنای تسویه = تخصیص‌ها (ReceiptAllocation) — نه جمع اسناد واریز؛
+        # سند دریافت ممکن است بیشتر از فاکتور باشد (مازاد = بستانکاری مشتری)
+        # و در آن صورت جمع اسناد، مانده را منفی و غلط نشان می‌دهد.
         from django.db.models import Sum
-        return self.sale_payments.aggregate(s=Sum('amount'))['s'] or 0
+        return ReceiptAllocation.objects.filter(
+            settlement_line__invoice=self).aggregate(s=Sum('amount'))['s'] or 0
 
     @property
     def remaining_amount(self):
@@ -942,14 +946,14 @@ class SettlementLine(models.Model):
     @property
     def is_overdue(self) -> bool:
         from django.utils import timezone
-        return self.due_date < timezone.now().date() and self.remaining_amount > 0
+        return self.due_date < timezone.localdate() and self.remaining_amount > 0
 
     @property
     def days_overdue(self) -> int:
         from django.utils import timezone
         if not self.is_overdue:
             return 0
-        return (timezone.now().date() - self.due_date).days
+        return (timezone.localdate() - self.due_date).days
 
 
 class PaymentReceipt(AuditMixin):
@@ -1042,13 +1046,20 @@ class PaymentReceipt(AuditMixin):
 
 
 class ReceiptAllocation(models.Model):
-    """تخصیص مبلغی از یک فیش تأییدشده به یک ردیف تسویه.
-    receipt=None یعنی تخصیص از «بستانکاری نقدی» مشتری (اضافه‌واریزی قبلی)."""
+    """تخصیص مبلغی از یک واریزی به یک ردیف تسویه.
+    receipt=None یعنی تخصیص از «بستانکاری نقدی» مشتری یا از یک دریافت مستقیم؛
+    sale_payment مشخص می‌کند تخصیص از کدام سند واریز آمده (برای ردیابی «این
+    واریز چطور مصرف شد») — ممکن است به فاکتور دیگری از فاکتورِ سند بخورد."""
 
     receipt = models.ForeignKey(
         PaymentReceipt, on_delete=models.CASCADE,
         null=True, blank=True,
         related_name="allocations", verbose_name="فیش واریزی",
+    )
+    sale_payment = models.ForeignKey(
+        "SalePayment", on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name="allocations", verbose_name="سند واریز",
     )
     settlement_line = models.ForeignKey(
         SettlementLine, on_delete=models.CASCADE,

@@ -41,7 +41,7 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.MIGRATE_HEADING(
-                f"\n{'[DRY RUN] ' if dry_run else ''}آزادسازی رزروهای منقضی — {now.strftime('%Y-%m-%d %H:%M:%S')}"
+                f"\n{'[DRY RUN] ' if dry_run else ''}آزادسازی رزروهای منقضی — {timezone.localtime(now).strftime('%Y-%m-%d %H:%M:%S')}"
             )
         )
 
@@ -103,7 +103,7 @@ class Command(BaseCommand):
                     order.status = Order.Status.CANCELLED
                     order.admin_notes = (
                         (order.admin_notes + "\n" if order.admin_notes else "")
-                        + f"[AUTO] کنسل شد — مهلت پرداخت منقضی — {now.strftime('%Y-%m-%d %H:%M')}"
+                        + f"[AUTO] کنسل شد — مهلت پرداخت منقضی — {timezone.localtime(now).strftime('%Y-%m-%d %H:%M')}"
                     )
                     order.save(update_fields=["status", "admin_notes", "updated_at"])
                     cancelled_order_ids.add(order_id)

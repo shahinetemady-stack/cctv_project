@@ -122,7 +122,7 @@ function KardexItemsView({ timeline, hasFx = true }) {
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
         <thead>
           <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.1)' }}>
-            {['تاریخ', 'نوع سند', 'موعد تسویه', 'شرح', 'بدهکار ریال', 'بدهکار یوان', 'بستانکار ریال', 'بستانکار یوان', 'مانده ریال', 'مانده یوان'].map(h => (
+            {['تاریخ', 'نوع سند', 'موعد تسویه', 'شرح', 'توضیحات تخصیص', 'بدهکار ریال', 'بدهکار یوان', 'بستانکار ریال', 'بستانکار یوان', 'مانده ریال', 'مانده یوان'].map(h => (
               <th key={h} style={{ padding: '6px 10px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500, whiteSpace: 'nowrap', fontSize: 11 }}>{!hasFx && h.includes('یوان') ? '—' : h}</th>
             ))}
           </tr>
@@ -142,6 +142,9 @@ function KardexItemsView({ timeline, hasFx = true }) {
                   {item.due_date ? formatDate(item.due_date) : '—'}
                 </td>
                 <td style={{ ...tdS, color: 'var(--color-text-secondary)', fontSize: 11 }}>{item.description}</td>
+                <td style={{ ...tdS, color: 'var(--color-text-secondary)', fontSize: 10, lineHeight: 1.7 }}>
+                  {item.allocation_detail || '—'}
+                </td>
                 <td style={{ ...tdS, color: '#FF3B3B', fontWeight: item.debit_irr ? 600 : 400 }}>
                   {item.debit_irr ? fmt(item.debit_irr) : '—'}
                 </td>
@@ -173,6 +176,7 @@ function KardexItemsView({ timeline, hasFx = true }) {
                     <span className="text-gray-steel text-[10px]" dir="ltr"> [{it.sku}]</span>
                     <span className="text-gray-steel text-[10px]"> × {fmt(it.quantity)}</span>
                   </td>
+                  <td style={{ padding: '4px 10px' }} />
                   <td style={{ padding: '4px 10px' }} />
                   <td style={{ padding: '4px 10px' }} />
                   <td style={{ padding: '4px 10px', color: '#00C896', fontSize: 11 }}>
@@ -234,7 +238,9 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
     const items = []
 
     // فاکتورهای فروش (کاربران ثبت‌نامی) — مشتری جنس برده و بدهکار ما شده → ستون بدهکار
+    // پیش‌نویس‌ها (پیش‌فاکتور) فقط برای اطلاع نمایش داده می‌شوند و روی مانده اثر ندارند
     for (const inv of (detail.sale_invoices || [])) {
+      const isDraft = inv.status === 'draft'
       items.push({
         date: inv.date,
         type: 'invoice',
@@ -249,8 +255,8 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
           product_name: it.product_name, sku: it.sku, quantity: it.quantity,
           unit_price_irr: it.unit_price, unit_price_cny: it.unit_price,
         })),
-        debit_irr: inv.currency === 'CNY' ? 0 : (inv.total_amount || 0),
-        debit_cny: inv.currency === 'CNY' ? (inv.total_amount || 0) : 0,
+        debit_irr: isDraft || inv.currency === 'CNY' ? 0 : (inv.total_amount || 0),
+        debit_cny: isDraft ? 0 : (inv.currency === 'CNY' ? (inv.total_amount || 0) : 0),
         credit_irr: 0,
         credit_cny: 0,
         created_by_name: inv.created_by_name || '',
@@ -263,8 +269,9 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
         date: p.date,
         type: 'payment',
         type_label: `دریافت — ${p.method_display || ''}`,
-        description: ['دریافت', p.account_name && `در ${p.account_name}`, p.reference].filter(Boolean).join(' | '),
+        description: ['دریافت', p.account_name && `در ${p.account_name}`, p.reference, p.note].filter(Boolean).join(' | '),
         doc: `دریافت فروش #${p.id}`,
+        allocation_detail: p.allocation_detail || '',
         inv_items: [],
         debit_irr: 0,
         debit_cny: 0,
@@ -331,6 +338,25 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
     }
 
     items.sort((a, b) => new Date(a.date) - new Date(b.date))
+
+    // سند افتتاحیه — مانده اول دوره به‌صورت خودکار سند اول کاردکس می‌شود
+    const obIrr = Number(detail.opening_balance_irr || 0)
+    const obCny = Number(detail.opening_balance_cny || 0)
+    if (obIrr !== 0 || obCny !== 0) {
+      items.unshift({
+        date: '',
+        type: 'opening',
+        type_label: 'سند افتتاحیه',
+        description: 'مانده اول دوره — منتقل‌شده از حسابداری قبلی',
+        doc: 'سند افتتاحیه',
+        inv_items: [],
+        debit_irr: Math.max(obIrr, 0),
+        debit_cny: Math.max(obCny, 0),
+        credit_irr: Math.max(-obIrr, 0),
+        credit_cny: Math.max(-obCny, 0),
+        created_by_name: '',
+      })
+    }
 
     let balIrr = 0, balCny = 0
     return items.map(item => {
@@ -448,8 +474,8 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
             <div className="mt-2 flex gap-4 flex-wrap">
               {detail.is_registered ? (
                 <>
-                  <span className={`text-sm font-bold ${detail.sale_debt > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                    بدهی فاکتور: {detail.sale_debt > 0 ? `${fmt(detail.sale_debt)} ریال` : 'تسویه ✓'}
+                  <span className={`text-sm font-bold ${detail.sale_debt > 0 ? 'text-red-400' : detail.sale_debt < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
+                    بدهی فاکتور: {detail.sale_debt > 0 ? `${fmt(detail.sale_debt)} ریال` : detail.sale_debt < 0 ? `بستانکار ${fmt(Math.abs(detail.sale_debt))} ریال` : 'تسویه ✓'}
                   </span>
                   {detail.has_fx !== false && detail.sale_debt_cny > 0 && (
                     <span className="text-sm font-bold text-red-400">
@@ -459,9 +485,16 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
                 </>
               ) : (
                 <>
-                  <span className={`text-sm font-bold ${detail.balance_irr > 0 ? 'text-red-400' : detail.balance_irr < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
-                    مانده ریال: {detail.balance_irr === 0 ? 'تسویه ✓' : `${detail.balance_irr > 0 ? 'بدهکار' : 'بستانکار'} ${fmt(Math.abs(detail.balance_irr))} ریال`}
-                  </span>
+                  {/* مانده کل ریالی = مانده اسناد طرف حساب + خالص فاکتورهای کاربر لینک‌شده
+                      (شامل بستانکاری مازاد واریزها — علامت‌دار) */}
+                  {(() => {
+                    const totalIrr = Number(detail.balance_irr || 0) + Number(detail.sale_debt || 0)
+                    return (
+                      <span className={`text-sm font-bold ${totalIrr > 0 ? 'text-red-400' : totalIrr < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
+                        مانده ریال: {totalIrr === 0 ? 'تسویه ✓' : `${totalIrr > 0 ? 'بدهکار' : 'بستانکار'} ${fmt(Math.abs(totalIrr))} ریال`}
+                      </span>
+                    )
+                  })()}
                   {detail.has_fx !== false && (
                     <span className={`text-sm font-bold ${detail.balance_cny > 0 ? 'text-red-400' : detail.balance_cny < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
                       مانده یوان: {detail.balance_cny === 0 ? 'تسویه ✓' : `${detail.balance_cny > 0 ? 'بدهکار' : 'بستانکار'} ${fmt(Math.abs(detail.balance_cny))} ¥`}
@@ -469,7 +502,8 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
                   )}
                   {/* مانده کل به ریال با نرخ روز یوان */}
                   {detail.has_fx !== false && (() => {
-                    const total = Number(detail.balance_irr || 0) + Number(detail.balance_cny || 0) * dayRate
+                    const total = Number(detail.balance_irr || 0) + Number(detail.sale_debt || 0)
+                      + (Number(detail.balance_cny || 0) + Number(detail.sale_debt_cny || 0)) * dayRate
                     return (
                       <span className={`text-sm font-bold ${total > 0 ? 'text-red-400' : total < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
                         | مانده کل (با نرخ روز): {total === 0 ? 'تسویه ✓' : `${total > 0 ? 'بدهکار' : 'بستانکار'} ${fmt(Math.abs(total))} ریال`}
@@ -478,19 +512,6 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
                   })()}
                 </>
               )}
-            </div>
-          )}
-
-          {/* مانده اول دوره — دستی با پرمیشن contacts_edit */}
-          {detail && !detail.is_registered && can('contacts_edit') && (
-            <div className="flex items-center justify-between mt-3 pt-3 border-t border-white/10 flex-wrap gap-2">
-              <div className="text-xs text-gray-steel">
-                مانده اول دوره:
-                <span className="text-white mr-1">{fmt(detail.opening_balance_irr)} ریال</span>
-                {detail.has_fx !== false && Number(detail.opening_balance_cny) !== 0 && (
-                  <span className="text-white mr-2">| {fmt(detail.opening_balance_cny)} یوان</span>
-                )}
-              </div>
             </div>
           )}
 
@@ -522,7 +543,7 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
                     <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.1)' }}>
-                      {['تاریخ', 'نوع سند', 'موعد تسویه', 'شرح', 'ثبت‌کننده', 'بدهکار ریال', 'بدهکار یوان', 'بستانکار ریال', 'بستانکار یوان', 'مانده ریال', 'مانده یوان'].map(h => (
+                      {['تاریخ', 'نوع سند', 'موعد تسویه', 'شرح', 'توضیحات تخصیص', 'ثبت‌کننده', 'بدهکار ریال', 'بدهکار یوان', 'بستانکار ریال', 'بستانکار یوان', 'مانده ریال', 'مانده یوان'].map(h => (
                         <th key={h} style={{ padding: '6px 10px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500, whiteSpace: 'nowrap', fontSize: 11 }}>{!showFx && h.includes('یوان') ? '—' : h}</th>
                       ))}
                     </tr>
@@ -554,6 +575,9 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
                             )}
                             {item.description}
                           </td>
+                          <td style={{ padding: '8px 10px', color: 'var(--color-text-secondary)', fontSize: 10, lineHeight: 1.7 }}>
+                            {item.allocation_detail || '—'}
+                          </td>
                           <td style={{ padding: '8px 10px', color: 'var(--color-text-secondary)', fontSize: 11, whiteSpace: 'nowrap' }}>
                             {item.created_by_name || '—'}
                           </td>
@@ -579,7 +603,7 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
                         {/* ریز اقلام فاکتور — با کلیک روی سند */}
                         {expandedInv === i && (
                           <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: 'rgba(251,192,45,0.04)' }}>
-                            <td colSpan={11} style={{ padding: '6px 24px 12px' }}>
+                            <td colSpan={12} style={{ padding: '6px 24px 12px' }}>
                               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                                 <thead>
                                   <tr style={{ borderBottom: '0.5px solid rgba(255,255,255,0.08)' }}>
@@ -768,7 +792,7 @@ function EditContactModal({ detail, onClose, onDeleted }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="card p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
         <h2 className="font-bold text-white text-base mb-4">ویرایش اطلاعات {detail.name}</h2>
-        {/* مدارک/مشخصات همکاری کاربر لینک‌شده — حتی اگر از لیست ۵۰تایی «تازه تأیید شده» بیرون رفته باشد */}
+        {/* مدارک/مشخصات همکاری کاربر لینک‌شده — حتی اگر از لیست ۵۰تایی «تازه ایجاد شده» بیرون رفته باشد */}
         {detail.linked_partner && (
           <div className="rounded-xl border border-brand/20 bg-brand/5 p-3 mb-4 space-y-1.5">
             <div className="text-[11px] font-bold text-gray-steel mb-1">🤝 اطلاعات همکاری (حساب کاربری سایت)</div>
@@ -990,9 +1014,9 @@ function EditContactModal({ detail, onClose, onDeleted }) {
                 : '⚠️ این حساب در مرحله «فقط نقدی» است — خرید اعتباری برایش بسته شده.'}
             </div>
           )}
-          {Number(detail.payment_credit_irr) > 0 && (
+          {(Number(detail.payment_credit_irr) > 0 || Number(detail.sale_overpay_irr) > 0) && (
             <div className="text-[11px] text-green-400">
-              💰 بستانکاری نقدی: {Number(detail.payment_credit_irr).toLocaleString('fa-IR')} ریال (به بدهی‌های بعدی تخصیص می‌یابد)
+              💰 بستانکاری نقدی: {(Number(detail.payment_credit_irr || 0) + Number(detail.sale_overpay_irr || 0)).toLocaleString('fa-IR')} ریال (به بدهی‌های بعدی تخصیص می‌یابد)
             </div>
           )}
           <label className="flex items-center gap-2 text-xs text-gray-steel cursor-pointer">
@@ -1305,13 +1329,15 @@ function PartnerRequestsTab() {
   )
 }
 
-// ─── تب «تازه تأیید شده» — ۵۰ تأیید اخیر درخواست همکاری (فقط مشاهده) ──
+// ─── تب «تازه ایجاد شده» — ۵۰ حساب اخیر از هر مسیر (ثبت‌نام سایت / درخواست همکاری / ساخت از پنل) ──
 const TIER_BADGE = {
   silver:   { label: 'همکار سیلور',   cls: 'bg-gray-500/20 text-gray-300' },
   gold:     { label: 'همکار گلد',     cls: 'bg-yellow-500/20 text-yellow-400' },
   platinum: { label: 'همکار پلاتینیوم', cls: 'bg-purple-500/20 text-purple-400' },
   '':       { label: 'همکار',         cls: 'bg-brand/20 text-brand dark:text-cyan' },
 }
+const CUSTOMER_BADGE = { label: 'مشتری', cls: 'bg-sky-500/20 text-sky-400' }
+const PENDING_BADGE  = { label: 'در انتظار تأیید', cls: 'bg-orange-500/20 text-orange-400' }
 
 // محل ثبت‌نام: خود مشتری از سایت | ثبت‌شده توسط ما از پنل (کاربر سایه)
 const SIGNUP_BADGE = {
@@ -1323,40 +1349,42 @@ function signupBadgeOf(r) {
   return SIGNUP_BADGE[r.signup_source] || null
 }
 
-function ApprovedPartnersTab() {
-  const { data: approved = [], isLoading } = useQuery({
-    queryKey: ['partner-approved'],
-    queryFn: () => api.get('/users/admin/partners/', { params: { approved: 'true' } }).then(r => r.data),
+function RecentUsersTab() {
+  const { data: recent = [], isLoading } = useQuery({
+    queryKey: ['recent-users'],
+    queryFn: () => api.get('/users/admin/partners/', { params: { recent: 'true' } }).then(r => r.data),
   })
 
   if (isLoading) return <div className="text-center py-8 text-gray-steel text-sm">در حال بارگذاری...</div>
 
-  const rows = approved.slice(0, 50)
+  const rows = recent.slice(0, 50)
   return (
     <div>
       {rows.length === 0 ? (
         <div className="card p-12 text-center">
-          <div className="text-4xl mb-3">✅</div>
-          <div className="text-gray-steel text-sm">هنوز درخواست همکاری تأییدشده‌ای نیست</div>
+          <div className="text-4xl mb-3">🆕</div>
+          <div className="text-gray-steel text-sm">هنوز کاربری در سایت ایجاد نشده است</div>
         </div>
       ) : (
         <div className="space-y-3">
           {rows.map(r => {
-            const tier = TIER_BADGE[r.partner_tier] || TIER_BADGE['']
+            const isPartner = r.user_type === 'partner'
+            const type = isPartner ? (TIER_BADGE[r.partner_tier] || TIER_BADGE['']) : CUSTOMER_BADGE
             const signup = signupBadgeOf(r)
             return (
               <div key={r.user_id} className="card p-4 flex items-center gap-4 flex-wrap">
                 <div className="flex-1 min-w-[200px]">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-semibold text-white text-sm">{r.full_name || r.phone}</span>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full ${tier.cls}`}>{tier.label}</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full ${type.cls}`}>{type.label}</span>
+                    {isPartner && !r.is_approved && <span className={`text-[10px] px-2 py-0.5 rounded-full ${PENDING_BADGE.cls}`}>{PENDING_BADGE.label}</span>}
                     {signup && <span className={`text-[10px] px-2 py-0.5 rounded-full ${signup.cls}`}>{signup.label}</span>}
                   </div>
                   <div className="text-[11px] text-gray-steel mt-1 flex gap-3 flex-wrap">
                     <span dir="ltr">{r.phone}</span>
                     {r.company_name && <span>🏢 {r.company_name}</span>}
-                    {/* updated_at = زمان تأیید */}
-                    <span>✅ تأیید: {formatDate(r.updated_at)}</span>
+                    {/* date_joined = زمان ساخت حساب — فارغ از مسیر ایجاد */}
+                    {r.date_joined && <span>🆕 ایجاد: {formatDate(r.date_joined)}</span>}
                   </div>
                   {r.address && <div className="text-[11px] text-gray-steel mt-1">📍 {r.address}</div>}
                   {/* مدارک احراز — لینک شبکه اجتماعی و مدرک تصویری */}
@@ -1397,7 +1425,7 @@ export default function ContactsPage() {
 
   const tabs = [
     ...(can('partner_approve') ? [{ key: 'partners', label: '🤝 درخواست‌های همکاری' }] : []),
-    ...(can('partner_approve') ? [{ key: 'partners-approved', label: '✅ تازه تأیید شده' }] : []),
+    ...(can('partner_approve') ? [{ key: 'recent-users', label: '🆕 تازه ایجاد شده' }] : []),
     { key: 'kardex',  label: '👤 کاردکس اشخاص' },
     { key: 'balance', label: '📊 تراز کلی' },
   ]
@@ -1426,7 +1454,7 @@ export default function ContactsPage() {
         ))}
       </div>
       {activeTab === 'partners' && <PartnerRequestsTab />}
-      {activeTab === 'partners-approved' && <ApprovedPartnersTab />}
+      {activeTab === 'recent-users' && <RecentUsersTab />}
       {activeTab === 'kardex' && (
         <ContactKardexTab
           selectedId={selectedId} setSelectedId={setSelectedId}

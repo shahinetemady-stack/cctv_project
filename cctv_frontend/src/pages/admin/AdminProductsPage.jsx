@@ -159,7 +159,8 @@ function ProductEditor({ productId, categories, onClose }) {
   const selectedRootId = currentCat ? (currentCat.parent || currentCat.id) : ''
   const childOptions = categories.filter(c => c.parent === selectedRootId)
 
-  // زیردسته‌ها ویژگی مستقل ندارند — ویژگی‌های سفارشی/مخفی/بازنویسی همه از دسته اصلی خوانده می‌شود
+  // فیلدهای پایه/مخفی/بازنویسی/برند از دسته اصلی خوانده می‌شود؛
+  // ویژگی‌های سفارشی = ویژگی‌های دسته اصلی + ویژگی‌های اختصاصی خود زیردسته (ادغام)
   const parentCat = currentCat?.parent ? categories.find(c => c.id === currentCat.parent) : null
   const effectiveCat = parentCat || currentCat
   // گزینه‌های دراپ‌داون برند — برندهای تعریف‌شده/در حال استفاده همین دسته (مدیریت در صفحه ویژگی‌های دسته‌ها)
@@ -176,7 +177,12 @@ function ProductEditor({ productId, categories, onClose }) {
     }
   }
 
-  const activeSpecFields = effectiveCat?.spec_fields?.filter(f => f.is_active) || []
+  const activeSpecFields = (currentCat?.parent
+    ? [...(parentCat?.spec_fields || []), ...(currentCat?.spec_fields || [])]
+    : (currentCat?.spec_fields || [])
+  ).filter(f => f.is_active)
+    // کلید تکراری (هم‌نام روی والد و فرزند) فقط یک‌بار — تعریف والد مقدم است (مثل get_specs سایت)
+    .filter((f, i, arr) => arr.findIndex(x => x.key === f.key) === i)
   const specTitles = currentCat?.category_type ? SPEC_GROUPS_BY_TYPE[currentCat.category_type] : null
   const hiddenKeys = new Set(effectiveCat?.hidden_fields || [])
   const visibleGroups = FIELD_GROUPS

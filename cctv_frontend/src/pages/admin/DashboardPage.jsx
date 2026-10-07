@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
   PieChart, Pie, Cell, BarChart, Bar,
@@ -106,7 +107,7 @@ export default function DashboardPage() {
     sales = {}, orders = {}, users = {}, inventory = {}, last_orders = [],
     daily_sales = [], prev_month_sales = 0,
     orders_by_status = [], top_products = [], sales_by_category = [],
-    month_label = '', today_label = '',
+    month_label = '',
   } = data || {}
 
   // برچسب شمسی برای محور روزها — مقدار ISO خام در day باقی می‌ماند
@@ -121,8 +122,34 @@ export default function DashboardPage() {
     <div className="container-main py-8 max-w-6xl">
       <div className="flex items-center justify-between mb-6">
         <h1 className="font-display font-bold text-2xl text-white">داشبورد مدیریت</h1>
-        <span className="text-xs text-gray-steel">{today_label || 'بروزرسانی خودکار هر دقیقه'}</span>
       </div>
+
+      {/* ─── هشدار انقضای سرویس‌ها (دامنه/سرور/…) — فقط سوپریوزر ─── */}
+      {(data?.expiring_services || []).length > 0 && (
+        <div className="mb-4 rounded-xl border border-red-500/40 bg-red-500/10 p-4">
+          <div className="flex items-center gap-2 mb-2 text-red-400 font-semibold text-sm">
+            ⚠️ هشدار انقضای سرویس
+          </div>
+          <div className="space-y-1">
+            {data.expiring_services.map(s => (
+              <div key={s.id} className="text-xs text-red-300 flex items-center gap-2 flex-wrap">
+                <span className="font-semibold text-white">{s.name}</span>
+                <span className="text-gray-steel">({s.category_display}{s.provider ? ` — ${s.provider}` : ''})</span>
+                <span>
+                  {s.days_left < 0
+                    ? `${Number(-s.days_left).toLocaleString('fa-IR')} روز پیش منقضی شده!`
+                    : `${Number(s.days_left).toLocaleString('fa-IR')} روز مانده`}
+                </span>
+                <span className="text-gray-steel">{formatDate(s.expire_date)}</span>
+                {s.auto_renew && <span className="text-sky-400">(تمدید خودکار فعال است)</span>}
+              </div>
+            ))}
+          </div>
+          <Link to="/admin/services" className="inline-block mt-2 text-xs text-brand hover:text-brand/80">
+            مدیریت سرویس‌ها ←
+          </Link>
+        </div>
+      )}
 
       {/* ─── راهنمای هوشمند حسابداری ────────────────────────── */}
       <div className="mb-4">

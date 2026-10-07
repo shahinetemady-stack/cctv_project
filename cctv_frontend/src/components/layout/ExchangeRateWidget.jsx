@@ -1,6 +1,6 @@
 // ویجت «نرخ یوان روز» — فقط در پنل پرسنل (سایدبار/دراور ادمین) رندر می‌شود
 // مشاهده برای همه پرسنل — ویرایش فقط با پرمیشن exchange_rate_edit (ادمین/حسابدار)
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '../../services/api'
@@ -33,8 +33,18 @@ export default function ExchangeRateWidget() {
   const canEdit = can('exchange_rate_edit')
 
   const now = new Date()
-  const weekday = new Intl.DateTimeFormat('fa-IR', { weekday: 'long' }).format(now)
-  const todayDate = new Intl.DateTimeFormat('fa-IR', { day: 'numeric', month: 'long', year: 'numeric' }).format(now)
+  const weekday = new Intl.DateTimeFormat('fa-IR', { weekday: 'long', timeZone: 'Asia/Tehran' }).format(now)
+  const todayDate = new Intl.DateTimeFormat('fa-IR', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Tehran' }).format(now)
+
+  // ساعت زنده به وقت تهران (تایم‌زون سرور) — هر ثانیه به‌روز می‌شود
+  const [clock, setClock] = useState('')
+  useEffect(() => {
+    const fmt = new Intl.DateTimeFormat('fa-IR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Tehran' })
+    const tick = () => setClock(fmt.format(new Date()))
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [])
 
   function openEdit() {
     setValue(rate ? String(rate) : '')
@@ -43,6 +53,12 @@ export default function ExchangeRateWidget() {
 
   return (
     <>
+      <div className="flex items-center justify-center mt-2">
+        <span className="text-base font-bold font-mono" dir="ltr" style={{ color: 'var(--color-text-secondary)' }}>
+          {clock}
+        </span>
+      </div>
+
       <div className="flex items-center justify-between mt-2">
         <span className="text-[10px]" style={{ color: 'var(--color-text-secondary)' }}>تاریخ امروز</span>
         <span className="text-[11px] font-bold" style={{ color: 'var(--color-text-secondary)' }}>

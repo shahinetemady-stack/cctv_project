@@ -121,3 +121,44 @@ class StaticPage(models.Model):
 
     def __str__(self):
         return self.get_key_display()
+
+
+class ServiceSubscription(models.Model):
+    """سرویس‌ها و اشتراک‌های سایت (دامنه، سرور، CDN و…) — هشدار انقضا روی داشبورد."""
+
+    CATEGORIES = [
+        ('domain', 'دامنه'),
+        ('server', 'سرور'),
+        ('cdn',    'CDN و امنیت'),
+        ('sms',    'پیامک'),
+        ('email',  'ایمیل'),
+        ('ai',     'هوش مصنوعی / API'),
+        ('other',  'سایر'),
+    ]
+
+    name        = models.CharField(max_length=100, verbose_name="نام سرویس")
+    category    = models.CharField(max_length=20, choices=CATEGORIES, default='other', verbose_name="دسته")
+    provider    = models.CharField(max_length=100, blank=True, verbose_name="ارائه‌دهنده")
+    account     = models.CharField(max_length=150, blank=True, verbose_name="حساب / شناسه")
+    expire_date = models.DateField(verbose_name="تاریخ انقضا")
+    renew_cost  = models.CharField(max_length=60, blank=True, verbose_name="هزینه تمدید")
+    warn_days   = models.PositiveSmallIntegerField(default=30, verbose_name="هشدار از چند روز قبل")
+    auto_renew  = models.BooleanField(default=False, verbose_name="تمدید خودکار")
+    note        = models.TextField(blank=True, verbose_name="یادداشت")
+    is_active   = models.BooleanField(default=True, verbose_name="فعال")
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_service_subscription"
+        verbose_name = "سرویس و اشتراک"
+        verbose_name_plural = "سرویس‌ها و اشتراک‌ها"
+        ordering = ["expire_date"]
+
+    def __str__(self):
+        return f"{self.name} ({self.expire_date})"
+
+    @property
+    def days_left(self):
+        from django.utils import timezone
+        return (self.expire_date - timezone.localtime().date()).days

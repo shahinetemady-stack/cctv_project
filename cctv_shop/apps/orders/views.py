@@ -26,6 +26,7 @@ Admin:
 import logging
 from django.db import transaction
 from django.utils import timezone
+from apps.core.utils import iso_local as _iso_local
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
@@ -375,22 +376,6 @@ def cancel_order_view(request, order_number):
 
 # ─── Admin order endpoints ─────────────────────────────────────────────────────
 
-class AdminOrderListView(APIView):
-    permission_classes = [IsAdminUser]
-
-    def get(self, request):
-        order_type = request.query_params.get("type")
-        status_filter = request.query_params.get("status")
-
-        qs = Order.objects.prefetch_related("items__variant__product").order_by("-created_at")
-        if order_type:
-            qs = qs.filter(order_type=order_type)
-        if status_filter:
-            qs = qs.filter(status=status_filter)
-
-        return Response(OrderAdminSerializer(qs, many=True).data)
-
-
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
 def admin_confirm_inquiry(request, order_number):
@@ -401,6 +386,12 @@ def admin_confirm_inquiry(request, order_number):
     تأیید سفارش در انتظار — هم استعلامی هم خرید مستقیم.
     اگر قلم نقدی داشته باشد، اطلاعات حساب صراف اجباری است.
     """
+    from apps.accounting.views import _has_perm
+    if not _has_perm(request.user, "orders_view"):
+        return Response(
+            {"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403
+        )
+
     try:
         order = Order.objects.get(order_number=order_number)
     except Order.DoesNotExist:
@@ -517,7 +508,7 @@ class ChinaOrderRequestView(APIView):
             'quantity': r.quantity,
             'status': r.status,
             'status_display': r.get_status_display(),
-            'created_at': r.created_at.strftime('%Y-%m-%d %H:%M'),
+            'created_at': _iso_local(r.created_at),
         } for r in reqs])
 
 
@@ -567,9 +558,9 @@ class OrderTrackingView(APIView):
                 ('post', 'پست'), ('tipax', 'تیپاکس'),
                 ('chapar', 'چاپار'), ('snap', 'اسنپ‌باکس'), ('other', 'سایر')
             ]).get(getattr(order, 'courier_company', ''), ''),
-            'shipped_at': order.shipped_at.strftime('%Y-%m-%d %H:%M') if getattr(order, 'shipped_at', None) else None,
-            'delivered_at': order.delivered_at.strftime('%Y-%m-%d %H:%M') if getattr(order, 'delivered_at', None) else None,
-            'created_at': order.created_at.strftime('%Y-%m-%d %H:%M'),
+            'shipped_at': _iso_local(order.shipped_at) if getattr(order, 'shipped_at', None) else None,
+            'delivered_at': _iso_local(order.delivered_at) if getattr(order, 'delivered_at', None) else None,
+            'created_at': _iso_local(order.created_at),
             'steps': steps,
             'items_count': order.items.count(),
             'total': order.effective_amount,
@@ -578,11 +569,12 @@ class OrderTrackingView(APIView):
 
 class AdminOrderListView(APIView):
     """GET /api/orders/admin/orders/ — لیست سفارشات برای ادمین"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
 
     def get(self, request):
-        if not request.user.is_staff:
-            return Response({'error': 'دسترسی ندارید'}, status=403)
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "orders_view"):
+            return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
         from .models import Order
         qs = Order.objects.select_related('user', 'user__profile', 'created_by', 'updated_by').order_by('-created_at')
 
@@ -621,22 +613,23 @@ class AdminOrderListView(APIView):
             'shipping_method': o.shipping_method or '',
             'shipping_method_display': o.get_shipping_method_display() if o.shipping_method else '',
             'shipping_address': o.shipping_address or '',
-            'created_at': o.created_at.strftime('%Y-%m-%d %H:%M'),
+            'created_at': _iso_local(o.created_at),
             'created_by': (o.created_by.get_full_name() or o.created_by.phone) if o.created_by else '',
             'updated_by': o.updated_by.get_full_name() or o.updated_by.phone if o.updated_by else '',
-            'status_updated_at': o.status_updated_at.strftime('%Y-%m-%d %H:%M') if o.status_updated_at else '',
+            'status_updated_at': _iso_local(o.status_updated_at) if o.status_updated_at else '',
             'reject_reason': o.reject_reason or '',
-            'rejected_at': o.rejected_at.strftime('%Y-%m-%d %H:%M') if o.rejected_at else '',
+            'rejected_at': _iso_local(o.rejected_at) if o.rejected_at else '',
         } for o in qs[:200]])
 
 
 class AdminOrderDetailView(APIView):
     """GET /api/orders/admin/<order_number>/detail/ — جزئیات سفارش با اقلام"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
 
     def get(self, request, order_number):
-        if not request.user.is_staff:
-            return Response({'error': 'دسترسی ندارید'}, status=403)
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "orders_view"):
+            return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
         from .models import Order
         try:
             order = Order.objects.select_related('user', 'created_by', 'updated_by').prefetch_related('items__variant__product').get(
@@ -691,8 +684,8 @@ class AdminOrderDetailView(APIView):
             'tracking_code': order.tracking_code or '',
             'items': items,
             'reject_reason': order.reject_reason or '',
-            'rejected_at': order.rejected_at.strftime('%Y-%m-%d %H:%M') if order.rejected_at else '',
-            'created_at': order.created_at.strftime('%Y-%m-%d %H:%M'),
+            'rejected_at': _iso_local(order.rejected_at) if order.rejected_at else '',
+            'created_at': _iso_local(order.created_at),
             'created_by': (order.created_by.get_full_name() or order.created_by.phone) if order.created_by else '',
             'updated_by': (order.updated_by.get_full_name() or order.updated_by.phone) if order.updated_by else '',
             'receipts': PaymentReceiptSerializer(
@@ -707,11 +700,12 @@ class AdminOrderItemUpdateView(APIView):
     اصلاح یک قلم سفارش — تعداد واقعی قابل ارسال، نحوه تسویه، موعد تسویه.
     quantity=0 یعنی حذف قلم (اگر آخرین قلم باشد رد می‌شود). مبلغ کل سفارش بازمحاسبه می‌شود.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
 
     def patch(self, request, order_number, item_id):
-        if not request.user.is_staff:
-            return Response({'error': 'دسترسی ندارید'}, status=403)
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "orders_view"):
+            return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
         from .models import Order, OrderItem, Settlement, StockShortage
         try:
             order = Order.objects.get(order_number=order_number)
@@ -790,11 +784,12 @@ class AdminOrderItemUpdateView(APIView):
 
 class AdminOrderUpdateView(APIView):
     """PATCH /api/orders/admin/<order_number>/update/ — آپدیت وضعیت سفارش"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
 
     def patch(self, request, order_number):
-        if not request.user.is_staff:
-            return Response({'error': 'دسترسی ندارید'}, status=403)
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "orders_view"):
+            return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
         from .models import Order
         from django.utils import timezone
         try:
@@ -852,6 +847,11 @@ class AdminOrderRejectView(APIView):
 
     @transaction.atomic
     def post(self, request, order_number):
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "orders_view"):
+            return Response(
+                {"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403
+            )
         reason = (request.data.get("reason") or "").strip()
         if not reason:
             return Response({"error": "دلیل رد الزامی است."},
@@ -919,13 +919,13 @@ class AdminRejectReportView(APIView):
 
     def get(self, request):
         from apps.accounting.views import _has_perm
-        if not _has_perm(request.user, "sale_view"):
+        if not _has_perm(request.user, "reject_report_view"):
             return Response(
                 {"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403
             )
 
         from datetime import date as _date, timedelta
-        today = timezone.now().date()
+        today = timezone.localdate()
         try:
             date_from = _date.fromisoformat(str(request.query_params["from"])) \
                 if request.query_params.get("from") else today - timedelta(days=30)
@@ -1049,6 +1049,11 @@ class AdminReceiptListCreateView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "sale_payment"):
+            return Response(
+                {"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403
+            )
         from apps.accounting.models import PaymentReceipt
         qs = PaymentReceipt.objects.select_related("order", "customer", "uploaded_by")
         status_filter = request.query_params.get("status")
@@ -1059,6 +1064,11 @@ class AdminReceiptListCreateView(APIView):
         )
 
     def post(self, request):
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "sale_payment"):
+            return Response(
+                {"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403
+            )
         order_number = request.data.get("order_number")
         if not order_number:
             return Response({"error": "شماره سفارش الزامی است."},
@@ -1097,6 +1107,9 @@ class AdminReceiptApproveView(APIView):
 
     @transaction.atomic
     def post(self, request, pk):
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "sale_payment"):
+            return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
         from apps.accounting.models import PaymentReceipt
         try:
             receipt = PaymentReceipt.objects.select_related("order", "customer").get(pk=pk)
@@ -1158,6 +1171,9 @@ class AdminReceiptRejectView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
+        from apps.accounting.views import _has_perm
+        if not _has_perm(request.user, "sale_payment"):
+            return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
         reason = (request.data.get("reason") or "").strip()
         if not reason:
             return Response({"error": "دلیل رد فیش الزامی است."},
@@ -1198,7 +1214,7 @@ class AdminShortageReportView(APIView):
 
     def get(self, request):
         from apps.accounting.views import _has_perm
-        if not _has_perm(request.user, "kardex_view"):
+        if not _has_perm(request.user, "shortage_view"):
             return Response(
                 {"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403
             )
@@ -1207,7 +1223,7 @@ class AdminShortageReportView(APIView):
         from django.db.models import Sum, Count
         from .models import StockShortage
 
-        today = timezone.now().date()
+        today = timezone.localdate()
         try:
             date_from = _date.fromisoformat(str(request.query_params["from"])) \
                 if request.query_params.get("from") else today - timedelta(days=30)

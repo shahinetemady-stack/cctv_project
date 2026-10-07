@@ -1,4 +1,5 @@
 aptdaemon==2.0.2
+arabic-reshaper==3.0.1
 attrs==25.4.0
 autocommand==2.2.2
 babel==2.17.0
@@ -57,6 +58,7 @@ PyJWT==2.10.1
 pyparsing==3.3.2
 pyserial==3.5
 python-apt==3.1.0+ubuntu1
+python-bidi==0.6.11
 python-dateutil==2.9.0
 python-debian==1.0.1+ubuntu2
 pyxdg==0.28

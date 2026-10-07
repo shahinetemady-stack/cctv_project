@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from django.db.models import Sum, Q
 from django.db import transaction
+from django.utils import timezone
 from decimal import Decimal
 
 from .models import Contact, PurchaseInvoice, PurchaseItem, ExtraCost, Payment
@@ -50,7 +51,8 @@ def _days_since(d):
     if d is None:
         return 0
     import datetime
-    today = datetime.date.today()
+    from django.utils import timezone
+    today = timezone.localdate()
     if isinstance(d, datetime.datetime):
         d = d.date()
     try:
@@ -66,6 +68,10 @@ def _has_perm(user, code):
         return True
     sp = getattr(user, 'staff_profile', None)
     return bool(sp and sp.is_active and sp.has_perm(code))
+
+
+def _has_any_perm(user, *codes):
+    return any(_has_perm(user, c) for c in codes)
 
 
 def _forbidden(msg='شما دسترسی لازم برای این عملیات را ندارید'):
@@ -100,7 +106,7 @@ class AccountListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        if not _has_perm(request.user, 'balance_view'):
+        if not _has_any_perm(request.user, 'balance_view', 'payment_view', 'sale_view', 'payroll_view', 'expenses_view'):
             return _forbidden()
         from .models import Account
         accounts = Account.objects.filter(is_active=True)
@@ -221,7 +227,7 @@ class AccountTransactionsView(APIView):
                 "counterparty": p.contact.name if p.contact else "",
                 "invoice_label": (p.invoice.invoice_number or str(p.invoice_id)) if p.invoice else None,
                 "created_by": _user_label(p.created_by),
-                "created_at": p.created_at.strftime('%Y-%m-%d %H:%M'),
+                "created_at": _iso_local(p.created_at),
             })
 
         receipts = SalePayment.objects.filter(to_account=acc).select_related("invoice", "invoice__customer", "created_by")
@@ -240,7 +246,7 @@ class AccountTransactionsView(APIView):
                 "counterparty": sp.invoice.customer_name or str(sp.invoice.customer),
                 "invoice_label": sp.invoice.invoice_number,
                 "created_by": _user_label(sp.created_by),
-                "created_at": sp.created_at.strftime('%Y-%m-%d %H:%M'),
+                "created_at": _iso_local(sp.created_at),
             })
 
         rows.sort(key=lambda r: (r["date"], r["id"]), reverse=True)
@@ -296,10 +302,12 @@ def _user_display_name(u):
 def _sale_debt_map(user_ids):
     """
     مانده خالص فاکتورهای فروش هر کاربر — تفکیک ریال/یوان — بدون اثر روی مانده طرف حساب.
-    remaining_amount علامت‌دار جمع می‌شود: مازاد پرداخت یک فاکتور (مانده منفی)، بدهی
-    فاکتورهای دیگر همان مشتری را جبران می‌کند — مطابق مانده نهایی جدول کاردکس اشخاص.
+    remaining_amount علامت‌دار جمع می‌شود و مازاد تخصیص‌نیافتهٔ واریزها (بستانکاری
+    داخل اسناد واریز) از آن کم می‌شود تا اگر مشتری بیشتر پرداخت کرده، بستانکار دیده شود —
+    مطابق مانده نهایی جدول کاردکس اشخاص.
     """
     from .models import SaleInvoice
+    from .services import sale_overpayment_irr
     debts = {}
     qs = (SaleInvoice.objects
           .filter(customer_id__in=user_ids, status__in=['confirmed', 'paid'])
@@ -309,6 +317,12 @@ def _sale_debt_map(user_ids):
         if remaining:
             d = debts.setdefault(inv.customer_id, {'irr': 0, 'cny': 0})
             d['cny' if inv.currency == 'CNY' else 'irr'] += remaining
+    for uid in user_ids:
+        # sale_overpayment_irr با id هم کار می‌کند (فیلتر FK)
+        overpay = sale_overpayment_irr(uid)
+        if overpay:
+            d = debts.setdefault(uid, {'irr': 0, 'cny': 0})
+            d['irr'] -= overpay
     return debts
 
 
@@ -342,6 +356,7 @@ def _sale_invoices_payload(u):
     from .models import SaleInvoice
     payload = []
     qs = (SaleInvoice.objects.filter(customer=u)
+          .exclude(status='cancelled')
           .select_related("created_by")
           .prefetch_related("settlement_lines")
           .order_by("-created_at")[:20])
@@ -359,7 +374,7 @@ def _sale_invoices_payload(u):
             due = _effective_due(inv)
         payload.append({
             "id": inv.id, "invoice_number": inv.invoice_number,
-            "date": str(inv.issue_date or inv.created_at.date()), "status": inv.status,
+            "date": str(inv.issue_date or timezone.localdate(inv.created_at)), "status": inv.status,
             "status_display": inv.get_status_display(),
             "currency": inv.currency,
             "total_amount": inv.total_amount,
@@ -380,6 +395,7 @@ def _sale_invoices_payload(u):
 
 def _sale_payments_payload(u):
     from .models import SalePayment
+    from .services import sale_payment_breakdown
     return [{
         "id": p.id, "date": str(p.date),
         "method_display": p.get_method_display(),
@@ -387,11 +403,15 @@ def _sale_payments_payload(u):
         "currency": p.invoice.currency if p.invoice_id else "IRR",
         "account_name": p.to_account.name if p.to_account else "",
         "reference": p.reference,
+        "note": p.note,
+        # شرح تخصیص این واریز — «۹۰۰٬۰۰۰٬۰۰۰ ← فاکتور ۱۰۱۲ | ۷۵٬۰۰۰٬۰۰۰ بستانکاری»
+        "allocation_detail": sale_payment_breakdown(p),
         "created_by_name": _user_display_name(p.created_by) if p.created_by else "",
     } for p in SalePayment.objects.filter(invoice__customer=u).select_related("to_account", "invoice", "created_by").order_by("-date")[:50]]
 
 
 def _registered_contact_payload(u, debts=None):
+    from .services import sale_overpayment_irr
     is_partner = _user_is_partner(u)
     profile = getattr(u, 'profile', None)
     debts = debts or {}
@@ -414,6 +434,8 @@ def _registered_contact_payload(u, debts=None):
         "title_display": profile.get_title_display() if profile and profile.title else "",
         "restriction_override": bool(profile.restriction_override) if profile else False,
         "payment_credit_irr": int(profile.payment_credit_irr) if profile else 0,
+        # مازاد تخصیص‌نیافتهٔ واریزها — بستانکاری قابل‌استفاده که داخل اسناد واریز نشسته
+        "sale_overpay_irr": sale_overpayment_irr(u),
         "restriction_level": _user_restriction_level(u),
         "balance_irr": 0, "balance_cny": 0,
         # مانده خالص فاکتورهای فروش (علامت‌دار — مازاد پرداخت، بدهی‌های دیگر را جبران می‌کند) + مانده اول دوره
@@ -441,6 +463,59 @@ def _get_registered_user(pk):
         return None
 
 
+def _ensure_contact_for_user(u):
+    """برای کاربر ثبت‌نامیِ بدون طرف حساب، رکورد Contact می‌سازد و لینکش می‌کند —
+    الگوی معکوس «کاربر سایه»: اسناد دریافت/پرداخت/انتقال رکورد Contact لازم دارند.
+    مانده اول دوره و سقف اعتبار از پروفایل روی طرف حساب کپی می‌شود (پروفایل دست‌نخورده
+    می‌ماند تا پنل مشتری و کنترل سقف اعتبار مثل قبل کار کنند)."""
+    profile = getattr(u, 'profile', None)
+    if profile and profile.linked_contact_id:
+        return profile.linked_contact
+    is_partner = _user_is_partner(u)
+    with transaction.atomic():
+        c = Contact.objects.create(
+            name=_user_display_name(u),
+            contact_type=Contact.ContactType.PARTNER if is_partner else Contact.ContactType.CUSTOMER,
+            phone=u.phone or '',
+            address=profile.address if profile else '',
+            province=(profile.province or '') if profile else '',
+            partner_tier=(profile.partner_tier or '') if is_partner and profile else '',
+            opening_balance_irr=int(profile.opening_balance_irr) if profile else 0,
+            opening_balance_cny=profile.opening_balance_cny if profile else 0,
+            credit_limit_irr=int(profile.credit_limit) if profile else 0,
+            has_fx=bool(profile.has_fx) if profile else False,
+        )
+        if profile is None:
+            profile = UserProfile.objects.create(user=u)
+        profile.linked_contact = c
+        profile.save(update_fields=['linked_contact', 'updated_at'])
+    logger.info(f"[CONTACT] طرف حساب خودکار برای کاربر ثبت‌نامی {u.id} ({_user_display_name(u)}) ساخته و لینک شد — contact #{c.id}")
+    return c
+
+
+def _contact_from_mixed_id(value):
+    """id طرف حساب از فرانت (عددی / c_ / u_) → رکورد Contact؛ برای u_ در صورت نبود، خودکار ساخته و لینک می‌شود."""
+    s = str(value or "")
+    if s.startswith("u_"):
+        u = _get_registered_user(s)
+        if u is None:
+            # کاربر ممکن است همین حالا (درخواست قبلی) لینک شده باشد و از لیست «بدون طرف حساب» خارج شده باشد
+            from django.contrib.auth import get_user_model
+            try:
+                u = get_user_model().objects.get(pk=int(s[2:]), is_active=True)
+            except (get_user_model().DoesNotExist, ValueError, TypeError):
+                return None
+            profile = getattr(u, 'profile', None)
+            if not (profile and profile.linked_contact_id):
+                return None
+            return profile.linked_contact
+        return _ensure_contact_for_user(u)
+    try:
+        return Contact.objects.filter(pk=_contact_pk(s)).first()
+    except (ValueError, TypeError):
+        return None
+
+
 class ContactListView(APIView):
     permission_classes = [IsAdminUser]
 
@@ -459,6 +534,13 @@ class ContactListView(APIView):
 
         # حالت سازگار — فقط Contactهای دستی با id عددی (مصرف‌کننده‌های قدیمی)
         if not include_registered:
+            # بدهی فاکتورهای باز کاربر لینک‌شده — فرم دریافت با آن تصمیم می‌گیرد
+            # انتخاب «تسویه مانده اول دوره» را نشان بدهد یا نه
+            linked_map = {}
+            for prof in UserProfile.objects.filter(linked_contact__isnull=False).select_related('user'):
+                if prof.user.is_active:
+                    linked_map[prof.linked_contact_id] = prof.user_id
+            linked_debts = _sale_debt_map(list(linked_map.values())) if linked_map else {}
             return Response([{
                 "id": c.id, "name": c.name,
                 "contact_type": c.contact_type,
@@ -472,6 +554,7 @@ class ContactListView(APIView):
                 "has_fx": c.has_fx,
                 "balance_irr": c.balance_irr,
                 "balance_cny": float(c.balance_cny),
+                "sale_debt": (linked_debts.get(linked_map.get(c.id)) or {}).get('irr', 0),
             } for c in qs])
 
         # حالت ادغام — id پیشونددار + کاربران ثبت‌نامی سایت
@@ -580,7 +663,7 @@ class ContactDetailView(APIView):
             "province": profile.province if profile else "",
             "note": "",
             "partner_approved": _user_is_partner(u),
-            "date_joined": str(u.date_joined.date()),
+            "date_joined": str(timezone.localdate(u.date_joined)),
             "payments": [], "invoices": [],
             "sale_invoices": _sale_invoices_payload(u),
             "sale_payments": _sale_payments_payload(u),
@@ -592,6 +675,7 @@ class ContactDetailView(APIView):
     def get(self, request, pk):
         if not _has_perm(request.user, 'contacts_view'):
             return _forbidden()
+        from .services import sale_overpayment_irr
         allowed = _allowed_contact_types(request.user)
         if str(pk).startswith("u_"):
             u = _get_registered_user(pk)
@@ -660,6 +744,10 @@ class ContactDetailView(APIView):
         linked_u = _linked_user(c)
         sale_invoices = _sale_invoices_payload(linked_u) if linked_u else []
         sale_payments = _sale_payments_payload(linked_u) if linked_u else []
+        # مانده خالص فاکتورهای فروش (علامت‌دار، با کسر مازاد واریزها) — همان محاسبهٔ
+        # لیست طرف حساب‌ها؛ بدون آن هدر کاردکس فقط مانده کارتابل را نشان می‌داد و
+        # با مانده نهایی جدول ناسازگار می‌شد
+        sale_debts = _sale_debt_map([linked_u.id]).get(linked_u.id) if linked_u else None
         return Response({
             "id": f"c_{c.id}", "user_id": None, "is_registered": False,
             "name": c.name,
@@ -692,6 +780,9 @@ class ContactDetailView(APIView):
             "restriction_override": bool(c.restriction_override),
             "restriction_level": _user_restriction_level(linked_u) if linked_u else None,
             "payment_credit_irr": int(getattr(getattr(linked_u, "profile", None), "payment_credit_irr", 0) or 0),
+            "sale_overpay_irr": sale_overpayment_irr(linked_u) if linked_u else 0,
+            "sale_debt": (sale_debts or {}).get('irr', 0),
+            "sale_debt_cny": (sale_debts or {}).get('cny', 0),
         })
 
     def patch(self, request, pk):
@@ -719,6 +810,7 @@ class ContactDetailView(APIView):
             if u is None:
                 return Response({"error": "یافت نشد"}, status=404)
             from apps.users.models import UserProfile
+            from django.utils import timezone
             profile, _ = UserProfile.objects.get_or_create(user=u)
             old_tier = profile.partner_tier
             old_approved = bool(profile.user_type == UserProfile.UserType.PARTNER and profile.is_approved)
@@ -732,8 +824,11 @@ class ContactDetailView(APIView):
             if d.get("partner_approved"):
                 profile.user_type = UserProfile.UserType.PARTNER
                 profile.is_approved = True
+                if not old_approved:
+                    profile.approved_at = timezone.now()
             elif "partner_approved" in d:
                 profile.is_approved = False
+                profile.approved_at = None
             if "restriction_override" in d:
                 profile.restriction_override = bool(d["restriction_override"])
             if "first_name" in d:
@@ -1208,7 +1303,7 @@ class PurchaseInvoicePendingReceiveView(APIView):
             "warehouse_name": inv.warehouse.name if inv.warehouse else "—",
             "date": str(inv.date),
             "created_by": _user_label(inv.created_by),
-            "created_at": inv.created_at.strftime('%Y-%m-%d %H:%M'),
+            "created_at": _iso_local(inv.created_at),
             "items_count": inv.items.count(),
             "total_cny": float(inv.total_cny),
             "needs_data": {
@@ -1577,7 +1672,7 @@ class PurchaseInvoiceDetailView(APIView):
 
 # ─── Payments ────────────────────────────────────────────────
 
-from apps.core.utils import user_label as _user_label, audit_row as _audit_row
+from apps.core.utils import user_label as _user_label, audit_row as _audit_row, iso_local as _iso_local
 
 
 def _payment_row(p):
@@ -1627,7 +1722,7 @@ class PaymentListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        if not _has_perm(request.user, 'purchase_view'):
+        if not _has_any_perm(request.user, 'purchase_view', 'payment_view'):
             return _forbidden()
         qs = Payment.objects.select_related(
             "contact", "from_account", "to_account", "invoice"
@@ -1664,7 +1759,7 @@ class PaymentListView(APIView):
         return Response([_payment_row(p) for p in qs[:200]])
 
     def post(self, request):
-        if not _has_perm(request.user, 'purchase_create'):
+        if not _has_any_perm(request.user, 'purchase_create', 'payment_view'):
             return _forbidden()
         d = request.data
         try:
@@ -1746,7 +1841,10 @@ class PaymentListView(APIView):
             # جلوگیری از ثبت دوباره‌کاری: همین مبلغ در همین تاریخ برای همین طرف حساب
             # (یا تسویه فاکتور کاربر سایهٔ لینک‌شده به او) قبلاً ثبت شده باشد → 409 با تأیید لازم
             if d.get("contact_id"):
-                d["contact_id"] = _contact_pk(d["contact_id"])
+                c_obj = _contact_from_mixed_id(d["contact_id"])
+                if c_obj is None:
+                    return Response({"error": "طرف حساب یافت نشد"}, status=404)
+                d["contact_id"] = c_obj.id
             if d.get("contact_id") and not d.get("confirm_duplicate"):
                 amount = _safe_decimal(d["amount"])
                 dup = Payment.objects.filter(
@@ -1770,12 +1868,15 @@ class PaymentListView(APIView):
                                  "اگر این پرداخت جداست، «ثبت قطعی» را بزنید.",
                         "duplicate": True,
                     }, status=409)
-            # تخصیص خودکار FIFO — دریافت نقدی/واریز از طرف حسابِ لینک‌شده به کاربری که
-            # فاکتور فروش باز دارد، مستقیم به تسویه فاکتورهایش (به ترتیب موعد) می‌رود.
-            # سند Payment جدا ساخته نمی‌شود تا وجه در کاردکس و مانده خالص دوبار حساب نشود؛
-            # موجودی حساب بانکی از طریق SalePayment.to_account درست می‌ماند و در کاردکس
-            # طرف حساب به‌صورت ردیف «دریافت فروش» دیده می‌شود.
+            # تخصیص وجه دریافتی نقدی/واریز از طرف حسابِ لینک‌شده به کاربر سایت:
+            # - settle_target=opening: همهٔ مبلغ به‌صورت سند دریافت عادی ثبت می‌شود تا
+            #   مانده اول دوره را ببندد (فاکتورهای باز دست نمی‌خورند).
+            # - پیش‌فرض (fifo): یک سند واریز به «مبلغ واقعی» ساخته می‌شود و تخصیص‌ها
+            #   به ترتیب موعد روی فاکتورهای باز می‌نشیند؛ مازاد داخل همان سند می‌ماند
+            #   و به‌عنوان بستانکاری در کاردکس دیده می‌شود و در فاکتور بعدی خودکار
+            #   مصرف می‌شود (consume_sale_overpayment) — مازاد مخفی نداریم.
             # (دریافت چکی از این مسیر نمی‌رود — چک در SalePayment پشتیبانی نمی‌شود)
+            settle_target = d.get("settle_target") or "fifo"
             if d["direction"] == "in" and ptype in ("cash", "transfer") and d.get("contact_id"):
                 from .models import SaleInvoice
                 linked = UserProfile.objects.filter(
@@ -1788,7 +1889,7 @@ class PaymentListView(APIView):
                         ).prefetch_related("sale_payments")
                         if i.remaining_amount > 0
                     ]
-                if open_invoices:
+                if open_invoices and settle_target != "opening":
                     from .services import settle_customer_fifo
                     result = settle_customer_fifo(
                         linked.user, _safe_decimal(d["amount"]),
@@ -1802,8 +1903,11 @@ class PaymentListView(APIView):
                         "fifo": True,
                         "allocated": result["allocated"],
                         "leftover": result["leftover"],
-                        "message": "دریافت ثبت و به ترتیب موعد به فاکتورهای باز مشتری تخصیص یافت",
+                        "message": "دریافت ثبت و به ترتیب موعد به فاکتورهای باز مشتری تخصیص یافت"
+                                   + (" — مازاد به‌عنوان بستانکاری در همان سند دریافت باقی ماند" if result["leftover"] > 0 else ""),
                     }, status=201)
+            if settle_target == "opening" and d["direction"] == "in":
+                d["note"] = " | ".join(filter(None, ["تسویه مانده اول دوره", d.get("note", "")]))
 
             p = Payment.objects.create(
                 contact_id=d.get("contact_id") or None,  # اختیاری — سند حسابداری/جابجایی درون بانکی بدون طرف حساب
@@ -1893,7 +1997,7 @@ class PaymentVoucherView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        if not _has_perm(request.user, 'purchase_create'):
+        if not _has_any_perm(request.user, 'purchase_create', 'payment_view'):
             return _forbidden()
         d = request.data
         try:
@@ -1904,11 +2008,10 @@ class PaymentVoucherView(APIView):
             amount = _safe_decimal(d.get("amount"))
             if amount <= 0:
                 return Response({"error": "مبلغ را وارد کنید"}, status=400)
-            try:
-                from_c = Contact.objects.get(pk=_contact_pk(d["from_contact_id"]))
-                to_c = Contact.objects.get(pk=_contact_pk(d["to_contact_id"]))
-            except (Contact.DoesNotExist, ValueError):
-                return Response({"error": "طرف حساب یافت نشد — اگر کاربر سایت است، ابتدا از بخش طرف حساب‌ها برایش طرف حساب بسازید"}, status=404)
+            from_c = _contact_from_mixed_id(d["from_contact_id"])
+            to_c = _contact_from_mixed_id(d["to_contact_id"])
+            if not from_c or not to_c:
+                return Response({"error": "طرف حساب یافت نشد"}, status=404)
             base = dict(currency=d.get("currency", "IRR"), amount=amount,
                         rate_irr=_safe_int(d.get("rate_irr"), 0), date=d["date"],
                         reference=d.get("reference", ""), payment_type="other",
@@ -1982,7 +2085,7 @@ class ChequeAvailableView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        if not _has_perm(request.user, 'purchase_view'):
+        if not _has_any_perm(request.user, 'purchase_view', 'payment_view'):
             return _forbidden()
         from .models import Cheque
         acc_id = request.query_params.get("account_id")
@@ -2026,7 +2129,7 @@ class ChequeListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        if not _has_perm(request.user, 'purchase_view'):
+        if not _has_any_perm(request.user, 'purchase_view', 'payment_view'):
             return _forbidden()
         from .models import Cheque
         qs = Cheque.objects.select_related(
@@ -2317,7 +2420,7 @@ class PaymentDetailView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request, pk):
-        if not _has_perm(request.user, 'purchase_view'):
+        if not _has_any_perm(request.user, 'purchase_view', 'payment_view'):
             return _forbidden()
         try:
             p = Payment.objects.select_related(
@@ -2337,7 +2440,13 @@ class PaymentDetailView(APIView):
         d = request.data
         try:
             if "contact_id" in d:
-                p.contact_id = d["contact_id"] or None
+                if d["contact_id"]:
+                    c_obj = _contact_from_mixed_id(d["contact_id"])
+                    if c_obj is None:
+                        return Response({"error": "طرف حساب یافت نشد"}, status=404)
+                    p.contact_id = c_obj.id
+                else:
+                    p.contact_id = None
             if "invoice_id" in d:
                 p.invoice_id = d["invoice_id"] or None
             if "from_account_id" in d:
@@ -2482,13 +2591,18 @@ class SaleInvoiceListView(APIView):
         # فاکتورهای باز یک طرف حساب (از مسیر کاربر سایهٔ لینک‌شده) — برای فرم دریافت
         contact_id = request.query_params.get('contact_id')
         if contact_id:
-            linked = UserProfile.objects.filter(
-                linked_contact_id=_contact_pk(contact_id)).first()
-            if not linked:
+            if str(contact_id).startswith('u_'):
+                # کاربر ثبت‌نامیِ بدون طرف حساب — مستقیم با id کاربر
+                linked_user = _get_registered_user(contact_id)
+            else:
+                linked = UserProfile.objects.filter(
+                    linked_contact_id=_contact_pk(contact_id)).first()
+                linked_user = linked.user if linked else None
+            if not linked_user:
                 return Response([])
             open_invs = [
                 inv for inv in SaleInvoice.objects.filter(
-                    customer=linked.user, status='confirmed', currency='IRR'
+                    customer=linked_user, status='confirmed', currency='IRR'
                 ).prefetch_related('sale_payments').order_by('due_date', 'id')
                 if inv.remaining_amount > 0
             ]
@@ -2514,10 +2628,31 @@ class SaleInvoiceListView(APIView):
             qs = qs.filter(Q(customer_name__icontains=q) | Q(customer_phone__icontains=q)
                            | Q(invoice_number__icontains=q))
 
+        from django.utils import timezone
+        today = timezone.localdate()
+
+        def _overdue_lines(inv):
+            # ردیف‌های تسویه سررسیدرسیده با مانده — نقدی از فردای موعد، بقیه از خود روز موعد
+            out = []
+            for l in inv.settlement_lines.all():
+                if not l.is_active or l.remaining_amount <= 0:
+                    continue
+                if l.settlement_type == 'cash':
+                    if l.due_date < today:
+                        out.append(l)
+                elif l.due_date <= today:
+                    out.append(l)
+            return out
+
+        def _effective_due(inv):
+            # نزدیک‌ترین موعد ردیف تسویهٔ فعال → یا موعد خود فاکتور
+            dues = [l.due_date for l in inv.settlement_lines.all() if l.is_active and l.due_date]
+            if dues:
+                return min(dues)
+            return inv.due_date
+
         if request.query_params.get('due') == '1':
-            from django.utils import timezone
-            qs = [i for i in qs if i.settlement == 'credit' and i.due_date
-                  and i.due_date <= timezone.now().date() and i.remaining_amount > 0]
+            qs = [i for i in qs if _overdue_lines(i) and i.remaining_amount > 0]
         else:
             # پیش‌فرض فقط فاکتورهای باز — تسویه‌شده‌ها با status=paid، همه با status=all
             status_filter = request.query_params.get('status', 'open')
@@ -2535,6 +2670,7 @@ class SaleInvoiceListView(APIView):
         show_profit = request.user.is_superuser
 
         def _row(inv):
+            eff_due = _effective_due(inv)
             row = {
                 'id': inv.id, 'invoice_number': inv.invoice_number,
                 'source': inv.source, 'source_display': inv.get_source_display(),
@@ -2542,6 +2678,8 @@ class SaleInvoiceListView(APIView):
                 'currency': inv.currency,
                 'settlement': inv.settlement, 'settlement_display': _settlement_display(inv),
                 'due_date': str(inv.due_date) if inv.due_date else '',
+                'effective_due': str(eff_due) if eff_due else '',
+                'due_overdue': bool(_overdue_lines(inv)) and inv.remaining_amount > 0,
                 'issue_date': str(inv.issue_date) if inv.issue_date else '',
                 'customer_name': inv.customer_name or str(inv.customer),
                 'customer_phone': inv.customer_phone,
@@ -2616,12 +2754,15 @@ class SaleInvoiceListView(APIView):
             issue = d.get('issue_date') or timezone.localdate()
             settlement = d.get('settlement', 'cash')
             due = d.get('due_date') or None
-            if settlement == 'credit' and not due:
-                # تو حسابی — موعد ثابت ۱۴ روز از تاریخ صدور (بدون انتخاب دستی در فرم)
+            if settlement == 'cash':
+                # نقدی موعد ندارد — مقدار احتمالی بای‌استفادهٔ فرم نادیده گرفته می‌شود
+                due = None
+            elif not due:
+                # موعد خودکار بر اساس نوع تسویه: توحسابی ۱۴ روز، یکماهه ۳۰، دوماهه ۶۰
                 from datetime import date as _date
                 from apps.orders.models import settlement_due_for
                 issue_d = _date.fromisoformat(str(issue)) if isinstance(issue, str) else issue
-                due = settlement_due_for('credit', issue_d)
+                due = settlement_due_for(settlement, issue_d)
             inv = SaleInvoice.objects.create(
                 source=d.get('source', 'manual'),
                 sale_type=d.get('sale_type', 'domestic'),
@@ -2660,12 +2801,13 @@ class SaleInvoiceListView(APIView):
                 logger.error(f"[SALE] deduct_from_inventory ناموفق: {deduct_err}")
                 stock_msg = " — هشدار: کسر موجودی شکست خورد"
 
-            # مصرف خودکار بستانکاری‌های قبلی مشتری (نقدی + کارتابل طرف حساب) —
+            # مصرف خودکار بستانکاری‌های قبلی مشتری (نقدی + کارتابل طرف حساب + مازاد واریزها) —
             # اگر قبل از صدور این فاکتور بستانکاری داشته (مثل سند انتقال)، همین‌جا
             # روی فاکتور تسویه می‌شود تا فاکتور باز نماند و خالص دوبار حساب نشود.
             if inv.status == 'confirmed' and inv.currency == 'IRR':
                 from apps.orders.services import apply_customer_credit
-                from .services import consume_contact_credit
+                from .services import consume_contact_credit, consume_sale_overpayment
+                consume_sale_overpayment(customer)
                 apply_customer_credit(customer, actor=request.user)
                 consume_contact_credit(customer, actor=request.user)
                 inv.refresh_from_db()
@@ -2720,7 +2862,7 @@ class SaleInvoiceDetailView(APIView):
             'reference': p.reference,
             'to_account': p.to_account.name if p.to_account else '',
             'created_by': str(p.created_by) if p.created_by else '',
-            'created_at': p.created_at.strftime('%Y-%m-%d %H:%M'),
+            'created_at': _iso_local(p.created_at),
         } for p in inv.sale_payments.all()]
 
         return Response({
@@ -2805,11 +2947,12 @@ class SaleInvoiceDetailView(APIView):
                 if 'items' in d:
                     self._replace_items(inv, d['items'], request.user)
 
-                # مصرف خودکار بستانکاری‌های قبلی مشتری (نقدی + کارتابل طرف حساب)
+                # مصرف خودکار بستانکاری‌های قبلی مشتری (نقدی + کارتابل طرف حساب + مازاد واریزها)
                 # هنگام تأیید فاکتور — اگر بستانکاری قبل از فاکتور ایجاد شده باشد.
                 if inv.status == 'confirmed' and old_inv_status == 'draft' and inv.currency == 'IRR':
                     from apps.orders.services import apply_customer_credit
-                    from .services import consume_contact_credit
+                    from .services import consume_contact_credit, consume_sale_overpayment
+                    consume_sale_overpayment(inv.customer)
                     apply_customer_credit(inv.customer, actor=request.user)
                     consume_contact_credit(inv.customer, actor=request.user)
                     inv.refresh_from_db()
@@ -3091,7 +3234,7 @@ class SalePaymentDetailView(APIView):
             'date': str(p.date),
             'reference': p.reference,
             'note': p.note,
-            'created_at': p.created_at.strftime('%Y-%m-%d %H:%M'),
+            'created_at': _iso_local(p.created_at),
         }
 
     def _recompute_invoice_status(self, inv):
@@ -3123,11 +3266,12 @@ class SalePaymentDetailView(APIView):
             return Response({'error': 'یافت نشد'}, status=404)
         d = request.data
         try:
+            amount_changed = 'amount' in d
             if 'to_account_id' in d:
                 p.to_account_id = d['to_account_id'] or None
             if 'method' in d:
                 p.method = d['method']
-            if 'amount' in d:
+            if amount_changed:
                 p.amount = _safe_int(d['amount'])
             if 'date' in d:
                 p.date = d['date']
@@ -3136,10 +3280,18 @@ class SalePaymentDetailView(APIView):
             if 'note' in d:
                 p.note = d['note']
             p.save()
+            realloc = None
+            if amount_changed:
+                # تخصیص‌ها با مبلغ جدید هم‌تراز می‌شوند تا «پرداخت‌شده فاکتور»
+                # و «کاردکس» از هم جدا نشوند
+                from .services import reallocate_sale_payment
+                realloc = reallocate_sale_payment(p, actor=request.user)
+            p.invoice.refresh_from_db()
             self._recompute_invoice_status(p.invoice)
             return Response({
                 'id': p.id, 'remaining': p.invoice.remaining_amount,
                 'invoice_status': p.invoice.status, 'message': 'پرداخت به‌روز شد',
+                **({'allocated': realloc['allocated'], 'released': realloc['released']} if realloc else {}),
             })
         except Exception as e:
             return Response({'error': str(e)}, status=400)
@@ -3177,7 +3329,7 @@ class PendingOrdersView(APIView):
             'status': o.status, 'status_display': o.get_status_display(),
             'total_amount': o.effective_amount,
             'has_invoice': hasattr(o, 'sale_invoice'),
-            'created_at': o.created_at.strftime('%Y-%m-%d %H:%M'),
+            'created_at': _iso_local(o.created_at),
             'items': [{
                 'variant_id': it.variant_id,
                 'product_name': it.variant.product.name,
@@ -3194,8 +3346,8 @@ class ProfitReportView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        # گزارش سود فقط برای سوپریوزر — حتی کارکنان با دسترسی فروش نباید سود را ببینند
-        if not request.user.is_superuser:
+        # گزارش سود نیازمند دسترسی reports_view است (سوپریوزر همیشه دارد)
+        if not _has_perm(request.user, 'reports_view'):
             return _forbidden()
         from .models import SaleInvoice
         from apps.catalog.models import ExchangeRateSetting
@@ -3261,8 +3413,8 @@ class BalanceSheetView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        # ترازنامه شامل سود ناخالص است — فقط برای سوپریوزر
-        if not request.user.is_superuser:
+        # ترازنامه شامل سود ناخالص است — reports_view یا dashboard_view (داشبورد هم صدایش می‌زند)
+        if not _has_any_perm(request.user, 'reports_view', 'dashboard_view'):
             return _forbidden()
         from .models import SaleInvoice, Account
         from apps.inventory.models import WarehouseStock, get_variant_cost_irr
@@ -3419,10 +3571,12 @@ class CustomerQuickCreateView(APIView):
                     # سطح همکار طرف حساب به پروفایل کاربر منتقل شود — قیمت و نحوه تسویه فاکتور بر اساس آن است
                     if contact.contact_type == Contact.ContactType.PARTNER and not (
                             profile.is_approved and profile.user_type == UserProfile.UserType.PARTNER):
+                        from django.utils import timezone
                         profile.user_type = UserProfile.UserType.PARTNER
                         profile.is_approved = True
                         profile.partner_tier = contact.partner_tier
-                        changed += ['user_type', 'is_approved', 'partner_tier']
+                        profile.approved_at = timezone.now()
+                        changed += ['user_type', 'is_approved', 'partner_tier', 'approved_at']
                     if changed:
                         changed.append('updated_at')
                         profile.save(update_fields=changed)
@@ -3563,6 +3717,8 @@ class RoleListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_any_perm(request.user, 'users_view', 'users_edit'):
+            return _forbidden()
         from apps.users.models import Role, PERMISSIONS
         return Response({
             'roles': [{
@@ -3579,6 +3735,8 @@ class RoleListView(APIView):
         })
 
     def post(self, request):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         from apps.users.models import Role
         d = request.data
         r = Role.objects.create(
@@ -3594,6 +3752,8 @@ class RoleDetailView(APIView):
     permission_classes = [IsAdminUser]
 
     def patch(self, request, pk):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         from apps.users.models import Role
         try:
             role = Role.objects.get(pk=pk)
@@ -3606,6 +3766,8 @@ class RoleDetailView(APIView):
         return Response({'id': role.id, 'name': role.name, 'permissions': role.permissions})
 
     def delete(self, request, pk):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         from apps.users.models import Role
         try:
             Role.objects.get(pk=pk).delete()
@@ -3618,6 +3780,9 @@ class StaffListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        # صفحه فاکتور فروش هم لیست پرسنل را می‌گیرد
+        if not _has_any_perm(request.user, 'users_view', 'users_edit', 'sale_view'):
+            return _forbidden()
         from apps.users.models import StaffProfile
         staff = StaffProfile.objects.select_related('user', 'role').filter(is_active=True)
         return Response([{
@@ -3631,6 +3796,8 @@ class StaffListView(APIView):
         } for s in staff])
 
     def post(self, request):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         from apps.users.models import StaffProfile, User
         d = request.data
         try:
@@ -3663,6 +3830,8 @@ class StaffDetailView(APIView):
     permission_classes = [IsAdminUser]
 
     def patch(self, request, pk):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         from apps.users.models import StaffProfile, User
         try:
             staff = StaffProfile.objects.select_related('user').get(pk=pk)
@@ -3727,6 +3896,8 @@ class StaffCreateUserView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request):
+        if not _has_perm(request.user, 'users_edit'):
+            return _forbidden()
         from apps.users.models import User
         d = request.data
         phone = d.get('phone', '').strip()
@@ -3862,8 +4033,9 @@ class MyDashboardView(APIView):
         total_spent = valid_orders.aggregate(s=Sum('total_amount'))['s'] or 0
         pending_orders = orders.exclude(status__in=['paid', 'cancelled', 'refunded']).count()
 
-        # بدهی فاکتورها + مانده اول دوره — مثبت = مشتری بدهکار
-        debt_irr = (profile.opening_balance_irr if profile else 0)
+        # بدهی فاکتورها + مانده اول دوره − مازاد واریزها — مثبت = مشتری بدهکار
+        from .services import sale_overpayment_irr
+        debt_irr = (profile.opening_balance_irr if profile else 0) - sale_overpayment_irr(u)
         debt_cny = float(profile.opening_balance_cny) if profile else 0.0
         for inv in SaleInvoice.objects.filter(customer=u):
             if inv.currency == 'CNY':
@@ -3886,7 +4058,7 @@ class MyDashboardView(APIView):
 
         recent = [{
             'order_number': o.order_number,
-            'date': str(o.created_at.date()),
+            'date': str(timezone.localdate(o.created_at)),
             'status': o.status,
             'status_display': o.get_status_display(),
             'total_amount': o.total_amount,
@@ -3965,10 +4137,10 @@ class MyKardexView(APIView):
                 'inv_items': [],
             })
 
-        for inv in SaleInvoice.objects.filter(customer=u).order_by('created_at'):
+        for inv in SaleInvoice.objects.filter(customer=u, status__in=['confirmed', 'paid']).order_by('created_at'):
             cny = inv.currency == 'CNY'
             items.append({
-                'date': str(inv.created_at.date()),
+                'date': str(timezone.localdate(inv.created_at)),
                 'type': 'invoice', 'type_label': 'فاکتور فروش',
                 'description': f'فاکتور {inv.invoice_number} | {inv.get_status_display()}',
                 'inv_number': inv.invoice_number,
@@ -4025,12 +4197,12 @@ class AgingReportView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        if not _has_perm(request.user, 'reports_view'):
+        if not _has_perm(request.user, 'aging_view'):
             return _forbidden()
         from django.utils import timezone
         from .models import SettlementLine
 
-        today = timezone.now().date()
+        today = timezone.localdate()
         lines = (
             SettlementLine.objects
             .filter(is_active=True)
@@ -4149,7 +4321,7 @@ class ReturnInvoiceListView(APIView):
                 sale_invoice_id=sale_id,
                 purchase_invoice_id=purchase_id,
                 warehouse=warehouse,
-                date=d.get('date') or timezone.now().date(),
+                date=d.get('date') or timezone.localdate(),
                 note=d.get('note', ''),
                 created_by=request.user,
             )

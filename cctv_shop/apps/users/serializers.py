@@ -231,16 +231,17 @@ class AdminPartnerListSerializer(serializers.ModelSerializer):
     phone     = serializers.CharField(source="user.phone")
     email     = serializers.EmailField(source="user.email")
     full_name = serializers.CharField(source="user.get_full_name")
+    date_joined = serializers.DateTimeField(source="user.date_joined")
     document_url = serializers.SerializerMethodField()
     signup_source = serializers.SerializerMethodField()
 
     class Meta:
         model = UserProfile
-        fields = ["user_id", "phone", "email", "full_name",
+        fields = ["user_id", "phone", "email", "full_name", "date_joined",
                   "company_name", "national_id", "social_url", "document_url",
-                  "is_approved", "partner_tier", "signup_source",
+                  "is_approved", "approved_at", "user_type", "partner_tier", "signup_source",
                   "discount_percent", "credit_limit", "address", "notes", "created_at", "updated_at"]
-        read_only_fields = ["user_id", "phone", "email", "full_name", "created_at", "updated_at"]
+        read_only_fields = ["user_id", "phone", "email", "full_name", "date_joined", "approved_at", "created_at", "updated_at"]
 
     def get_signup_source(self, obj):
         # کاربر سایه (ساخته‌شده از پنل برای لینک فاکتور) پسورد قابل‌استفاده ندارد

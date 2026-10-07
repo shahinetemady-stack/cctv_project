@@ -196,9 +196,15 @@ img { display: block; max-width: 100%; }
 /* پایه */
 html { color-scheme: dark; scroll-behavior: smooth; }
 [data-theme="light"] { color-scheme: light; }
-/* جای‌گیر TopBar+هدر در اسپلش استاتیک — هم‌اندازه‌ی چیدمان واقعی (topbar ~۲۸ + margin + h-16) */
-.splash-header-spacer { height: 104px; }
-@media (max-width: 767px) { .splash-header-spacer { height: 100px; } }
+/* جای‌گیر هدر چسبان در اسپلش استاتیک — هم‌اندازه‌ی چیدمان واقعی:
+   دسکتاپ = margin 12 + border 2 + ردیف هدر h-16 (۶۴) + MainNav (border-t 1 + h-11 یعنی ۴۴) = ۱۲۳
+   موبایل = margin 8 + border 2 + h-16 (۶۴) = ۷۴ (TopBar بدون announcement_text رندر نمی‌شود) */
+.splash-header-spacer { height: 123px; }
+@media (max-width: 767px) { .splash-header-spacer { height: 74px; } }
+/* روی موبایل هیروی واقعی (index.css) بالاچین است — اسپلش هم باید همان باشد تا swap پرش نداشته باشد */
+@media (max-width: 991px) {
+  .hero-board { align-items: flex-start !important; }
+}
 body {
   font-family: var(--font-fa) !important;
   background: var(--color-bg-primary);

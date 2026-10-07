@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '../../services/api'
 import { mediaUrl } from '../../utils/media'
-import { formatDate } from '../../utils/date'
+import { formatDate, todayTehran } from '../../utils/date'
 import usePermissions from '../../hooks/usePermissions'
 import AmountInput from '../../components/ui/AmountInput'
 import SearchSelect, { advanceFlow } from '../../components/ui/SearchSelect'
@@ -646,8 +646,9 @@ function EditPaymentModal({ payment, accounts, onClose, onSaved }) {
             </select>
           </div>
           <div>
-            <label className="label text-xs mb-1 block">مبلغ</label>
+            <label className="label text-xs mb-1 block">مبلغ (ریال)</label>
             <AmountInput value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} className="input text-xs" />
+            {Number(form.amount) > 0 && <div className="text-[10px] text-gray-steel mt-1">= {Number(Math.floor(Number(form.amount) / 10)).toLocaleString('fa-IR')} تومان</div>}
           </div>
           <div>
             <label className="label text-xs mb-1 block">حساب</label>
@@ -742,7 +743,7 @@ function InvoiceDetail({ id, onClose, isAdmin, onEdit }) {
     queryKey: ['accounts'],
     queryFn: () => api.get('/accounting/accounts/').then(r => r.data),
   })
-  const [payForm, setPayForm] = useState({ show: false, method: 'transfer', amount: '', to_account_id: '', date: new Date().toISOString().split('T')[0], reference: '' })
+  const [payForm, setPayForm] = useState({ show: false, method: 'transfer', amount: '', to_account_id: '', date: todayTehran(), reference: '' })
   const [editPay, setEditPay] = useState(null)
   const [msg, setMsg] = useState(null)
 
@@ -950,7 +951,8 @@ function InvoiceDetail({ id, onClose, isAdmin, onEdit }) {
                 <select value={payForm.method} onChange={e => setPayForm(f => ({ ...f, method: e.target.value }))} className="input text-xs">
                   <option value="cash">نقد</option><option value="transfer">حواله</option><option value="card">کارت</option><option value="online">آنلاین</option><option value="credit">نسیه</option>
                 </select></div>
-              <div><label className="label text-xs mb-1 block">مبلغ</label><AmountInput value={payForm.amount} onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))} className="input text-xs" /></div>
+              <div><label className="label text-xs mb-1 block">مبلغ (ریال)</label><AmountInput value={payForm.amount} onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))} className="input text-xs" />
+                {Number(payForm.amount) > 0 && <div className="text-[10px] text-gray-steel mt-1">= {fmt(Math.floor(Number(payForm.amount) / 10))} تومان</div>}</div>
               <div><label className="label text-xs mb-1 block">حساب</label>
                 <select value={payForm.to_account_id} onChange={e => setPayForm(f => ({ ...f, to_account_id: e.target.value }))} className="input text-xs">
                   <option value="">انتخاب...</option>{accounts.filter(a => a.currency === 'IRR').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
@@ -1051,9 +1053,11 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
   const dayRate = Number(rateData?.rate_cny_to_irt || 0)
 
   // موعد تسویه تو حسابی — ثابت ۱۴ روز از تاریخ صدور، بدون سؤال از کاربر
+  // با تغییر نحوه تسویه به غیر credit، موعد باید پاک شود وگرنه مقدار بای‌استفاده
+  // (+۱۴ روز) به فاکتور نقدی/یکماهه ارسال می‌شود
   useEffect(() => {
-    if (settlement !== 'credit') return
-    const d = issueDate ? new Date(issueDate + 'T00:00:00') : new Date()
+    if (settlement !== 'credit') { setDueDate(''); return }
+    const d = issueDate ? new Date(issueDate + 'T00:00:00') : new Date(todayTehran() + 'T00:00:00')
     d.setDate(d.getDate() + 14)
     setDueDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
   }, [settlement, issueDate])
@@ -1061,12 +1065,12 @@ function NewInvoiceForm({ onClose, onSuccess, prefillOrder, editing }) {
   // سطح مشتری و کلید ستون قیمت — قیمت کالا بر اساس همین انتخاب می‌شود
   const tier = customer?.tier || 'public'
   const priceKey = tier === 'platinum' ? settlement
-    : tier === 'silver' ? 'month1'
-    : tier === 'gold' ? 'credit'
+    : tier === 'silver' ? 'silver'
+    : tier === 'gold' ? 'gold'
     : 'retail'
 
   // با انتخاب مشتری، نحوه تسویه پیش‌فرض بر اساس سطحش (فروش خارجی همیشه انتخابی است)
-  // سیلور و گلد تسویه‌شان نقدی است — ستون یکماهه/توحسابی فقط مبنای «قیمت» آن‌هاست، نه نوع تسویه
+  // سیلور و گلد تسویه‌شان نقدی است — ستون مشتری سیلور/گلد فقط مبنای «قیمت» آن‌هاست، نه نوع تسویه
   useEffect(() => {
     if (!customer) return
     setSettlement(tier === 'platinum' ? 'credit' : 'cash')
@@ -1531,11 +1535,11 @@ export default function SaleInvoicePage() {
       {view==='list'&&(
         <>
           <SalesChannelCard />
-          {/* هشدار سررسید تسویه فاکتورهای تو حسابی */}
+          {/* هشدار سررسید تسویه — همه انواع تسویه (نقدی از فردای موعد) */}
           {badges?.sales_due > 0 && (
             <button onClick={()=>setDueOnly(d=>!d)}
               className={`w-full text-right rounded-xl border p-3 mb-4 text-xs transition-all ${dueOnly ? 'border-red-400 bg-red-500/20 text-red-300' : 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20'}`}>
-              ⚠️ <b>{Number(badges.sales_due).toLocaleString('fa-IR')}</b> فاکتور تو حسابی به موعد تسویه رسیده است
+              ⚠️ <b>{Number(badges.sales_due).toLocaleString('fa-IR')}</b> فاکتور به موعد تسویه رسیده است
               {dueOnly ? ' — نمایش فیلترشده ✓ (برای نمایش همه کلیک کنید)' : ' — برای رسیدگی کلیک کنید'}
             </button>
           )}
@@ -1571,18 +1575,25 @@ export default function SaleInvoicePage() {
                 <div className="text-center py-12"><div className="text-4xl mb-3">🧾</div><div className="text-gray-steel text-sm mb-4">{statusFilter==='open'?'فاکتور بازی نیست':statusFilter==='paid'?'فاکتور تسویه‌شده‌ای نیست':'هنوز فاکتوری صادر نشده'}</div>{statusFilter==='open'&&can('sale_create')&&<button onClick={()=>setView('new')} className="btn-primary text-sm px-6 py-2">+ صدور فاکتور</button>}</div>
               ):(
                 <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
-                  <thead><tr style={{borderBottom:'0.5px solid rgba(255,255,255,0.1)'}}>{['شماره فاکتور','مشتری','تاریخ','وضعیت','مبلغ نهایی','پرداخت شده','مانده','تسویه','ثبت‌کننده',''].map(h=><th key={h} style={{padding:'8px 12px',textAlign:'right',color:'var(--color-text-secondary)',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>)}</tr></thead>
+                  <thead><tr style={{borderBottom:'0.5px solid rgba(255,255,255,0.1)'}}>{['شماره فاکتور','مشتری','تاریخ','تسویه','وضعیت','مبلغ نهایی','پرداخت شده','مانده','ثبت‌کننده',''].map(h=><th key={h} style={{padding:'8px 12px',textAlign:'right',color:'var(--color-text-secondary)',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>)}</tr></thead>
                   <tbody>
                     {invoices.map((inv,i)=>(
                       <tr key={inv.id} style={{borderBottom:'0.5px solid rgba(255,255,255,0.05)',background:i%2?'rgba(255,255,255,0.02)':'transparent'}}>
                         <td style={{padding:'10px 12px',fontWeight:600,color:'#0066FF'}}>{inv.invoice_number}</td>
                         <td style={{padding:'10px 12px'}}><div>{inv.customer_name}</div><div style={{fontSize:11,color:'var(--color-text-secondary)'}}>{inv.customer_phone}</div></td>
                         <td style={{padding:'10px 12px',color:'var(--color-text-secondary)',fontSize:11}}>{inv.issue_date ? jalaliText(inv.issue_date) : formatDate(inv.created_at, { withTime: true })}</td>
+                        <td style={{padding:'10px 12px',whiteSpace:'nowrap',fontSize:12}}>
+                          <div style={{color:'var(--color-text-secondary)'}}>{inv.settlement_display}</div>
+                          {inv.effective_due && (
+                            <div style={{fontSize:10,marginTop:2,color:inv.due_overdue?'#FF3B3B':'var(--color-text-secondary)'}}>
+                              {inv.due_overdue?'⚠️ سررسید: ':'موعد: '}{jalaliText(inv.effective_due)}
+                            </div>
+                          )}
+                        </td>
                         <td style={{padding:'10px 12px'}}><span style={{color:STATUS_COLORS[inv.status],background:STATUS_COLORS[inv.status]+'20',padding:'2px 8px',borderRadius:20,fontSize:11}}>{inv.status_display}</span></td>
                         <td style={{padding:'10px 12px',fontWeight:600}}>{fmt(inv.total_amount)} ریال</td>
                         <td style={{padding:'10px 12px',color:'#00C896'}}>{fmt(inv.paid_amount)} ریال</td>
                         <td style={{padding:'10px 12px',color:inv.remaining_amount>0?'#FF3B3B':'#00C896',fontWeight:inv.remaining_amount>0?700:400}}>{inv.remaining_amount>0?fmt(inv.remaining_amount)+' ریال':'✓ تسویه'}</td>
-                        <td style={{padding:'10px 12px',whiteSpace:'nowrap',color:'var(--color-text-secondary)',fontSize:12}}>{inv.settlement_display}</td>
                         <td style={{padding:'10px 12px',whiteSpace:'nowrap'}}>
                           <UserStamp createdBy={inv.created_by} updatedBy={inv.updated_by} createdAt={inv.created_at} updatedAt={inv.updated_at} />
                         </td>

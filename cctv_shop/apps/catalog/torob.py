@@ -32,13 +32,35 @@ def product_page_url(product):
     return f"{SITE_BASE_URL}/products/{product.slug}/"
 
 
+def _sanitize_spec_value(value):
+    """ترب فقط String/Integer برای spec می‌پذیرد — بولین‌ها به «دارد» تبدیل و
+    False/None حذف می‌شوند؛ لیست‌ها با «، » به هم می‌چسبند."""
+    if isinstance(value, bool):
+        return "دارد" if value else None
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else str(value)
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, (list, tuple)):
+        return "، ".join(str(v) for v in value) or None
+    return str(value)
+
+
 def build_product_payload(product, request):
     """آبجکت محصول مطابق Torob Product API v3 — قیمت ریال، تاریخ ISO8601 با timezone."""
     active_variants = [v for v in product.variants.all() if v.is_active]
     current_price = min((formula_prices(v)["retail"] for v in active_variants), default=0)
     available = product.sellable_stock > 0 and product.effective_availability == "auto"
 
-    spec = dict(product.dynamic_specs or {})
+    spec = {}
+    for key, value in dict(product.dynamic_specs or {}).items():
+        sv = _sanitize_spec_value(value)
+        if sv is not None:
+            spec[str(key)] = sv
     if product.brand:
         spec["برند"] = product.brand
     if product.model_number:
@@ -54,7 +76,7 @@ def build_product_payload(product, request):
         "old_price": None,
         "availability": available,
         "category_name": str(product.category),
-        "image_links": [request.build_absolute_uri(img.image.url) for img in product.images.all()],
+        "image_links": [f"{SITE_BASE_URL}{img.image.url}" for img in product.images.all() if img.image],
         "short_desc": product.short_description or None,
         "spec": spec,
         "guarantee": None,

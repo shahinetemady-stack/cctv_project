@@ -96,6 +96,10 @@ class Category(TimeStampedModel):
         validators=[MinValueValidator(Decimal("0"))], verbose_name="سود یکماهه (%)")
     profit_month2_percent  = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0"),
         validators=[MinValueValidator(Decimal("0"))], verbose_name="سود دوماهه (%)")
+    profit_gold_percent    = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))], verbose_name="سود مشتری گلد (%)")
+    profit_silver_percent  = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))], verbose_name="سود مشتری سیلور (%)")
     profit_retail_percent  = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0"),
         validators=[MinValueValidator(Decimal("0"))], verbose_name="سود مشتری عمومی (%)")
 
@@ -562,6 +566,8 @@ class CategorySpecField(TimeStampedModel):
     choices    = models.CharField(max_length=300, blank=True, verbose_name="گزینه‌ها", help_text="برای لیست کشویی — با ویرگول جدا کنید")
     sort_order = models.PositiveSmallIntegerField(default=0, verbose_name="ترتیب")
     is_active  = models.BooleanField(default=True, verbose_name="فعال")
+    is_filterable = models.BooleanField(default=True, verbose_name="نمایش در فیلترهای سایت",
+                    help_text="اگر تیک نداشته باشد، این ویژگی در پنل فیلترهای سایت نمایش داده نمی‌شود")
 
     class Meta:
         db_table = "catalog_category_spec_field"

@@ -95,7 +95,7 @@ export default function AssistantSettingsPage() {
                 )}
                 {last?.at && (
                   <span className="text-[10px] text-gray-steel block mt-1" dir="ltr">
-                    {new Date(last.at).toLocaleString('fa-IR')}
+                    {new Date(last.at).toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' })}
                   </span>
                 )}
               </div>

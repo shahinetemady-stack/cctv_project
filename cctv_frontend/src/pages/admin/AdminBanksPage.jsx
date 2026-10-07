@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '../../services/api'
-import { formatDate } from '../../utils/date'
+import { formatDate, todayTehran } from '../../utils/date'
 import usePermissions from '../../hooks/usePermissions'
 import AmountInput from '../../components/ui/AmountInput'
 import { PaymentForm } from './PaymentsPage'
@@ -395,7 +395,7 @@ export default function AdminBanksPage() {
       <div className="card p-5 mb-6">
         <h3 className="text-sm font-semibold text-white mb-4">تراکنش‌های امروز</h3>
         {(() => {
-          const today = new Date().toLocaleDateString('en-CA')
+          const today = todayTehran()
           const filtered = payments.filter(p => p.date === today)
           return loadingPayments ? (
           <div className="text-center py-6 text-gray-steel text-sm">در حال بارگذاری...</div>

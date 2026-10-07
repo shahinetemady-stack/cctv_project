@@ -78,6 +78,15 @@ class BackupSetting(models.Model):
     telegram_token = models.CharField(max_length=200, blank=True)
     telegram_chat_id = models.CharField(max_length=100, blank=True)
 
+    bale_enabled = models.BooleanField(default=False)
+    bale_token = models.CharField(max_length=200, blank=True)
+    bale_chat_id = models.CharField(max_length=100, blank=True)
+
+    # رمز فایل‌های ارسالی — فایل بدون رمز هرگز ارسال نمی‌شود
+    send_encryption_password = models.CharField(max_length=200, blank=True,
+        verbose_name="رمز رمزنگاری فایل ارسالی",
+        help_text="AES-256 — برای باز کردن با WinRAR/7-Zip لازم است")
+
     keep_count = models.PositiveIntegerField(default=10)
 
     last_backup_at = models.DateTimeField(null=True, blank=True)
@@ -120,6 +129,7 @@ class BackupLog(models.Model):
     duration_seconds = models.FloatField(default=0)
     sent_email = models.BooleanField(default=False)
     sent_telegram = models.BooleanField(default=False)
+    sent_bale = models.BooleanField(default=False)
     error = models.TextField(blank=True)
     note = models.TextField(blank=True)
     triggered_by_id = models.IntegerField(null=True, blank=True)
@@ -166,7 +176,7 @@ def _create_backup_file(output_dir, name_prefix="cctv_backup",
     if vacuum:
         _vacuum_sqlite()
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = timezone.localtime().strftime("%Y%m%d_%H%M%S")
     backup_name = f"{name_prefix}_{timestamp}.zip"
     backup_path = os.path.join(output_dir, backup_name)
 
@@ -220,7 +230,7 @@ def _create_backup_file(output_dir, name_prefix="cctv_backup",
             'files_added': files_added,
             'compression': 'lzma' if use_lzma else 'deflate-9',
             'media_included': not media_skipped,
-            'created_at': datetime.now().isoformat(),
+            'created_at': timezone.localtime().isoformat(),
         }
         zf.writestr('manifest.json', json.dumps(manifest, indent=2, ensure_ascii=False))
 
@@ -238,6 +248,45 @@ def _send_to_telegram(token, chat_id, file_path, caption=""):
             files={'document': (os.path.basename(file_path), f)}, timeout=120)
     if r.status_code != 200:
         raise RuntimeError(f"Telegram خطا: {r.text[:500]}")
+
+
+def _send_to_bale(token, chat_id, file_path, caption=""):
+    """ارسال از طریق بات بله — API سازگار با تلگرام"""
+    import requests
+    file_size = os.path.getsize(file_path)
+    if file_size > 50 * 1024 * 1024:
+        raise ValueError(f"فایل {file_size / 1024 / 1024:.1f}MB > 50MB.")
+    url = f"https://tapi.bale.ai/bot{token}/sendDocument"
+    with open(file_path, 'rb') as f:
+        r = requests.post(url, data={'chat_id': chat_id, 'caption': caption[:1024]},
+            files={'document': (os.path.basename(file_path), f)}, timeout=120)
+    if r.status_code != 200 or not r.json().get('ok', False):
+        raise RuntimeError(f"بله خطا: {r.text[:500]}")
+
+
+def _create_send_file(output_dir, password, name_prefix="cctv_send"):
+    """نسخه سبک فقط-دیتابیس با رمزنگاری AES-256 — مخصوص ارسال خارج از سرور.
+    بدون رمز، فایل ارسالی ساخته نمی‌شود (داده مشتری هرگز بدون رمز نمی‌رود)."""
+    if not password:
+        raise ValueError("رمز رمزنگاری فایل ارسالی در تنظیمات بک‌اپ وارد نشده")
+    import pyzipper
+    db_engine = settings.DATABASES['default']['ENGINE']
+    db_path = str(settings.DATABASES['default']['NAME'])
+    if 'sqlite' not in db_engine or not os.path.exists(db_path):
+        raise RuntimeError("دیتابیس SQLite برای ارسال پیدا نشد")
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = timezone.localtime().strftime("%Y%m%d_%H%M%S")
+    send_path = os.path.join(output_dir, f"{name_prefix}_{timestamp}.zip")
+    with pyzipper.AESZipFile(send_path, 'w', compression=pyzipper.ZIP_LZMA) as zf:
+        zf.setpassword(password.encode('utf-8'))
+        zf.setencryption(pyzipper.WZ_AES, nbits=256)
+        zf.write(db_path, 'db.sqlite3')
+        zf.writestr('manifest.json', json.dumps({
+            'timestamp': timestamp,
+            'type': 'send — db only, AES-256 encrypted',
+            'created_at': timezone.localtime().isoformat(),
+        }, indent=2, ensure_ascii=False))
+    return send_path
 
 
 def _send_to_email(to_email, subject, body, file_path):
@@ -287,6 +336,7 @@ def run_backup(trigger='manual', user=None, is_daily=False, send_channels=True):
     error_msg = ""
     sent_email = False
     sent_telegram = False
+    sent_bale = False
     status = BackupLog.Status.SUCCESS
     prefix = "cctv_daily" if is_daily else "cctv_backup"
 
@@ -301,32 +351,72 @@ def run_backup(trigger='manual', user=None, is_daily=False, send_channels=True):
         file_size = os.path.getsize(file_path)
 
         if send_channels:
-            if s.email_enabled and s.email_to:
+            # ارسال خارج از سرور همیشه با نسخه سبک فقط-دیتابیس + رمز AES-256
+            # انجام می‌شود — فایل کامل با media فقط روی سرور می‌ماند.
+            send_email = s.email_enabled and s.email_to
+            send_tg = s.telegram_enabled and s.telegram_token and s.telegram_chat_id
+            send_bale = s.bale_enabled and s.bale_token and s.bale_chat_id
+
+            if send_email or send_tg or send_bale:
+                send_path = None
                 try:
-                    _send_to_email(
-                        to_email=s.email_to,
-                        subject=f"بک‌اپ {'روزانه' if is_daily else ''} CCTV — {datetime.now():%Y-%m-%d %H:%M}",
-                        body=f"بک‌اپ {trigger}\nاندازه: {file_size / 1024 / 1024:.2f}MB",
-                        file_path=file_path,
+                    send_path = _create_send_file(
+                        output_dir=s.backup_path,
+                        password=s.send_encryption_password,
                     )
-                    sent_email = True
+                    send_size = os.path.getsize(send_path)
                 except Exception as e:
-                    error_msg += f"ایمیل: {e} | "
+                    error_msg += f"ساخت فایل ارسالی رمزگذاری‌شده: {e} | "
                     status = BackupLog.Status.PARTIAL
 
-            if s.telegram_enabled and s.telegram_token and s.telegram_chat_id:
-                try:
-                    _send_to_telegram(
-                        token=s.telegram_token, chat_id=s.telegram_chat_id, file_path=file_path,
-                        caption=f"📦 بک‌اپ {'روزانه' if is_daily else ''} CCTV\n"
-                                f"⏰ {datetime.now():%Y-%m-%d %H:%M}\n"
-                                f"📏 {file_size / 1024 / 1024:.2f}MB\n"
-                                f"🗜 {'LZMA' if s.use_lzma_compression else 'deflate'}",
+                if send_path:
+                    caption = (
+                        f"📦 بک‌اپ {'روزانه' if is_daily else ''} CCTV (فقط دیتابیس)\n"
+                        f"⏰ {timezone.localtime():%Y-%m-%d %H:%M}\n"
+                        f"📏 {send_size / 1024 / 1024:.2f}MB\n"
+                        f"🔐 رمزگذاری AES-256 — باز کردن با WinRAR/7-Zip"
                     )
-                    sent_telegram = True
-                except Exception as e:
-                    error_msg += f"تلگرام: {e} | "
-                    status = BackupLog.Status.PARTIAL
+                    if send_email:
+                        try:
+                            _send_to_email(
+                                to_email=s.email_to,
+                                subject=f"بک‌اپ {'روزانه' if is_daily else ''} CCTV — {timezone.localtime():%Y-%m-%d %H:%M}",
+                                body=(f"بک‌اپ {trigger} — فقط دیتابیس\n"
+                                      f"اندازه: {send_size / 1024 / 1024:.2f}MB\n"
+                                      f"🔐 فایل با AES-256 رمزگذاری شده؛ با WinRAR/7-Zip و رمز تنظیم‌شده باز کنید."),
+                                file_path=send_path,
+                            )
+                            sent_email = True
+                        except Exception as e:
+                            error_msg += f"ایمیل: {e} | "
+                            status = BackupLog.Status.PARTIAL
+
+                    if send_tg:
+                        try:
+                            _send_to_telegram(
+                                token=s.telegram_token, chat_id=s.telegram_chat_id,
+                                file_path=send_path, caption=caption,
+                            )
+                            sent_telegram = True
+                        except Exception as e:
+                            error_msg += f"تلگرام: {e} | "
+                            status = BackupLog.Status.PARTIAL
+
+                    if send_bale:
+                        try:
+                            _send_to_bale(
+                                token=s.bale_token, chat_id=s.bale_chat_id,
+                                file_path=send_path, caption=caption,
+                            )
+                            sent_bale = True
+                        except Exception as e:
+                            error_msg += f"بله: {e} | "
+                            status = BackupLog.Status.PARTIAL
+
+                    try:
+                        os.remove(send_path)
+                    except OSError:
+                        pass
 
         keep = s.daily_keep_count if is_daily else s.keep_count
         deleted = _cleanup_old_backups(s.backup_path, keep, name_prefix=prefix)
@@ -340,7 +430,7 @@ def run_backup(trigger='manual', user=None, is_daily=False, send_channels=True):
             status=status, trigger=trigger, is_daily=is_daily,
             file_path=file_path, file_size_bytes=file_size,
             duration_seconds=round(time_now() - start, 2),
-            sent_email=sent_email, sent_telegram=sent_telegram,
+            sent_email=sent_email, sent_telegram=sent_telegram, sent_bale=sent_bale,
             error=error_msg.strip(' |'), note=note,
             triggered_by_id=user.id if user else None,
         )
@@ -429,6 +519,10 @@ def _settings_dict(s):
         'telegram_enabled': s.telegram_enabled,
         'telegram_token': s.telegram_token,
         'telegram_chat_id': s.telegram_chat_id,
+        'bale_enabled': s.bale_enabled,
+        'bale_token': s.bale_token,
+        'bale_chat_id': s.bale_chat_id,
+        'send_encryption_password': s.send_encryption_password,
         'keep_count': s.keep_count,
         'last_backup_at': s.last_backup_at.isoformat() if s.last_backup_at else None,
         'last_daily_backup_at': s.last_daily_backup_at.isoformat() if s.last_daily_backup_at else None,
@@ -449,9 +543,23 @@ def _log_dict(log):
         'duration_seconds': log.duration_seconds,
         'sent_email': log.sent_email,
         'sent_telegram': log.sent_telegram,
+        'sent_bale': log.sent_bale,
         'error': log.error,
         'note': log.note,
     }
+
+
+# ─── RBAC helpers (محلی — import از views چرخه‌ای می‌شود) ────────
+
+def _has_perm(user, code):
+    if user.is_superuser:
+        return True
+    sp = getattr(user, 'staff_profile', None)
+    return bool(sp and sp.is_active and sp.has_perm(code))
+
+
+def _forbidden(msg='شما دسترسی لازم برای این عملیات را ندارید'):
+    return Response({'error': msg}, status=403)
 
 
 class BackupSettingsApiView(APIView):
@@ -459,6 +567,8 @@ class BackupSettingsApiView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'backup_view'):
+            return _forbidden()
         s = BackupSetting.get_instance()
         return Response(_settings_dict(s))
 
@@ -471,13 +581,14 @@ class BackupSettingsApiView(APIView):
             'is_auto_enabled', 'daily_backup_enabled', 'safety_backup_enabled',
             'use_lzma_compression', 'vacuum_sqlite_before_backup',
             'include_media_in_hourly', 'include_media_in_daily',
-            'email_enabled', 'telegram_enabled',
+            'email_enabled', 'telegram_enabled', 'bale_enabled',
         ]
         for f in bool_fields:
             if f in d:
                 setattr(s, f, bool(d[f]))
         for f in ['backup_path', 'daily_backup_time', 'email_to',
-                  'telegram_token', 'telegram_chat_id']:
+                  'telegram_token', 'telegram_chat_id',
+                  'bale_token', 'bale_chat_id', 'send_encryption_password']:
             if f in d:
                 setattr(s, f, str(d[f]).strip())
         for f in ['interval_hours', 'daily_keep_count', 'keep_count']:
@@ -505,6 +616,8 @@ class BackupLogsApiView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'backup_view'):
+            return _forbidden()
         limit = min(int(request.query_params.get('limit', 20)), 100)
         logs = BackupLog.objects.all()[:limit]
         return Response([_log_dict(log) for log in logs])
@@ -795,13 +908,16 @@ class BackupPageView(View):
         bool_fields = ['is_auto_enabled', 'daily_backup_enabled', 'safety_backup_enabled',
                        'use_lzma_compression', 'vacuum_sqlite_before_backup',
                        'include_media_in_hourly', 'include_media_in_daily',
-                       'email_enabled', 'telegram_enabled']
+                       'email_enabled', 'telegram_enabled', 'bale_enabled']
         for f in bool_fields:
             setattr(s, f, request.POST.get(f) == 'on')
         s.daily_backup_time = request.POST.get('daily_backup_time', '23:30').strip() or '23:30'
         s.email_to = request.POST.get('email_to', '').strip()
         s.telegram_token = request.POST.get('telegram_token', '').strip()
         s.telegram_chat_id = request.POST.get('telegram_chat_id', '').strip()
+        s.bale_token = request.POST.get('bale_token', '').strip()
+        s.bale_chat_id = request.POST.get('bale_chat_id', '').strip()
+        s.send_encryption_password = request.POST.get('send_encryption_password', '').strip()
         for f in ['interval_hours', 'daily_keep_count', 'keep_count']:
             try: setattr(s, f, max(1, int(request.POST.get(f) or 1)))
             except: pass
@@ -815,6 +931,7 @@ class BackupPageView(View):
                 ch = []
                 if log.sent_email: ch.append("ایمیل")
                 if log.sent_telegram: ch.append("تلگرام")
+                if log.sent_bale: ch.append("بله")
                 ch_text = " ("+" و ".join(ch)+")" if ch else ""
                 kind = "روزانه" if is_daily else "ساعتی"
                 msg = f"✅ بک‌اپ {kind} گرفته شد — {log.file_size_mb}MB{ch_text}\n📁 {log.file_path}"
@@ -841,6 +958,7 @@ class BackupPageView(View):
             ch = []
             if log.sent_email: ch.append("📧")
             if log.sent_telegram: ch.append("📲")
+            if log.sent_bale: ch.append("🟢")
             kind = "📅 روزانه" if log.is_daily else ("🛡 ایمنی" if log.trigger == 'safety' else "⏰ ساعتی")
             log_rows += f"""
             <tr style="border-bottom:1px solid #eee;">
@@ -853,8 +971,8 @@ class BackupPageView(View):
               <td style="padding:8px;font-size:11px;color:#666;">{log.error[:60] if log.error else log.note or '—'}</td>
             </tr>"""
 
-        last_b = s.last_backup_at.strftime('%Y-%m-%d %H:%M') if s.last_backup_at else 'هرگز'
-        last_d = s.last_daily_backup_at.strftime('%Y-%m-%d %H:%M') if s.last_daily_backup_at else 'هرگز'
+        last_b = timezone.localtime(s.last_backup_at).strftime('%Y-%m-%d %H:%M') if s.last_backup_at else 'هرگز'
+        last_d = timezone.localtime(s.last_daily_backup_at).strftime('%Y-%m-%d %H:%M') if s.last_daily_backup_at else 'هرگز'
 
         msg_html = ""
         if msg:
@@ -864,7 +982,7 @@ class BackupPageView(View):
 
         empty_row = '<tr><td colspan="7" style="text-align:center;padding:24px;color:#888;">هنوز بک‌اپی نیست</td></tr>' if not log_rows else ""
 
-        python_path = os.path.join(str(getattr(settings, 'BASE_DIR', '')), 'venv', 'Scripts', 'python.exe')
+        python_path = os.path.join(str(getattr(settings, 'BASE_DIR', '')), 'venv', 'bin', 'python')
         project_path = str(getattr(settings, 'BASE_DIR', ''))
 
         return f"""
@@ -1001,15 +1119,13 @@ async function browsePath() {{
       <div class="checkbox-row" style="margin-top:14px;"><input type="checkbox" name="daily_backup_enabled" id="daily" {'checked' if s.daily_backup_enabled else ''} {disabled}>
         <label for="daily" style="margin:0;cursor:pointer;font-weight:normal;">📅 روزانه آخر شب</label></div>
       <div style="margin-top:8px;"><label>ساعت (HH:MM)</label><input type="text" name="daily_backup_time" value="{s.daily_backup_time}" {disabled}></div>
-      <div class="auto-info"><b>Windows Task Scheduler:</b><br><br>
-        <b>1️⃣ ساعتی</b><br>
-        Program: <code>{python_path}</code><br>
-        Args: <code>manage.py run_backup --trigger auto</code><br>
-        Start in: <code>{project_path}</code><br><br>
-        <b>2️⃣ روزانه</b><br>
-        Program: <code>{python_path}</code><br>
-        Args: <code>manage.py run_daily_backup</code><br>
-        Start in: <code>{project_path}</code>
+      <div class="auto-info"><b>زمان‌بندی خودکار (Linux cron):</b><br><br>
+        دستور: <code>crontab -e</code><br><br>
+        <b>📅 روزانه {s.daily_backup_time}</b> (HH:MM را به دقیقه/ساعت تبدیل کنید)<br>
+        <code>30 23 * * * cd {project_path} && {python_path} manage.py run_daily_backup</code><br><br>
+        <b>⏰ ساعتی</b> (در صورت فعال بودن)<br>
+        <code>0 * * * * cd {project_path} && {python_path} manage.py run_backup --trigger auto</code><br><br>
+        <span style="font-size:11px;">روی Windows از Task Scheduler با همان دستورات استفاده کنید.</span>
       </div>
     </div>
     <div class="card"><h2>📧 ایمیل</h2>
@@ -1024,6 +1140,20 @@ async function browsePath() {{
         <div><label>توکن</label><input type="text" name="telegram_token" value="{s.telegram_token}" {disabled}></div>
         <div><label>Chat ID</label><input type="text" name="telegram_chat_id" value="{s.telegram_chat_id}" {disabled}></div>
       </div>
+    </div>
+    <div class="card"><h2>🟢 بله</h2>
+      <div class="checkbox-row"><input type="checkbox" name="bale_enabled" id="bl" {'checked' if s.bale_enabled else ''} {disabled}>
+        <label for="bl" style="margin:0;cursor:pointer;font-weight:normal;">فعال</label></div>
+      <div class="grid" style="margin-top:10px;">
+        <div><label>توکن بات بله</label><input type="text" name="bale_token" value="{s.bale_token}" {disabled}></div>
+        <div><label>Chat ID</label><input type="text" name="bale_chat_id" value="{s.bale_chat_id}" {disabled}></div>
+      </div>
+      <div class="help">ساخت بات: در بله به @BotFather پیام دهید، newbot/ را بفرستید و توکن را اینجا وارد کنید. برای Chat ID یک پیام به بات بدهید و عدد chat.id را از getUpdates بردارید.</div>
+    </div>
+    <div class="card"><h2>🔐 رمزنگاری فایل ارسالی</h2>
+      <div class="tip">ارسال به ایمیل/تلگرام/بله <b>فقط</b> با فایل رمزگذاری‌شده AES-256 و <b>فقط دیتابیس</b> (بدون media) انجام می‌شود. بدون وارد کردن رمز، هیچ فایلی ارسال نمی‌شود.</div>
+      <div style="margin-top:10px;"><label>رمز فایل ارسالی *</label><input type="text" name="send_encryption_password" value="{s.send_encryption_password}" placeholder="یک رمز قوی انتخاب کنید" {disabled}></div>
+      <div class="help">این رمز را جایی امن نگه دارید — برای باز کردن فایل در WinRAR/7-Zip لازم است.</div>
     </div>
     <div style="margin-top:16px;text-align:center;">
       <button type="submit" class="btn-save" {disabled}>💾 ذخیره تنظیمات</button>

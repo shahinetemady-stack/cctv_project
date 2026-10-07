@@ -30,10 +30,29 @@ logger = logging.getLogger(__name__)
 PAGE_SIZE = 50
 
 
+# ─── RBAC helpers ────────────────────────────────────────────
+
+def _has_perm(user, code):
+    if user.is_superuser:
+        return True
+    sp = getattr(user, 'staff_profile', None)
+    return bool(sp and sp.is_active and sp.has_perm(code))
+
+
+def _has_any_perm(user, *codes):
+    return any(_has_perm(user, c) for c in codes)
+
+
+def _forbidden(msg='شما دسترسی لازم برای این عملیات را ندارید'):
+    return Response({'error': msg}, status=403)
+
+
 class LeadListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         qs = Lead.objects.all()
         if q := request.query_params.get("q"):
             qs = qs.filter(phone__icontains=q) | qs.filter(name__icontains=q) | qs.filter(source_title__icontains=q)
@@ -55,6 +74,8 @@ class LeadListView(APIView):
         })
 
     def post(self, request):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         phone = normalize_phone(request.data.get("phone", ""))
         if not phone:
             return Response({"error": "شماره موبایل نامعتبر است."}, status=status.HTTP_400_BAD_REQUEST)
@@ -74,6 +95,8 @@ class LeadDetailView(APIView):
     permission_classes = [IsAdminUser]
 
     def patch(self, request, pk):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         try:
             lead = Lead.objects.get(pk=pk)
         except Lead.DoesNotExist:
@@ -85,6 +108,8 @@ class LeadDetailView(APIView):
         return Response(LeadSerializer(lead).data)
 
     def delete(self, request, pk):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         Lead.objects.filter(pk=pk).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -94,6 +119,8 @@ class LeadImportView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         text = request.data.get("text", "")
         default_city = (request.data.get("city") or "").strip()
         created, duplicate, invalid = 0, 0, 0
@@ -122,6 +149,8 @@ class LeadExportView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         qs = Lead.objects.all().order_by("-created_at")
         for param in ("city", "source", "status", "keyword", "category"):
             if v := request.query_params.get(param):
@@ -140,6 +169,8 @@ class LeadMetaView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         from django.db.models import Count
         by_status = {r["status"]: r["c"] for r in Lead.objects.values("status").annotate(c=Count("id"))}
         by_category = {r["category"]: r["c"] for r in Lead.objects.values("category").annotate(c=Count("id"))}
@@ -181,6 +212,8 @@ class LeadSettingsView(APIView):
         }
 
     def get(self, request):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         from .models import LeadSettings, ScraperRun
         s = LeadSettings.get_instance()
         return Response({
@@ -197,6 +230,8 @@ class LeadSettingsView(APIView):
         })
 
     def put(self, request):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         from .models import LeadSettings
         s = LeadSettings.get_instance()
         updated = []
@@ -223,6 +258,8 @@ class ScraperRunView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, source):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         from datetime import timedelta
 
         from django.conf import settings
@@ -258,10 +295,14 @@ class CampaignListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         qs = LeadCampaign.objects.order_by("-created_at")[:100]
         return Response(LeadCampaignSerializer(qs, many=True).data)
 
     def post(self, request):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         campaign = LeadCampaign.objects.create(
             name=(request.data.get("name") or "").strip() or "کمپین بدون‌نام",
             message=(request.data.get("message") or "").strip(),
@@ -283,6 +324,8 @@ class CampaignSendView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
+        if not _has_perm(request.user, 'leads_view'):
+            return _forbidden()
         try:
             campaign = LeadCampaign.objects.get(pk=pk)
         except LeadCampaign.DoesNotExist:

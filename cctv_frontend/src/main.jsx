@@ -29,6 +29,10 @@ const urlTheme = new URLSearchParams(location.search).get('theme')
 if (urlTheme === 'light' || urlTheme === 'dark') useThemeStore.getState().setTheme(urlTheme)
 applyTheme(useThemeStore.getState().theme)
 
+// مدیریت اسکرول دستی — Layout با هر تغییر مسیر scrollTo(0) می‌کند؛ اگر مرورگر
+// اسکرول قبلی را restore کند، این دو با هم تداخل کرده و پرش ایجاد می‌کنند
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
+
 // غیرفعال کردن تغییر مقدار input[type=number] با اسکرول موس (در کل سایت)
 document.addEventListener('wheel', (e) => {
   if (e.target instanceof HTMLInputElement && e.target.type === 'number') e.target.blur()
@@ -44,7 +48,14 @@ const queryClient = new QueryClient({
   },
 })
 
+// قفل یکباره — boot هم از رویداد load لینک CSS و هم از setTimeout سقف صدا زده
+// می‌شود؛ بدون این پرچم هر دو فایر می‌شدند و createRoot دوباره رندر کامل می‌کرد (فلیکر)
+let booted = false
+let bootTimer = null
 const boot = () => {
+if (booted) return
+booted = true
+if (bootTimer) clearTimeout(bootTimer)
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
@@ -73,7 +84,7 @@ if (!cssLink || cssLink.rel === 'stylesheet') {
   boot()
 } else {
   cssLink.addEventListener('load', boot, { once: true })
-  setTimeout(boot, 3000)  // سقف اطمینان — تعامل‌پذیری صفحه هرگز بیش از ۳ ثانیه عقب نمی‌افتد
+  bootTimer = setTimeout(boot, 3000)  // سقف اطمینان — تعامل‌پذیری صفحه هرگز بیش از ۳ ثانیه عقب نمی‌افتد
 }
 
 // ─── Service Worker (PWA) — فقط در production ────────────────
@@ -82,7 +93,7 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       // ?v=11 → URL متفاوت از sw.js قدیمی؛ تضمین می‌کند حتی با کش CDN/مرورگر هم
       // نسخه تازه fetch شود (بررسی آپدیت SW از کش HTTP مرورگر تبعیت می‌کند)
-      navigator.serviceWorker.register('/sw.js?v=12').then(
+      navigator.serviceWorker.register('/sw.js?v=59').then(
         (reg) => {
           console.log('SW registered:', reg.scope)
           // اگر نسخه تازه در راه بود، اجبار به فعال‌سازی فوری (بدون بستن تب‌ها)

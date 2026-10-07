@@ -10,6 +10,8 @@ import ErrorBoundary from './components/ui/ErrorBoundary'
 const AdminOrdersPage = lazy(() => import('./pages/admin/AdminOrdersPage'))
 const AdminProductsPage = lazy(() => import('./pages/admin/AdminProductsPage'))
 const AdminPackagesPage = lazy(() => import('./pages/admin/AdminPackagesPage'))
+const AdminProductionPage = lazy(() => import('./pages/admin/AdminProductionPage'))
+const AdminChatPage = lazy(() => import('./pages/admin/AdminChatPage'))
 const PricingPage = lazy(() => import('./pages/admin/PricingPage'))
 const ContentPage = lazy(() => import('./pages/admin/ContentPage'))
 const AdminLogsPage = lazy(() => import('./pages/admin/AdminLogsPage'))
@@ -40,6 +42,10 @@ const ClubSettingsPage = lazy(() => import('./pages/admin/ClubSettingsPage'))
 const SmsCampaignPage = lazy(() => import('./pages/admin/SmsCampaignPage'))
 const AssistantSettingsPage = lazy(() => import('./pages/admin/AssistantSettingsPage'))
 const LeadsPage = lazy(() => import('./pages/admin/LeadsPage'))
+const AdminStatsPage = lazy(() => import('./pages/admin/AdminStatsPage'))
+const AdminServicesPage = lazy(() => import('./pages/admin/AdminServicesPage'))
+const AdminPublisherPage = lazy(() => import('./pages/admin/AdminPublisherPage'))
+const ContentStudioPage = lazy(() => import('./pages/admin/ContentStudioPage'))
 // AccountPage سنگین است (recharts) — lazy تا وارد باندل اصلی نشود
 const AccountPage = lazy(() => import('./pages/AccountPage'))
 
@@ -164,6 +170,8 @@ export default function App() {
         <Route path="admin/warehouses" element={<RequireAuth><WarehousesPage /></RequireAuth>} />
         <Route path="admin/products" element={<RequireAuth><AdminProductsPage /></RequireAuth>} />
         <Route path="admin/packages" element={<RequireAuth><AdminPackagesPage /></RequireAuth>} />
+        <Route path="admin/production" element={<RequireAuth><AdminProductionPage /></RequireAuth>} />
+        <Route path="admin/chat" element={<RequireAuth><AdminChatPage /></RequireAuth>} />
         <Route path="admin/pricing" element={<RequireAuth><PricingPage /></RequireAuth>} />
         <Route path="admin/content" element={<RequireAuth><ContentPage /></RequireAuth>} />
         <Route path="admin/logs" element={<RequireAuth><AdminLogsPage /></RequireAuth>} />
@@ -175,6 +183,10 @@ export default function App() {
         <Route path="admin/club-settings" element={<RequireAuth><ClubSettingsPage /></RequireAuth>} />
         <Route path="admin/sms-campaign" element={<RequireAuth><SmsCampaignPage /></RequireAuth>} />
         <Route path="admin/leads" element={<RequireAuth><LeadsPage /></RequireAuth>} />
+        <Route path="admin/stats" element={<RequireAuth><AdminStatsPage /></RequireAuth>} />
+        <Route path="admin/services" element={<RequireAuth><AdminServicesPage /></RequireAuth>} />
+        <Route path="admin/publisher" element={<RequireAuth><AdminPublisherPage /></RequireAuth>} />
+        <Route path="admin/content-studio" element={<RequireAuth><ContentStudioPage /></RequireAuth>} />
         <Route path="admin/receipts" element={<RequireAuth><ReceiptsPage /></RequireAuth>} />
         <Route path="admin/aging" element={<RequireAuth><AgingReportPage /></RequireAuth>} />
         <Route path="admin/shortage" element={<RequireAuth><ShortageReportPage /></RequireAuth>} />

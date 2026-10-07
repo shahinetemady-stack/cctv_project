@@ -79,6 +79,223 @@ class LogoUploadView(APIView):
         return Response({'logo_url': logo_url})
 
 
+# ─── API ربات‌های پیام‌رسان (تلگرام/اینستاگرام) ─────────────────────────
+# احراز با توکن مشترک (هدر X-Bot-Token) — مقدار در BOT_API_TOKEN در .env سرور
+# و مینی‌پی‌سی نگه‌داری می‌شود. بدون کاربر لاگین‌شده کار می‌کند.
+
+_FA2EN_DIGITS = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
+
+
+def _normalize_phone(raw):
+    """هر فرمت موبایل ایران → 09xxxxxxxxx (خروجی None اگر نامعتبر)."""
+    import re
+    d = re.sub(r'\D', '', str(raw or '').translate(_FA2EN_DIGITS))
+    if d.startswith('0098'):
+        d = d[4:]
+    elif d.startswith('98'):
+        d = d[2:]
+    if d and not d.startswith('0'):
+        d = '0' + d
+    return d if re.fullmatch(r'09\d{9}', d) else None
+
+
+class BotPriceLookupView(APIView):
+    """POST /api/core/bot/price/ — استعلام قیمت محصول برای مشتری بر اساس موبایل.
+    بدنه: {slug یا product_id, phone (اختیاری)} — اگر موبایل ثبت‌نام‌کرده و همکار
+    تأییدشده باشد، قیمت سطح خودش (سیلور/گلد/پلاتینیوم) برمی‌گردد، وگرنه قیمت عمومی."""
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        from decouple import config as env
+        expected = env("BOT_API_TOKEN", default="")
+        if not expected or request.headers.get("X-Bot-Token", "") != expected:
+            return Response({"error": "دسترسی ندارید"}, status=401)
+
+        from apps.catalog.models import Product
+        from apps.catalog.pricing import formula_prices, user_price_key, TIER_LABELS
+        from apps.users.models import User
+
+        slug = (request.data.get('slug') or '').strip()
+        pid = request.data.get('product_id')
+
+        # فقط موبایل بدون محصول → فقط اطلاعات مشتری (تشخیص نوع مشتری توسط ربات)
+        if not slug and not pid:
+            phone_only = _normalize_phone(request.data.get('phone'))
+            if not phone_only:
+                return Response({"error": "slug یا product_id یا phone لازم است"}, status=400)
+            from apps.users.models import User as _U
+            u = _U.objects.filter(phone=phone_only).first()
+            _, t = user_price_key(u)
+            return Response({"customer": {
+                "phone": phone_only, "registered": bool(u),
+                "tier": t, "tier_label": TIER_LABELS.get(t) if t else "مشتری عمومی",
+            }})
+
+        qs = Product.objects.filter(is_active=True)
+        product = qs.filter(pk=pid).first() if pid else qs.filter(slug=slug).first()
+        if not product:
+            return Response({"error": "محصول یافت نشد"}, status=404)
+
+        site_base = env("SITE_BASE_URL", default="https://doorbinkar.com").rstrip('/')
+
+        # کاربر بر اساس موبایل (اختیاری — ناشناس = مشتری عمومی)
+        user = None
+        phone = _normalize_phone(request.data.get('phone'))
+        if phone:
+            user = User.objects.filter(phone=phone).first()
+
+        key, tier = user_price_key(user)  # ناشناس/عمومی → retail
+        variants = list(product.variants.filter(is_active=True))
+        if not variants:
+            return Response({"error": "محصول واریانت فعال ندارد"}, status=404)
+        cheapest = min(variants, key=lambda v: formula_prices(v)[key])
+        prices = formula_prices(cheapest)
+
+        payload = {
+            "product": {
+                "id": product.id,
+                "name": product.name,
+                "url": f"{site_base}/products/{product.slug}/",
+                "in_stock": product.available_stock > 0,
+            },
+            "customer": {
+                "phone": phone,
+                "registered": bool(user),
+                "tier": tier,
+                "tier_label": TIER_LABELS.get(tier) if tier else "مشتری عمومی",
+            },
+            # ریال
+            "price": prices[key],
+            "retail_price": prices["retail"],
+        }
+        if tier == "platinum":
+            payload["platinum_options"] = {
+                "cash": prices["cash"], "credit": prices["credit"],
+                "month1": prices["month1"], "month2": prices["month2"],
+            }
+        return Response(payload)
+
+
+# ─── سرویس‌ها و اشتراک‌ها (دامنه/سرور/…) — perm: services_view ────────────
+# اطلاعات حساب‌ها حساس است؛ سوپریوزر همیشه عبور می‌کند و پرسنل فقط با نقشی
+# که کد services_view را دارد به این بخش دسترسی دارند.
+
+from .models import ServiceSubscription
+
+
+def _has_perm(user, code):
+    if user.is_superuser:
+        return True
+    sp = getattr(user, 'staff_profile', None)
+    return bool(sp and sp.is_active and sp.has_perm(code))
+
+
+def _service_dict(s):
+    return {
+        'id': s.id,
+        'name': s.name,
+        'category': s.category,
+        'category_display': s.get_category_display(),
+        'provider': s.provider,
+        'account': s.account,
+        'expire_date': s.expire_date.isoformat(),
+        'renew_cost': s.renew_cost,
+        'warn_days': s.warn_days,
+        'auto_renew': s.auto_renew,
+        'note': s.note,
+        'is_active': s.is_active,
+        'days_left': s.days_left,
+    }
+
+
+def _service_payload(data):
+    """اعتبارسنجی و استخراج فیلدها از بدنه درخواست. (payload, error)"""
+    import datetime
+    name = (data.get('name') or '').strip()
+    if not name:
+        return None, 'نام سرویس الزامی است'
+    raw_date = (data.get('expire_date') or '').strip()
+    try:
+        expire_date = datetime.date.fromisoformat(raw_date)
+    except ValueError:
+        return None, 'تاریخ انقضا معتبر نیست (مثال: 2027-03-15)'
+    category = data.get('category') or 'other'
+    if category not in dict(ServiceSubscription.CATEGORIES):
+        return None, 'دسته معتبر نیست'
+    try:
+        warn_days = max(1, min(365, int(data.get('warn_days') or 30)))
+    except (TypeError, ValueError):
+        return None, 'روزهای هشدار معتبر نیست'
+    return {
+        'name': name[:100],
+        'category': category,
+        'provider': (data.get('provider') or '').strip()[:100],
+        'account': (data.get('account') or '').strip()[:150],
+        'expire_date': expire_date,
+        'renew_cost': (data.get('renew_cost') or '').strip()[:60],
+        'warn_days': warn_days,
+        'auto_renew': bool(data.get('auto_renew')),
+        'note': (data.get('note') or '').strip(),
+        'is_active': bool(data.get('is_active', True)),
+    }, None
+
+
+class ServiceSubscriptionsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _forbid(self, request):
+        if not _has_perm(request.user, 'services_view'):
+            return Response({'error': 'شما دسترسی لازم برای این عملیات را ندارید'}, status=403)
+
+    def get(self, request):
+        if (r := self._forbid(request)):
+            return r
+        items = ServiceSubscription.objects.all()
+        return Response([_service_dict(s) for s in items])
+
+    def post(self, request):
+        if (r := self._forbid(request)):
+            return r
+        payload, err = _service_payload(request.data)
+        if err:
+            return Response({'error': err}, status=400)
+        s = ServiceSubscription.objects.create(**payload)
+        return Response(_service_dict(s), status=201)
+
+
+class ServiceSubscriptionDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _forbid(self, request):
+        if not _has_perm(request.user, 'services_view'):
+            return Response({'error': 'شما دسترسی لازم برای این عملیات را ندارید'}, status=403)
+
+    def patch(self, request, pk):
+        if (r := self._forbid(request)):
+            return r
+        try:
+            s = ServiceSubscription.objects.get(pk=pk)
+        except ServiceSubscription.DoesNotExist:
+            return Response({'error': 'یافت نشد'}, status=404)
+        merged = {**_service_dict(s), **request.data}
+        payload, err = _service_payload(merged)
+        if err:
+            return Response({'error': err}, status=400)
+        for k, v in payload.items():
+            setattr(s, k, v)
+        s.save()
+        return Response(_service_dict(s))
+
+    def delete(self, request, pk):
+        if (r := self._forbid(request)):
+            return r
+        deleted, _ = ServiceSubscription.objects.filter(pk=pk).delete()
+        if not deleted:
+            return Response({'error': 'یافت نشد'}, status=404)
+        return Response({'ok': True})
+
+
 # ─── OG برای کرولرهای پیش‌نمایش لینک + رندر داینامیک برای موتورهای جستجو ────
 # nginx بر اساس User-Agent، ربات‌ها را با هدر X-Bot-Kind اینجا پروکسی می‌کند:
 #   social → متای اشتراک‌گذاری (واتساپ، تلگرام، بله…) با ریدایرکت JS برای انسان
