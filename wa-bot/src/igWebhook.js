@@ -516,6 +516,25 @@ async function handleComment(value) {
   }
 }
 
+// ─── تشکر از لایک/ری‌اکشن استوری و پست ──────────────────────────
+// لایک استوری و ری‌اکشن ایموجی به‌صورت DM می‌رسد (message.reaction یا
+// attachment نوع story_reaction یا متن فقط‌ایموجی). این‌ها سؤال نیستند —
+// پاسخ ثابت تشکر می‌فرستیم و مدل و دروازه فالو را درگیر نمی‌کنیم.
+const lastLikeReply = new Map();
+const LIKE_COOLDOWN_MS = 60 * 60 * 1000; // هر کاربر حداکثر ساعتی یک تشکر
+const LIKE_THANKS = 'ممنون که با لایک کردن بهمون انرژی می‌دید 💚\nاگر قطعه‌ای نیاز دارید یا سؤالی دارید، من در خدمتم 🌸';
+const EMOJI_ONLY_RE = /^[\u2764\uFE0F❤️🧡💛💚💙💜🖤🤍🤎👍👍🏻👍🏼🔥😍🥰😂🤣😘👏🙌💯✨\s]+$/u;
+
+async function handleLikeThanks(senderId) {
+  const now = Date.now();
+  if (now - (lastLikeReply.get(senderId) || 0) < LIKE_COOLDOWN_MS) return;
+  lastLikeReply.set(senderId, now);
+  await sleep(humanDelay());
+  await sendIgText(senderId, LIKE_THANKS);
+  db.logMessage(ACCOUNT_KEY, senderId, 'model', LIKE_THANKS);
+  console.log(`[ig] -> ${senderId}: like thanks ✅`);
+}
+
 function processPayload(body) {
   if (body.object !== 'instagram') return;
   for (const entry of body.entry || []) {
@@ -529,8 +548,17 @@ function processPayload(body) {
         continue;
       }
       const msg = ev.message;
-      if (!msg || msg.is_echo || !msg.text) continue;
-      handleMessage(senderId, msg.text.trim(), msg.quick_reply?.payload).catch(e => console.error('[ig] reply error:', e.message));
+      if (!msg || msg.is_echo) continue;
+      const txt = (msg.text || '').trim();
+      // لایک/ری‌اکشن استوری یا پیام — تشکر ثابت
+      const isReaction = (msg.reaction && msg.reaction.action !== 'unreact')
+        || (msg.attachments || []).some(a => a && a.type === 'story_reaction');
+      if (isReaction || (txt && EMOJI_ONLY_RE.test(txt) && !msg.quick_reply)) {
+        handleLikeThanks(senderId).catch(e => console.error('[ig] like thanks error:', e.message));
+        continue;
+      }
+      if (!txt) continue;
+      handleMessage(senderId, txt, msg.quick_reply?.payload).catch(e => console.error('[ig] reply error:', e.message));
     }
     // رویدادهای کامنت (پست/ریلز) و کامنت لایو
     for (const ch of entry.changes || []) {
