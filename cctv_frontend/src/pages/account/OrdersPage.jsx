@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { orderService, paymentService } from '../../services/orders'
 import { PageLoader } from '../../components/ui'
+import Seo from '../../components/Seo'
 import AmountInput from '../../components/ui/AmountInput'
 import useAuthStore from '../../store/useAuthStore'
 import { formatPrice } from '../../utils/format'
@@ -373,6 +374,7 @@ export default function OrdersPage() {
 
   return (
     <div className="container-main py-8 max-w-3xl">
+      <Seo title="سفارش‌های من" noindex />
       {selectedOrder && <ProformaInvoice order={selectedOrder} onClose={() => setSelectedOrder(null)} />}
 
       <h1 className="font-display font-bold text-2xl text-white mb-6">سفارش‌های من</h1>

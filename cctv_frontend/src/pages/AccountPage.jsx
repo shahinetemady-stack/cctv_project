@@ -6,6 +6,7 @@ import { authService } from '../services/auth'
 import api from '../services/api'
 import useAuthStore from '../store/useAuthStore'
 import { PageLoader, EmptyState } from '../components/ui'
+import Seo from '../components/Seo'
 import { statusLabel, statusColor, formatPrice } from '../utils/format'
 import { Link } from 'react-router-dom'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
@@ -687,6 +688,7 @@ export default function AccountPage() {
 
   return (
     <div className="container-main py-8 max-w-5xl">
+      <Seo title="حساب کاربری" noindex />
       {/* سربرگ */}
       <div className="flex items-center gap-4 mb-8">
         <div className="w-14 h-14 bg-brand rounded-2xl flex items-center justify-center

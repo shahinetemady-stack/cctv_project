@@ -1,0 +1,102 @@
+// Instagram Messaging API webhook — پاسخگوی خودکار DM با Gemini
+// GET  /webhook → تأیید اولیه متا (hub.challenge)
+// POST /webhook → رویدادهای پیام
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const db = require('./db');
+const { callGemini } = require('./gemini');
+
+const PORT = Number(process.env.IG_PORT || 3100);
+const VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || 'doorbinkar-verify-2026';
+const PAGE_TOKEN = process.env.IG_PAGE_TOKEN || '';
+const PROMPT_FILE = process.env.IG_PROMPT_FILE || path.join(__dirname, '..', 'prompts', 'doorbinkar.txt');
+const GRAPH_VERSION = process.env.GRAPH_VERSION || 'v21.0';
+// توکن‌های «Instagram Business Login» (شروع با IGAA) فقط روی graph.instagram.com
+// کار می‌کنند؛ توکن‌های Facebook Login روی graph.facebook.com.
+const GRAPH_BASE = process.env.GRAPH_BASE
+  || (PAGE_TOKEN.startsWith('IGAA') ? 'https://graph.instagram.com' : 'https://graph.facebook.com');
+const ACCOUNT_KEY = 'ig';
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const humanDelay = () => 3000 + Math.floor(Math.random() * 4000);
+
+function getPrompt() {
+  try { return fs.readFileSync(PROMPT_FILE, 'utf8'); } catch { return ''; }
+}
+
+async function sendIgText(recipientId, text) {
+  if (!PAGE_TOKEN) throw new Error('IG_PAGE_TOKEN is not set');
+  const res = await fetch(`${GRAPH_BASE}/${GRAPH_VERSION}/me/messages?access_token=${PAGE_TOKEN}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipient: { id: recipientId }, message: { text } }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Graph ${res.status}: ${body.slice(0, 300)}`);
+  }
+}
+
+async function handleMessage(senderId, text) {
+  console.log(`[ig] ${senderId}: ${text.slice(0, 80)}`);
+  db.logMessage(ACCOUNT_KEY, senderId, 'user', text);
+
+  await sleep(humanDelay());
+  const history = db.getHistory(ACCOUNT_KEY, senderId).slice(0, -1);
+  const reply = await callGemini(getPrompt(), history, text);
+
+  await sendIgText(senderId, reply);
+  db.logMessage(ACCOUNT_KEY, senderId, 'model', reply);
+  console.log(`[ig] -> ${senderId}: ${reply.slice(0, 80)}`);
+}
+
+function processPayload(body) {
+  if (body.object !== 'instagram') return;
+  for (const entry of body.entry || []) {
+    for (const ev of entry.messaging || []) {
+      const senderId = ev.sender?.id;
+      const msg = ev.message;
+      if (!senderId || !msg || msg.is_echo || !msg.text) continue;
+      handleMessage(senderId, msg.text.trim()).catch(e => console.error('[ig] reply error:', e.message));
+    }
+  }
+}
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url, `http://localhost:${PORT}`);
+
+  if (req.method === 'GET' && url.pathname === '/webhook') {
+    const mode = url.searchParams.get('hub.mode');
+    const token = url.searchParams.get('hub.verify_token');
+    const challenge = url.searchParams.get('hub.challenge');
+    if (mode === 'subscribe' && token === VERIFY_TOKEN && challenge) {
+      console.log('[ig] webhook verified ✅');
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end(challenge);
+    } else {
+      res.writeHead(403); res.end('forbidden');
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/webhook') {
+    let raw = '';
+    req.on('data', c => { raw += c; if (raw.length > 1e6) req.destroy(); });
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('EVENT_RECEIVED'); // جواب سریع به متا، پردازش async
+      try { processPayload(JSON.parse(raw)); } catch (e) { console.error('[ig] bad payload:', e.message); }
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/health') {
+    res.writeHead(200); res.end('ok');
+    return;
+  }
+
+  res.writeHead(404); res.end('not found');
+});
+
+server.listen(PORT, '127.0.0.1', () => console.log(`[ig] webhook listening on 127.0.0.1:${PORT}`));

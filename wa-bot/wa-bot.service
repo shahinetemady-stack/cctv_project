@@ -1,0 +1,18 @@
+[Unit]
+Description=WhatsApp AI reply bot (Baileys + Gemini)
+After=network-online.target xray-router.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dbk
+WorkingDirectory=/home/dbk/wa-bot
+EnvironmentFile=/home/dbk/wa-bot/.env
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=10
+# memory guard
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

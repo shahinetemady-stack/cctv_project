@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   Calendar, Eye, Lightbulb, Music, Video, Check, X, RefreshCw,
-  Loader2, Send, Clock, Upload, Sparkles, TrendingUp,
+  Loader2, Send, Clock, Upload, Sparkles, TrendingUp, KeyRound, Trash2,
 } from 'lucide-react'
 import { contentStudioService } from '../../services/contentStudio'
 import usePermissions from '../../hooks/usePermissions'
@@ -185,22 +185,30 @@ function HookSection({ post, canBuild }) {
     onError: (e) => toast.error(errMsg(e, 'شروع ساخت هوک ناموفق بود')),
   })
 
+  const readyBadge = (
+    <Badge
+      label={post.hook_provider === 'veo' ? 'هوک AI آماده · Veo'
+        : post.hook_provider === 'hf' ? 'هوک AI آماده · HF رایگان'
+        : 'هوک AI آماده'}
+      color="#00C896" />
+  )
+
   if (!canBuild || post.content_type !== 'reel' || post.approval_status !== 'draft') {
     if (post.hook_status === 'ready') {
-      return <Badge label="هوک AI آماده" color="#00C896" />
+      return readyBadge
     }
     return null
   }
 
   if (post.hook_status === 'building') {
-    return <PendingHint text="در حال ساخت هوک سینمایی با Veo… معمولاً ۱ تا ۳ دقیقه" />
+    return <PendingHint text="در حال ساخت هوک سینمایی… معمولاً ۱ تا ۳ دقیقه" />
   }
 
   return (
     <div className="flex flex-col gap-1">
       {post.hook_status === 'ready' && (
         <>
-          <Badge label="هوک AI آماده" color="#00C896" />
+          {readyBadge}
           <span className="text-[10px] text-gray-steel">
             برای ترکیب در ویدیوی نهایی، دوباره «ساخت ویدیو» را بزنید
           </span>
@@ -252,6 +260,15 @@ function PostCard({ post, canBuild, canApprove, onPreview, onApprove }) {
     onError: (e) => toast.error(errMsg(e, 'خطا در رد پست')),
   })
 
+  const styleMut = useMutation({
+    mutationFn: (style) => contentStudioService.setStyle(post.id, style),
+    onSuccess: () => {
+      toast.success('سبک ویدیو تغییر کرد')
+      qc.invalidateQueries({ queryKey: ['studio-posts'] })
+    },
+    onError: (e) => toast.error(errMsg(e, 'تغییر سبک ناموفق بود')),
+  })
+
   const building = buildMut.isPending
 
   return (
@@ -276,6 +293,12 @@ function PostCard({ post, canBuild, canApprove, onPreview, onApprove }) {
         <div className="text-[11px] text-brand/80 line-clamp-1 mb-2" dir="ltr" style={{ textAlign: 'right' }}>{post.hashtags}</div>
       )}
 
+      {post.idea_signal && (
+        <div className="text-[10px] text-gray-steel/80 line-clamp-1 mb-2 flex items-center gap-1">
+          <Lightbulb size={10} className="shrink-0" /> منبع ایده: {post.idea_signal}
+        </div>
+      )}
+
       <div className="text-[11px] text-gray-steel mb-3 flex items-center gap-1">
         <Clock size={11} />
         {post.scheduled_at
@@ -298,6 +321,15 @@ function PostCard({ post, canBuild, canApprove, onPreview, onApprove }) {
             {building ? <Loader2 size={12} className="animate-spin" /> : <Video size={12} />}
             ساخت ویدیو
           </button>
+        )}
+        {post.approval_status === 'draft' && post.content_type === 'reel' && canBuild && (
+          <select value={post.video_style || 'auto'}
+            onChange={e => styleMut.mutate(e.target.value)} disabled={styleMut.isPending}
+            title="سبک ویدیو"
+            className="text-xs px-2 py-1.5 rounded-lg border border-white/10 bg-transparent text-gray-steel hover:text-white disabled:opacity-50">
+            <option value="auto" className="bg-gray-900">خودکار (اسلایدشو + هوک AI)</option>
+            <option value="motion" className="bg-gray-900">موشن‌گرافیک</option>
+          </select>
         )}
         {(post.approval_status === 'draft' || post.approval_status === 'rejected') && canApprove && (
           <button onClick={() => onApprove(post)}
@@ -426,7 +458,13 @@ function PreviewTab({ posts, selectedId, onSelect, canBuild }) {
               <div className="flex items-center gap-2">
                 <Badge label={CTYPE[post.content_type]?.label || '—'} color={CTYPE[post.content_type]?.color || '#8892A0'} />
                 <Badge label={APPROVAL[post.approval_status]?.label || '—'} color={APPROVAL[post.approval_status]?.color || '#8892A0'} />
-                {post.hook_status === 'ready' && <Badge label="هوک AI آماده" color="#00C896" />}
+                {post.hook_status === 'ready' && (
+                  <Badge
+                    label={post.hook_provider === 'veo' ? 'هوک AI آماده · Veo'
+                      : post.hook_provider === 'hf' ? 'هوک AI آماده · HF رایگان'
+                      : 'هوک AI آماده'}
+                    color="#00C896" />
+                )}
                 <span className="text-sm text-white font-medium">{post.title}</span>
               </div>
               {canBuild && (
@@ -449,7 +487,7 @@ function PreviewTab({ posts, selectedId, onSelect, canBuild }) {
               </div>
             )}
             {post.hook_status === 'building' && (
-              <PendingHint text="در حال ساخت هوک سینمایی با Veo… معمولاً ۱ تا ۳ دقیقه" />
+              <PendingHint text="در حال ساخت هوک سینمایی… معمولاً ۱ تا ۳ دقیقه" />
             )}
 
             <div className="rounded-xl overflow-hidden border border-white/10 bg-black/30 mb-4 flex items-center justify-center min-h-40">
@@ -569,8 +607,95 @@ function IdeaTab({ onGenerated }) {
   )
 }
 
+// ─── کارت تنظیمات موتور ویدیو (Veo + Hugging Face) ───────────
+function KeyField({ label, hint, helpText, field, isSet, maskedHint, onSave, saving }) {
+  const [value, setValue] = useState('')
+  return (
+    <div className="border-b border-white/5 last:border-0 pb-4 last:pb-0 mb-4 last:mb-0">
+      <div className={`text-xs mb-2 ${isSet ? 'text-emerald-400' : 'text-gray-steel'}`}>
+        {label}: {isSet ? `تنظیم شده (${maskedHint})` : hint}
+      </div>
+      {helpText && <div className="text-[10px] text-gray-steel/70 mb-2">{helpText}</div>}
+      <input type="password" value={value} onChange={e => setValue(e.target.value)} dir="ltr"
+        className="input text-sm w-full text-left mb-2" placeholder="کلید جدید..." />
+      <div className="flex gap-2">
+        <button onClick={() => { if (!value.trim()) return toast.error('کلید جدید را بنویس'); onSave({ [field]: value.trim() }, () => setValue('')) }}
+          disabled={saving}
+          className="btn-primary flex-1 py-1.5 flex items-center justify-center gap-1 disabled:opacity-50 text-xs">
+          {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+          ذخیره
+        </button>
+        {isSet && (
+          <button onClick={() => onSave({ [field]: '__clear__' }, () => setValue(''))} disabled={saving}
+            className="px-3 py-1.5 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10 flex items-center gap-1 disabled:opacity-50 text-xs">
+            <Trash2 size={12} /> حذف کلید
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function VideoEngineCard() {
+  const qc = useQueryClient()
+  const [space, setSpace] = useState(null)
+
+  const { data: st, isLoading } = useQuery({
+    queryKey: ['studio-settings'],
+    queryFn: contentStudioService.settings,
+  })
+
+  const saveMut = useMutation({
+    mutationFn: (payload) => contentStudioService.saveSettings(payload),
+    onSuccess: (d, _payload, _ctx) => {
+      toast.success('تنظیمات ذخیره شد')
+      qc.invalidateQueries({ queryKey: ['studio-settings'] })
+    },
+    onError: (e) => toast.error(errMsg(e, 'ذخیره تنظیمات ناموفق بود')),
+  })
+
+  const save = (payload, after) => saveMut.mutate(payload, { onSuccess: () => after?.() })
+  const spaceValue = space === null ? (st?.hf_space || '') : space
+
+  return (
+    <div className="card p-6 h-fit">
+      <h3 className="font-bold text-white text-sm mb-1 flex items-center gap-2">
+        <KeyRound size={15} className="text-brand" /> تنظیمات موتور ویدیو
+      </h3>
+      <div className="text-[10px] text-gray-steel/70 mb-4">
+        زنجیرهٔ ساخت هوک: اول Veo (پولی، باکیفیت) — در صورت اتمام سهمیه، HF رایگان
+      </div>
+      {isLoading ? (
+        <div className="text-xs text-gray-steel">در حال بارگذاری...</div>
+      ) : (
+        <>
+          <KeyField label="کلید Veo" field="veo_api_key" saving={saveMut.isPending}
+            isSet={st?.veo_api_key_set} maskedHint={st?.veo_api_key_hint}
+            hint="تنظیم نشده — از کلید Gemini دستیار استفاده می‌شود" onSave={save} />
+          <KeyField label="توکن Hugging Face" field="hf_token" saving={saveMut.isPending}
+            isSet={st?.hf_token_set} maskedHint={st?.hf_token_hint}
+            hint="تنظیم نشده — موتور رایگان HF کار نمی‌کند"
+            helpText="حساب رایگان huggingface.co ← Settings ← Access Tokens"
+            onSave={save} />
+          <div>
+            <label className="label text-xs mb-1 block">اسپیس HF (اختیاری — خالی یعنی پیش‌فرض رله)</label>
+            <div className="flex gap-2">
+              <input value={spaceValue} onChange={e => setSpace(e.target.value)} dir="ltr"
+                className="input text-sm w-full text-left" placeholder="Lightricks/ltx-video-distilled" />
+              <button onClick={() => save({ hf_space: spaceValue.trim() })} disabled={saveMut.isPending}
+                className="px-4 py-1.5 rounded-xl border border-white/10 text-gray-steel hover:text-white flex items-center gap-1 disabled:opacity-50 text-xs shrink-0">
+                ذخیره
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ─── تب ۴: کتابخانه موزیک ────────────────────────────────────
-function MusicTab({ canPublish }) {
+function MusicTab({ canPublish, canCredentials }) {
   const qc = useQueryClient()
   const [title, setTitle] = useState('')
   const [mood, setMood] = useState('')
@@ -598,10 +723,10 @@ function MusicTab({ canPublish }) {
     onError: (e) => toast.error(errMsg(e, 'آپلود موزیک ناموفق بود')),
   })
 
-  if (!canPublish) {
+  if (!canPublish && !canCredentials) {
     return (
       <div className="text-center py-12 text-gray-steel text-sm">
-        برای مدیریت کتابخانه موزیک به دسترسی «تولید و انتشار محتوا» نیاز داری
+        برای مدیریت کتابخانه موزیک و تنظیمات به دسترسی «تولید و انتشار محتوا» یا «اعتبارنامه‌های انتشار» نیاز داری
       </div>
     )
   }
@@ -614,6 +739,8 @@ function MusicTab({ canPublish }) {
 
   return (
     <div className="grid grid-cols-2 gap-6 max-lg:grid-cols-1">
+      <div className="space-y-6">
+      {canPublish && (
       <div className="card p-6 h-fit">
         <h3 className="font-bold text-white text-sm mb-4 flex items-center gap-2">
           <Upload size={15} className="text-brand" /> آپلود موزیک جدید
@@ -650,7 +777,11 @@ function MusicTab({ canPublish }) {
           {uploadMut.isPending ? 'در حال آپلود...' : 'آپلود'}
         </button>
       </div>
+      )}
+      {canCredentials && <VideoEngineCard />}
+      </div>
 
+      {canPublish && (
       <div>
         {isLoading ? (
           <div className="text-center py-8 text-gray-steel text-sm">در حال بارگذاری...</div>
@@ -678,6 +809,7 @@ function MusicTab({ canPublish }) {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }
@@ -772,6 +904,7 @@ export default function ContentStudioPage() {
 
   const canBuild = can('publisher_publish')
   const canApprove = can('publisher_approve')
+  const canCredentials = can('publisher_credentials')
 
   // لیست بدون فیلتر برای تب پیش‌نمایش
   const { data: allPosts = [] } = useQuery({
@@ -797,7 +930,7 @@ export default function ContentStudioPage() {
     ['calendar', 'تقویم محتوا', Calendar],
     ['preview', 'پیش‌نمایش', Eye],
     ['idea', 'ایده دستی', Lightbulb],
-    ['music', 'کتابخانه موزیک', Music],
+    ['music', 'موزیک و تنظیمات', Music],
     ['report', 'گزارش', TrendingUp],
   ]
 
@@ -826,7 +959,7 @@ export default function ContentStudioPage() {
         <PreviewTab posts={allPosts} selectedId={selectedId} onSelect={setSelectedId} canBuild={canBuild} />
       )}
       {tab === 'idea' && <IdeaTab onGenerated={jumpToDraft} />}
-      {tab === 'music' && <MusicTab canPublish={canBuild} />}
+      {tab === 'music' && <MusicTab canPublish={canBuild} canCredentials={canCredentials} />}
       {tab === 'report' && <ReportTab />}
 
       {approvingPost && (

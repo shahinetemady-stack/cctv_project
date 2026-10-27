@@ -14,7 +14,7 @@ from .serializers import (
     PayslipSerializer,
     PayrollProfileSerializer,
 )
-from .services import generate_month, pay_payslip, recalculate_payslip
+from .services import book_accrual, generate_month, pay_payslip, recalculate_payslip
 
 
 def _has_perm(user, code):
@@ -238,8 +238,11 @@ class PayslipConfirmView(APIView):
             return Response({"error": "یافت نشد"}, status=404)
         if slip.status == Payslip.Status.PAID:
             return Response({"error": "فیش قبلاً پرداخت شده"}, status=400)
-        slip.status = Payslip.Status.CONFIRMED
-        slip.save(update_fields=["status"])
+        try:
+            book_accrual(slip, actor=request.user)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=400)
+        slip.refresh_from_db()
         return Response(PayslipSerializer(slip).data)
 
 
@@ -288,7 +291,7 @@ class PayslipPayView(APIView):
         amount = request.data.get("amount")
         try:
             payment = pay_payslip(slip, account, date, actor=request.user,
-                                  amount=int(amount) if amount else None)
+                                  amount=int(amount) if amount not in (None, "") else None)
         except (ValueError, TypeError) as exc:
             return Response({"error": str(exc)}, status=400)
         return Response({

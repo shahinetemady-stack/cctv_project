@@ -344,9 +344,9 @@ function RecurringKardexModal({ recurringId, onClose }) {
                   return (
                     <tr key={c.id} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
                       <td style={{ ...tdS, fontWeight: 600, whiteSpace: 'nowrap' }}>{monthLabelFromGregorian(c.year, c.month)}</td>
-                      <td style={tdS}>{fmt(c.amount)} ت</td>
-                      <td style={tdS}>{fmt(c.paid_amount)} ت</td>
-                      <td style={{ ...tdS, color: Number(c.remaining_amount) > 0 ? '#FF3B3B' : 'var(--color-text-secondary)' }}>{fmt(c.remaining_amount)} ت</td>
+                      <td style={tdS}>{fmt(c.amount)} ریال</td>
+                      <td style={tdS}>{fmt(c.paid_amount)} ریال</td>
+                      <td style={{ ...tdS, color: Number(c.remaining_amount) > 0 ? '#FF3B3B' : 'var(--color-text-secondary)' }}>{fmt(c.remaining_amount)} ریال</td>
                       <td style={tdS}>
                         <span className={`badge ${badge.cls}`} style={{ fontSize: 10, padding: '2px 8px' }}>{badge.label}</span>
                       </td>
@@ -468,9 +468,9 @@ function RecurringTab() {
                   <tr key={r.id} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
                     <td style={{ ...tdS, fontWeight: 600 }}>{r.title}</td>
                     <td style={tdS}>{r.category_name || '—'}</td>
-                    <td style={{ ...tdS, fontWeight: 700, color: '#FBC02D' }}>{fmt(r.monthly_amount)} ت</td>
+                    <td style={{ ...tdS, fontWeight: 700, color: '#FBC02D' }}>{fmt(r.monthly_amount)} ریال</td>
                     <td style={{ ...tdS, color: 'var(--color-text-secondary)' }}>{r.contact_name || '—'}</td>
-                    <td style={tdS}>{Number(r.deposit_amount) ? fmt(r.deposit_amount) + ' ت' : '—'}</td>
+                    <td style={tdS}>{Number(r.deposit_amount) ? fmt(r.deposit_amount) + ' ریال' : '—'}</td>
                     <td style={tdS}>
                       <span className={`badge ${r.is_active ? 'badge-success' : 'badge'}`} style={{ fontSize: 10, padding: '2px 8px' }}>
                         {r.is_active ? 'فعال' : 'غیرفعال'}
@@ -657,9 +657,9 @@ function GeneralTab() {
                     <tr key={c.id} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
                       <td style={{ ...tdS, fontWeight: 600 }}>{c.title}</td>
                       <td style={tdS}>{c.category_name || '—'}</td>
-                      <td style={{ ...tdS, fontWeight: 700, color: '#FBC02D' }}>{fmt(c.amount)} ت</td>
-                      <td style={tdS}>{fmt(c.paid_amount)} ت</td>
-                      <td style={{ ...tdS, color: Number(c.remaining_amount) > 0 ? '#FF3B3B' : 'var(--color-text-secondary)' }}>{fmt(c.remaining_amount)} ت</td>
+                      <td style={{ ...tdS, fontWeight: 700, color: '#FBC02D' }}>{fmt(c.amount)} ریال</td>
+                      <td style={tdS}>{fmt(c.paid_amount)} ریال</td>
+                      <td style={{ ...tdS, color: Number(c.remaining_amount) > 0 ? '#FF3B3B' : 'var(--color-text-secondary)' }}>{fmt(c.remaining_amount)} ریال</td>
                       <td style={tdS}>
                         <span className={`badge ${badge.cls}`} style={{ fontSize: 10, padding: '2px 8px' }}>{badge.label}</span>
                       </td>
@@ -1016,7 +1016,7 @@ function InvestorKardexModal({ investorId, onClose }) {
                           </td>
                           <td style={{ ...tdS, whiteSpace: 'nowrap' }}>{jalaliText(m.date)}</td>
                           <td style={{ ...tdS, fontWeight: 700, color: Number(m.signed_amount) >= 0 ? '#00C896' : '#FF3B3B', whiteSpace: 'nowrap' }}>
-                            {Number(m.signed_amount) >= 0 ? '+' : '−'}{fmt(Math.abs(Number(m.signed_amount)))} ت
+                            {Number(m.signed_amount) >= 0 ? '+' : '−'}{fmt(Math.abs(Number(m.signed_amount)))} ریال
                           </td>
                           <td style={tdS}>{m.account_name || '—'}</td>
                           <td style={{ ...tdS, color: 'var(--color-text-secondary)', maxWidth: 120 }} className="truncate">{m.note || '—'}</td>
@@ -1048,12 +1048,12 @@ function InvestorKardexModal({ investorId, onClose }) {
                         return (
                           <tr key={p.id} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
                             <td style={{ ...tdS, fontWeight: 600, whiteSpace: 'nowrap' }}>{monthLabelFromGregorian(p.year, p.month)}</td>
-                            <td style={{ ...tdS, fontWeight: 700, color: '#FBC02D' }}>{fmt(p.amount)} ت</td>
+                            <td style={{ ...tdS, fontWeight: 700, color: '#FBC02D' }}>{fmt(p.amount)} ریال</td>
                             <td style={tdS}>
                               <span className={`badge ${badge.cls}`} style={{ fontSize: 10, padding: '2px 8px' }}>{badge.label}</span>
                             </td>
-                            <td style={tdS}>{fmt(p.paid_amount)} ت</td>
-                            <td style={{ ...tdS, color: Number(p.remaining_amount) > 0 ? '#FF3B3B' : 'var(--color-text-secondary)' }}>{fmt(p.remaining_amount)} ت</td>
+                            <td style={tdS}>{fmt(p.paid_amount)} ریال</td>
+                            <td style={{ ...tdS, color: Number(p.remaining_amount) > 0 ? '#FF3B3B' : 'var(--color-text-secondary)' }}>{fmt(p.remaining_amount)} ریال</td>
                             <td style={tdS}>
                               {can('expenses_edit') && (
                                 <button
@@ -1126,7 +1126,7 @@ function InvestorsTab() {
                     <td style={{ ...tdS, fontWeight: 600 }}>{inv.contact_name}</td>
                     <td style={{ ...tdS, color: 'var(--color-text-secondary)', fontSize: 11 }} dir="ltr">{inv.contact_phone || '—'}</td>
                     <td style={tdS}>{Number(inv.annual_rate).toLocaleString('fa-IR')}٪</td>
-                    <td style={{ ...tdS, fontWeight: 700, color: '#FBC02D' }}>{fmt(inv.principal)} ت</td>
+                    <td style={{ ...tdS, fontWeight: 700, color: '#FBC02D' }}>{fmt(inv.principal)} ریال</td>
                     <td style={tdS}>
                       <span className={`badge ${inv.is_active ? 'badge-success' : 'badge'}`} style={{ fontSize: 10, padding: '2px 8px' }}>
                         {inv.is_active ? 'فعال' : 'غیرفعال'}

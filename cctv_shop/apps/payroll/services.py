@@ -9,7 +9,8 @@ import calendar
 from datetime import date
 from decimal import Decimal
 
-from django.db.models import Q, Sum
+from django.db import transaction
+from django.db.models import F, Q, Sum
 
 from .models import (
     BonusPenaltyRecord,
@@ -127,8 +128,26 @@ def annual_bonus_amount(profile, year, month):
     return int(round(float(bonus)))
 
 
+def _sync_recalculated_payslip(payslip):
+    if payslip.paid_amount > payslip.net_amount:
+        raise ValueError("مبلغ جدید فیش از اقساط پرداخت‌شده کمتر است؛ ابتدا اقساط را برگشت بزنید")
+    if payslip.accrual_payment_id:
+        accrual = payslip.accrual_payment
+        accrual.amount = Decimal(payslip.net_amount)
+        accrual.save(update_fields=["amount", "updated_at"])
+        if payslip.paid_amount == payslip.net_amount:
+            payslip.status = Payslip.Status.PAID
+            last = payslip.installments.order_by("-id").first()
+            payslip.payment = last.payment if last else payslip.payment
+        else:
+            payslip.status = Payslip.Status.CONFIRMED
+        payslip.save(update_fields=["status", "payment", "updated_at"])
+
+
+@transaction.atomic
 def recalculate_payslip(payslip):
     """بازمحاسبه ایدمپوتنت فیش بر اساس ماژول‌های فعال پروفایل پرسنل."""
+    payslip = Payslip.objects.select_for_update().get(pk=payslip.pk)
     profile = getattr(payslip.staff, "payroll_profile", None)
     if not profile or not profile.is_active:
         for field in ("base_amount", "personal_commission_amount", "total_sales_share_amount",
@@ -136,6 +155,7 @@ def recalculate_payslip(payslip):
                       "gross_amount", "net_amount"):
             setattr(payslip, field, 0)
         payslip.save()
+        _sync_recalculated_payslip(payslip)
         return payslip
 
     start, end = _month_bounds(payslip.year, payslip.month)
@@ -194,6 +214,7 @@ def recalculate_payslip(payslip):
                             + payslip.bonus_penalty_amount + payslip.annual_bonus_amount)
     payslip.net_amount = payslip.gross_amount - payslip.leave_deduction
     payslip.save()
+    _sync_recalculated_payslip(payslip)
     return payslip
 
 
@@ -244,6 +265,7 @@ def _staff_contact(staff):
     return contact
 
 
+@transaction.atomic
 def book_accrual(payslip, actor=None):
     """ثبت سند هزینه/بدهی حقوق آخر ماه — پرسنل بستانکار (طلبکار) می‌شود.
 
@@ -253,6 +275,9 @@ def book_accrual(payslip, actor=None):
     """
     from apps.accounting.models import Payment
 
+    payslip = Payslip.objects.select_for_update().get(pk=payslip.pk)
+    if payslip.net_amount < 0:
+        raise ValueError("خالص فیش نمی‌تواند منفی باشد")
     contact = _staff_contact(payslip.staff)
     last_day = date(payslip.year, payslip.month,
                     calendar.monthrange(payslip.year, payslip.month)[1])
@@ -296,21 +321,24 @@ def accrue_month(year, month, actor=None):
     return booked
 
 
+@transaction.atomic
 def pay_payslip(payslip, account, date, actor=None, amount=None):
-    """پرداخت حقوق (کامل یا قسطی) — کسر از بدهی پرسنل و خروج از حساب بانکی.
-
-    هر قسط یک سند Payment جهت out با طرف‌حساب کارمند است (کاهش بدهی) و به
-    فیش لینک می‌شود؛ وقتی مجموع اقساط به خالص رسید فیش paid می‌شود.
-    """
+    """پرداخت حقوق (کامل یا قسطی) — کسر از بدهی پرسنل و خروج از حساب بانکی."""
     from apps.accounting.models import Payment
 
+    payslip = Payslip.objects.select_for_update().get(pk=payslip.pk)
     if payslip.status == Payslip.Status.PAID:
         raise ValueError("این فیش قبلاً به‌طور کامل پرداخت شده است.")
-    if payslip.status != Payslip.Status.CONFIRMED:
-        raise ValueError("فیش باید ابتدا تأیید شود.")
+    if payslip.status != Payslip.Status.CONFIRMED or not payslip.accrual_payment_id:
+        raise ValueError("فیش باید ابتدا تأیید و سند بدهی آن صادر شود.")
+    if account is None or not account.is_active or account.currency != "IRR":
+        raise ValueError("پرداخت حقوق فقط از حساب ریالی فعال انجام می‌شود.")
 
-    remaining = payslip.remaining_amount
-    pay_amount = min(int(amount or remaining), remaining)
+    recorded = payslip.installments.aggregate(total=Sum("amount"))["total"] or 0
+    payslip.paid_amount = recorded
+    remaining = max(0, payslip.net_amount - recorded)
+    requested = remaining if amount is None else int(amount)
+    pay_amount = min(requested, remaining)
     if pay_amount <= 0:
         raise ValueError("مبلغ پرداخت نامعتبر است.")
 
@@ -321,7 +349,7 @@ def pay_payslip(payslip, account, date, actor=None, amount=None):
         direction=Payment.Direction.OUT,
         payment_type=Payment.PaymentType.TRANSFER,
         currency="IRR",
-        amount=Decimal(pay_amount),  # مبالغ فیش و Payment هر دو ریال‌اند
+        amount=Decimal(pay_amount),
         rate_irr=1,
         date=date,
         reference=f"پرداخت حقوق {payslip.year}/{payslip.month:02d}",
@@ -330,11 +358,11 @@ def pay_payslip(payslip, account, date, actor=None, amount=None):
         created_by=actor,
     )
     PayslipPayment.objects.create(payslip=payslip, payment=payment, amount=pay_amount)
-    payslip.paid_amount += pay_amount
+    payslip.paid_amount = recorded + pay_amount
     if payslip.paid_amount >= payslip.net_amount:
         payslip.status = Payslip.Status.PAID
-        payslip.payment = payment  # آخرین سند، برای نمایش
-    payslip.save(update_fields=["paid_amount", "status", "payment"])
+        payslip.payment = payment
+    payslip.save(update_fields=["paid_amount", "status", "payment", "updated_at"])
     return payment
 
 
@@ -362,38 +390,72 @@ def open_payslips_for_contact(contact):
         return []
     return Payslip.objects.filter(
         staff=user, status=Payslip.Status.CONFIRMED,
+        paid_amount__lt=F("net_amount"), accrual_payment__isnull=False,
     ).order_by("-year", "-month")
 
 
+@transaction.atomic
 def allocate_payment_to_payslip(payment, payslip_id):
-    """لینک یک سند پرداختِ ثبت‌شده (در صفحه دریافت و پرداخت) به فیش حقوقی.
-
-    مبلغ سند نباید از مانده فیش بیشتر باشد؛ پس از تخصیص، paid_amount به‌روز و
-    در صورت تکمیل، فیش paid می‌شود.
-    """
+    """لینک سند پرداخت به فیش همان پرسنل و با سند بدهی معتبر."""
     from apps.accounting.models import Payment
 
     if payment.direction != Payment.Direction.OUT or payment.currency != "IRR":
         raise ValueError("پرداخت حقوق باید سند ریالی «پرداختی» باشد")
-    slip = Payslip.objects.filter(pk=payslip_id).first()
+    slip = Payslip.objects.select_for_update().filter(pk=payslip_id).first()
     if not slip:
         raise ValueError("فیش حقوقی یافت نشد")
-    if slip.status == Payslip.Status.PAID:
-        raise ValueError("این فیش قبلاً به‌طور کامل پرداخت شده است")
+    if slip.status != Payslip.Status.CONFIRMED or not slip.accrual_payment_id:
+        raise ValueError("فیش باید تأیید شده و سند بدهی داشته باشد")
+    if payment.contact_id != _staff_contact(slip.staff).id:
+        raise ValueError("طرف حساب سند با پرسنل فیش ناسازگار است")
     pay_amount = int(payment.amount)
     if pay_amount <= 0:
         raise ValueError("مبلغ سند نامعتبر است")
-    if pay_amount > slip.remaining_amount:
+    recorded = slip.installments.aggregate(total=Sum("amount"))["total"] or 0
+    remaining = max(0, slip.net_amount - recorded)
+    if pay_amount > remaining:
         raise ValueError(
-            f"مبلغ سند ({pay_amount:,} ریال) از مانده فیش ({slip.remaining_amount:,} ریال) بیشتر است")
+            f"مبلغ سند ({pay_amount:,} ریال) از مانده فیش ({remaining:,} ریال) بیشتر است")
 
     PayslipPayment.objects.create(payslip=slip, payment=payment, amount=pay_amount)
-    slip.paid_amount += pay_amount
+    slip.paid_amount = recorded + pay_amount
     if slip.paid_amount >= slip.net_amount:
         slip.status = Payslip.Status.PAID
         slip.payment = payment
-    slip.save(update_fields=["paid_amount", "status", "payment"])
+    slip.save(update_fields=["paid_amount", "status", "payment", "updated_at"])
     payment.note = (payment.note + " — " if payment.note else "") + \
         f"پرداخت حقوق فیش {slip.year}/{slip.month:02d}"
     payment.save(update_fields=["note"])
     return slip
+
+
+@transaction.atomic
+def reverse_payment_from_payslip(payment):
+    installment = PayslipPayment.objects.select_related("payslip").filter(payment=payment).first()
+    if not installment:
+        return False
+    slip = Payslip.objects.select_for_update().get(pk=installment.payslip_id)
+    installment.delete()
+    installments = slip.installments.select_related("payment").order_by("id")
+    slip.paid_amount = sum(item.amount for item in installments)
+    slip.status = Payslip.Status.CONFIRMED if slip.accrual_payment_id else Payslip.Status.DRAFT
+    last = installments.last()
+    slip.payment = last.payment if last else None
+    slip.save(update_fields=["paid_amount", "status", "payment", "updated_at"])
+    return True
+
+
+@transaction.atomic
+def reverse_payslip_accrual(payment):
+    slip = Payslip.objects.filter(accrual_payment=payment).first()
+    if not slip:
+        return False
+    if slip.installments.exists():
+        raise ValueError("برای برگشت سند بدهی حقوق، ابتدا اقساط را برگشت بزنید")
+    slip = Payslip.objects.select_for_update().get(pk=slip.pk)
+    slip.accrual_payment = None
+    slip.status = Payslip.Status.DRAFT
+    slip.paid_amount = 0
+    slip.payment = None
+    slip.save(update_fields=["accrual_payment", "status", "paid_amount", "payment", "updated_at"])
+    return True

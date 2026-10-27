@@ -9,7 +9,8 @@ import calendar
 from datetime import date, timedelta
 from decimal import Decimal
 
-from django.db.models import Sum
+from django.db import transaction
+from django.db.models import F, Sum
 
 from apps.accounting.models import Payment
 
@@ -28,10 +29,18 @@ def _month_bounds(year, month):
     return date(year, month, 1), date(year, month, last)
 
 
+@transaction.atomic
 def book_charge_accrual(charge, actor=None):
     """ثبت سند هزینه/بدهی یک هزینه ماهانه (یک‌بار؛ با تغییر مبلغ به‌روز می‌شود)."""
     from apps.accounting.models import Payment
 
+    charge = ExpenseCharge.objects.select_for_update().get(pk=charge.pk)
+    if charge.amount < 0:
+        raise ValueError("مبلغ هزینه نمی‌تواند منفی باشد")
+    if charge.amount == 0 and not charge.accrual_payment_id:
+        charge.status = ExpenseCharge.Status.DRAFT
+        charge.save(update_fields=["status", "updated_at"])
+        return None
     contact = charge.contact
     note = f"سند هزینه {charge.title} — {charge.year}/{charge.month:02d}"
 
@@ -63,16 +72,23 @@ def book_charge_accrual(charge, actor=None):
     return acc
 
 
+@transaction.atomic
 def pay_charge(charge, account, date_, actor=None, amount=None):
     """پرداخت هزینه (کامل یا قسطی) — کسر از بدهی و خروج از حساب بانکی."""
     from apps.accounting.models import Payment
 
+    charge = ExpenseCharge.objects.select_for_update().get(pk=charge.pk)
     if charge.status == ExpenseCharge.Status.PAID:
         raise ValueError("این هزینه قبلاً به‌طور کامل پرداخت شده است.")
-    if charge.status != ExpenseCharge.Status.CONFIRMED:
+    if charge.status != ExpenseCharge.Status.CONFIRMED or not charge.accrual_payment_id:
         raise ValueError("ابتدا سند هزینه/بدهی باید صادر شود.")
-    remaining = charge.remaining_amount
-    pay_amount = min(int(amount or remaining), remaining)
+    if account is None or not account.is_active or account.currency != "IRR":
+        raise ValueError("پرداخت هزینه فقط از حساب ریالی فعال انجام می‌شود")
+    recorded = charge.installments.aggregate(total=Sum("amount"))["total"] or 0
+    charge.paid_amount = recorded
+    remaining = max(0, charge.amount - recorded)
+    requested = remaining if amount is None else int(amount)
+    pay_amount = min(requested, remaining)
     if pay_amount <= 0:
         raise ValueError("مبلغ پرداخت نامعتبر است.")
 
@@ -90,11 +106,11 @@ def pay_charge(charge, account, date_, actor=None, amount=None):
         created_by=actor,
     )
     ExpenseChargePayment.objects.create(charge=charge, payment=payment, amount=pay_amount)
-    charge.paid_amount += pay_amount
+    charge.paid_amount = recorded + pay_amount
     if charge.paid_amount >= charge.amount:
         charge.status = ExpenseCharge.Status.PAID
         charge.payment = payment
-    charge.save(update_fields=["paid_amount", "status", "payment"])
+    charge.save(update_fields=["paid_amount", "status", "payment", "updated_at"])
     return payment
 
 
@@ -147,11 +163,13 @@ def accrue_month(year, month, actor=None):
                 "date": last_day,
             },
         )
-        if charge.amount != rec.monthly_amount or charge.title != rec.title:
-            charge.amount = rec.monthly_amount
+        if charge.title != rec.title:
             charge.title = rec.title
-            charge.save(update_fields=["amount", "title"])
+            charge.save(update_fields=["title", "updated_at"])
         if charge.status != ExpenseCharge.Status.PAID:
+            if charge.amount != rec.monthly_amount:
+                charge.amount = rec.monthly_amount
+                charge.save(update_fields=["amount", "updated_at"])
             book_charge_accrual(charge, actor=actor)
             booked["recurring"] += 1
 
@@ -169,8 +187,8 @@ def accrue_month(year, month, actor=None):
         )
         if not created and charge.status != ExpenseCharge.Status.PAID:
             charge.amount = profit
-            charge.save(update_fields=["amount"])
-        if charge.status != ExpenseCharge.Status.PAID and profit > 0:
+            charge.save(update_fields=["amount", "updated_at"])
+        if charge.status != ExpenseCharge.Status.PAID and (profit > 0 or charge.accrual_payment_id):
             book_charge_accrual(charge, actor=actor)
             booked["investor"] += 1
 
@@ -189,39 +207,78 @@ def open_charges_for_contact(contact):
     """هزینه‌های باز (تأییدشده با مانده > ۰) متعلق به یک طرف‌حساب."""
     return ExpenseCharge.objects.filter(
         contact=contact, status=ExpenseCharge.Status.CONFIRMED,
+        paid_amount__lt=F("amount"), accrual_payment__isnull=False,
     ).order_by("-year", "-month")
 
 
+@transaction.atomic
 def allocate_payment_to_charge(payment, charge_id):
-    """لینک سند پرداختِ ثبت‌شده در صفحه دریافت و پرداخت به یک هزینه باز."""
+    """لینک سند پرداخت به هزینه همان طرف‌حساب و با سند بدهی معتبر."""
     from apps.accounting.models import Payment
 
     if payment.direction != Payment.Direction.OUT or payment.currency != "IRR":
         raise ValueError("پرداخت هزینه باید سند ریالی «پرداختی» باشد")
-    charge = ExpenseCharge.objects.filter(pk=charge_id).first()
+    charge = ExpenseCharge.objects.select_for_update().filter(pk=charge_id).first()
     if not charge:
         raise ValueError("هزینه یافت نشد")
-    if charge.status == ExpenseCharge.Status.PAID:
-        raise ValueError("این هزینه قبلاً به‌طور کامل پرداخت شده است")
+    if charge.status != ExpenseCharge.Status.CONFIRMED or not charge.accrual_payment_id:
+        raise ValueError("هزینه باید تأیید شده و سند بدهی داشته باشد")
+    if payment.contact_id != charge.contact_id:
+        raise ValueError("طرف حساب سند با هزینه ناسازگار است")
     pay_amount = int(payment.amount)
     if pay_amount <= 0:
         raise ValueError("مبلغ سند نامعتبر است")
-    if pay_amount > charge.remaining_amount:
+    recorded = charge.installments.aggregate(total=Sum("amount"))["total"] or 0
+    remaining = max(0, charge.amount - recorded)
+    if pay_amount > remaining:
         raise ValueError(
-            f"مبلغ سند ({pay_amount:,} ریال) از مانده هزینه ({charge.remaining_amount:,} ریال) بیشتر است")
+            f"مبلغ سند ({pay_amount:,} ریال) از مانده هزینه ({remaining:,} ریال) بیشتر است")
 
     ExpenseChargePayment.objects.create(charge=charge, payment=payment, amount=pay_amount)
-    charge.paid_amount += pay_amount
+    charge.paid_amount = recorded + pay_amount
     if charge.paid_amount >= charge.amount:
         charge.status = ExpenseCharge.Status.PAID
         charge.payment = payment
-    charge.save(update_fields=["paid_amount", "status", "payment"])
+    charge.save(update_fields=["paid_amount", "status", "payment", "updated_at"])
     payment.note = (payment.note + " — " if payment.note else "") + \
         f"پرداخت هزینه «{charge.title}» {charge.year}/{charge.month:02d}"
     payment.save(update_fields=["note"])
     return charge
 
 
+@transaction.atomic
+def reverse_payment_from_charge(payment):
+    installment = ExpenseChargePayment.objects.select_related("charge").filter(payment=payment).first()
+    if not installment:
+        return False
+    charge = ExpenseCharge.objects.select_for_update().get(pk=installment.charge_id)
+    installment.delete()
+    installments = charge.installments.select_related("payment").order_by("id")
+    charge.paid_amount = sum(item.amount for item in installments)
+    charge.status = ExpenseCharge.Status.CONFIRMED if charge.accrual_payment_id else ExpenseCharge.Status.DRAFT
+    last = installments.last()
+    charge.payment = last.payment if last else None
+    charge.save(update_fields=["paid_amount", "status", "payment", "updated_at"])
+    return True
+
+
+@transaction.atomic
+def reverse_charge_accrual(payment):
+    charge = ExpenseCharge.objects.filter(accrual_payment=payment).first()
+    if not charge:
+        return False
+    if charge.installments.exists():
+        raise ValueError("برای برگشت سند بدهی هزینه، ابتدا اقساط را برگشت بزنید")
+    charge = ExpenseCharge.objects.select_for_update().get(pk=charge.pk)
+    charge.accrual_payment = None
+    charge.status = ExpenseCharge.Status.DRAFT
+    charge.paid_amount = 0
+    charge.payment = None
+    charge.save(update_fields=["accrual_payment", "status", "paid_amount", "payment", "updated_at"])
+    return True
+
+
+@transaction.atomic
 def create_paid_charge_from_payment(payment, category_id, title=None):
     """ثبت یکجای هزینه متفرقه هنگام پرداخت (از صفحه دریافت و پرداخت).
 

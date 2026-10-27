@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.utils import timezone
 
 from rest_framework import status
@@ -284,7 +285,7 @@ class ChargePayView(APIView):
         amount = request.data.get("amount")
         try:
             payment = pay_charge(charge, account, date_, actor=request.user,
-                                 amount=int(amount) if amount else None)
+                                 amount=int(amount) if amount not in (None, "") else None)
         except (ValueError, TypeError) as exc:
             return Response({"error": str(exc)}, status=400)
         return Response({
@@ -377,6 +378,7 @@ class InvestorKardexView(APIView):
 class InvestorMovementListView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request):
         """واریز/برداشت اصل سرمایه — با سند نقدی متناظر."""
         from apps.accounting.models import Account, Payment
@@ -388,36 +390,38 @@ class InvestorMovementListView(APIView):
             inv = Investor.objects.get(pk=d.get("investor"))
         except Investor.DoesNotExist:
             return Response({"error": "سرمایه‌گذار یافت نشد"}, status=404)
-        amount = int(d.get("amount") or 0)
+        try:
+            amount = int(d.get("amount") or 0)
+        except (TypeError, ValueError):
+            return Response({"error": "مبلغ نامعتبر است"}, status=400)
+        movement_type = d.get("movement_type")
         if amount <= 0 or not d.get("date"):
             return Response({"error": "مبلغ و تاریخ الزامی است"}, status=400)
-        account = Account.objects.filter(pk=d.get("account")).first() if d.get("account") else None
+        if movement_type not in InvestorMovement.MovementType.values:
+            return Response({"error": "نوع گردش سرمایه نامعتبر است"}, status=400)
+        account = Account.objects.filter(
+            pk=d.get("account"), currency="IRR", is_active=True,
+        ).first() if d.get("account") else None
+        if not account:
+            return Response({"error": "حساب ریالی فعال الزامی است"}, status=400)
 
-        mvt = InvestorMovement.objects.create(
-            investor=inv, movement_type=d.get("movement_type"), date=d["date"],
-            amount=amount, account=account, note=d.get("note", ""),
+        is_deposit = movement_type == InvestorMovement.MovementType.DEPOSIT
+        payment = Payment.objects.create(
+            contact=inv.contact,
+            to_account=account if is_deposit else None,
+            from_account=None if is_deposit else account,
+            direction=Payment.Direction.IN if is_deposit else Payment.Direction.OUT,
+            payment_type=Payment.PaymentType.TRANSFER,
+            currency="IRR", amount=amount, rate_irr=1, date=d["date"],
+            reference="سرمایه مشارکت" if is_deposit else "برداشت سرمایه",
+            note=f"{'واریز' if is_deposit else 'برداشت'} سرمایه {inv.contact.name}",
+            created_by=request.user,
         )
-        # سند نقدی آینه‌ای: واریز = دریافت از سرمایه‌گذار به حساب ؛ برداشت = پرداخت
-        if mvt.movement_type == InvestorMovement.MovementType.DEPOSIT:
-            Payment.objects.create(
-                contact=inv.contact, to_account=account,
-                direction=Payment.Direction.IN, payment_type=Payment.PaymentType.TRANSFER,
-                currency="IRR", amount=amount, rate_irr=1, date=d["date"],
-                reference="سرمایه مشارکت",
-                note=f"واریز سرمایه {inv.contact.name}",
-                created_by=request.user,
-            )
-        else:
-            if not account:
-                return Response({"error": "برای برداشت، حساب الزامی است"}, status=400)
-            Payment.objects.create(
-                contact=inv.contact, from_account=account,
-                direction=Payment.Direction.OUT, payment_type=Payment.PaymentType.TRANSFER,
-                currency="IRR", amount=amount, rate_irr=1, date=d["date"],
-                reference="برداشت سرمایه",
-                note=f"برداشت سرمایه {inv.contact.name}",
-                created_by=request.user,
-            )
+        mvt = InvestorMovement.objects.create(
+            investor=inv, movement_type=movement_type, date=d["date"],
+            amount=amount, account=account, payment=payment,
+            note=d.get("note", ""), created_by=request.user,
+        )
         return Response(InvestorMovementSerializer(mvt).data, status=201)
 
 

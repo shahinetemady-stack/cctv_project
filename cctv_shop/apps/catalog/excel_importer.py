@@ -47,7 +47,6 @@ COLUMNS = {
     "سایز":             "modem_size",
     # بدنه
     "جنس بدنه":         "housing_material",
-    "نوع بدنه":         "housing_type",
     "سایز دوربین":      "housing_size",
     "قابلیت میکروفون": "has_microphone",
 }

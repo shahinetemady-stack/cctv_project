@@ -273,3 +273,9 @@ TOROB_PUBLIC_KEY = config(
 )
 # توکن Bearer وب‌هوک ترب — از پشتیبانی ترب گرفته می‌شود؛ خالی یعنی ارسال وب‌هوک غیرفعال
 TOROB_WEBHOOK_TOKEN = config("TOROB_WEBHOOK_TOKEN", default="")
+
+# ─── IndexNow (اطلاع‌رسانی فوری ایندکس به Bing/Yandex و…) ────────────────────
+# کلید عمومی است (در <KEY>.txt روی ریشه دامنه سرو می‌شود) — مقدار پیش‌فرض همان
+# فایل public/ فرانت‌اند است. خالی = ارسال غیرفعال.
+SITE_URL = config("SITE_URL", default="https://doorbinkar.com")
+INDEXNOW_KEY = config("INDEXNOW_KEY", default="c23170d91809915f6cb710a238131f28")

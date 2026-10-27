@@ -18,6 +18,7 @@ GET  /api/publisher/jobs/<pk>/           جزئیات کار + لاگ‌ها
 POST /api/publisher/logs/<pk>/retry/     تلاش مجدد یک لاگ ناموفق
 GET/POST /api/publisher/music/           کتابخانهٔ موزیک (لیست/آپلود — publisher_publish)
 GET  /api/publisher/insights/            گزارش عملکرد پست‌های اینستاگرام (publisher_view)
+GET/POST /api/publisher/settings/        وضعیت/تغییر کلید API ویدیو Veo — ماسک‌شده (publisher_credentials)
 """
 
 from django.db import transaction
@@ -31,7 +32,7 @@ from apps.catalog.views import _has_staff_perm
 
 from .contentgen import CONTENT_CATEGORIES, generate_caption
 from .crypto import encrypt_json
-from .models import ChannelCredential, ChannelPost, ContentIdea, ContentInsight, MusicTrack, Platform, PublishJob, PublishLog
+from .models import ChannelCredential, ChannelPost, ContentIdea, ContentInsight, MusicTrack, Platform, PublisherSettings, PublishJob, PublishLog
 
 def _forbidden():
     return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
@@ -60,11 +61,14 @@ def _post_payload(request, post):
         "scheduled_at": post.scheduled_at.isoformat() if post.scheduled_at else None,
         "hashtags": post.hashtags,
         "idea_id": post.idea_id,
+        "idea_signal": post.idea.signal if post.idea_id and post.idea else "",
         "image_url": _media_url(request, post.image),
         "video_url": _media_url(request, post.video),
         "hook_status": post.hook_status,
         "hook_clip_url": _media_url(request, post.hook_clip),
         "hook_error": post.hook_error,
+        "hook_provider": post.hook_provider,
+        "video_style": getattr(post, "video_style", "auto"),
         "link": post.link,
         "created_by": post.created_by.get_full_name() if post.created_by else None,
         "created_at": post.created_at.isoformat() if post.created_at else None,
@@ -235,7 +239,7 @@ class PostListCreateView(APIView):
     def get(self, request):
         if not _has_staff_perm(request.user, "publisher_view"):
             return _forbidden()
-        posts = ChannelPost.objects.select_related("created_by")
+        posts = ChannelPost.objects.select_related("created_by", "idea")
         status = request.query_params.get("status")
         if status in ChannelPost.ApprovalStatus.values:
             posts = posts.filter(approval_status=status)
@@ -478,7 +482,8 @@ class PostGenerateHookView(APIView):
 
         post.hook_status = ChannelPost.HookStatus.BUILDING
         post.hook_error = ""
-        post.save(update_fields=["hook_status", "hook_error"])
+        post.hook_provider = ""
+        post.save(update_fields=["hook_status", "hook_error", "hook_provider"])
 
         import subprocess
         import sys
@@ -492,6 +497,78 @@ class PostGenerateHookView(APIView):
             start_new_session=True,
         )
         return Response({"hook_status": post.hook_status}, status=202)
+
+
+class PublisherSettingsView(APIView):
+    """
+    GET  /api/publisher/settings/ — وضعیت کلیدها (فقط ماسک ۴ رقم آخر، هرگز مقدار کامل)  (publisher_credentials)
+    POST /api/publisher/settings/ — هر فیلد اختیاری است و فقط در صورت حضور تغییر می‌کند:
+        veo_api_key / hf_token — مقدار غیرخالی ذخیره، "__clear__" پاک می‌کند
+        hf_space — رشتهٔ دلخواه (خالی یعنی پیش‌فرض رله)
+    """
+    permission_classes = [IsAuthenticated]
+
+    @staticmethod
+    def _payload():
+        st = PublisherSettings.get_instance()
+        veo = st.veo_api_key.strip()
+        hf = st.hf_token.strip()
+        return {
+            "veo_api_key_set": bool(veo),
+            "veo_api_key_hint": f"…{veo[-4:]}" if veo else "",
+            "hf_token_set": bool(hf),
+            "hf_token_hint": f"…{hf[-4:]}" if hf else "",
+            "hf_space": st.hf_space.strip(),
+        }
+
+    def get(self, request):
+        if not _has_staff_perm(request.user, "publisher_credentials"):
+            return _forbidden()
+        return Response(self._payload())
+
+    def post(self, request):
+        if not _has_staff_perm(request.user, "publisher_credentials"):
+            return _forbidden()
+        st = PublisherSettings.get_instance()
+        updated = []
+        for field in ("veo_api_key", "hf_token"):
+            if field not in request.data:
+                continue
+            raw = str(request.data.get(field) or "").strip()
+            if raw == "__clear__":
+                setattr(st, field, "")
+            elif not raw:
+                return Response({"error": "کلید خالی است — برای حذف «__clear__» بفرستید"}, status=400)
+            else:
+                setattr(st, field, raw)
+            updated.append(field)
+        if "hf_space" in request.data:
+            st.hf_space = str(request.data.get("hf_space") or "").strip()
+            updated.append("hf_space")
+        if updated:
+            st.save(update_fields=updated)
+        return Response(self._payload())
+
+
+class PostStyleView(APIView):
+    """POST /api/publisher/posts/<pk>/style/  (publisher_publish) — تغییر سبک ویدیو.
+    بدنه: {"video_style": "auto"|"motion"} — motion فقط برای reel معنا دارد."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        if not _has_staff_perm(request.user, "publisher_publish"):
+            return _forbidden()
+        post = ChannelPost.objects.filter(pk=pk).first()
+        if post is None:
+            return Response({"error": "پست یافت نشد"}, status=404)
+        style = request.data.get("video_style")
+        if style not in ChannelPost.VideoStyle.values:
+            return Response({"error": "سبک نامعتبر است — auto یا motion"}, status=400)
+        if style == ChannelPost.VideoStyle.MOTION and post.content_type != ChannelPost.ContentType.REEL:
+            return Response({"error": "سبک موشن‌گرافیک فقط برای ریل در دسترس است"}, status=400)
+        post.video_style = style
+        post.save(update_fields=["video_style"])
+        return Response(_post_payload(request, post))
 
 
 class PublishCreateView(APIView):

@@ -25,7 +25,7 @@ export default function ArticleDetailPage() {
   if (!article) return <div className="container-main py-20 text-center text-gray-steel">مقاله یافت نشد</div>
 
   // ─── SEO/GEO ─────────────────────────────────────────────────
-  const canonical = `/blog/${article.slug}`
+  const canonical = `/blog/${article.slug}/`
   const articleLd = {
     '@context': 'https://schema.org',
     '@type': 'Article',

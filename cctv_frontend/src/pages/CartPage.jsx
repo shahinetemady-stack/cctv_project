@@ -7,6 +7,7 @@ import useCartStore from '../store/useCartStore'
 import useAuthStore from '../store/useAuthStore'
 import { PageLoader, EmptyState } from '../components/ui'
 import OverdueBanner from '../components/OverdueBanner'
+import Seo from '../components/Seo'
 import { formatPrice, formatNumber } from '../utils/format'
 
 // سقف خرید مستقیم با پرداخت آنلاین (ریال) — هم‌راستا با DIRECT_PURCHASE_MAX_RIAL بک‌اند
@@ -95,7 +96,7 @@ export default function CartPage() {
   const { isPartner } = useAuthStore()
   const [checkingOut, setCheckingOut] = useState(false)
   const [address, setAddress] = useState("")
-  const [shippingMethod, setShippingMethod] = useState("post")
+  const [shippingMethod, setShippingMethod] = useState("courier")
   const [freightCompany, setFreightCompany] = useState("")
 
   const { data: cart, isLoading } = useQuery({
@@ -139,6 +140,10 @@ export default function CartPage() {
           `شما ${Number(order.overdue_warning.count).toLocaleString('fa-IR')} قلم تسویه معوقه به مبلغ ${formatPrice(order.overdue_warning.total)} دارید. سفارش شما در اولویت بررسی قرار می‌گیرد.`
         )
       }
+      // سفارش بستانکارها همین‌جا از حسابشان تسویه شده — بدون درگاه
+      if (order.status === 'paid') {
+        toast.success('سفارش شما از بستانکاری حساب‌تان تسویه شد و نیازی به پرداخت نیست.', { duration: 6000 })
+      }
       // سفارش نقدی تا سقف، همین‌جا تأیید شده — مستقیم به درگاه بانک
       if (order.status === 'awaiting_payment' && !order.split) {
         try {
@@ -168,6 +173,7 @@ export default function CartPage() {
 
   return (
     <div className="container-main py-8 max-w-4xl">
+      <Seo title="سبد خرید" noindex />
       <h1 className="font-display font-bold text-2xl text-white mb-8">سبد خرید</h1>
 
       <OverdueBanner />
@@ -214,9 +220,8 @@ export default function CartPage() {
               <>
             <div>
               <label className="label text-xs">روش ارسال</label>
-              <div className="grid grid-cols-3 gap-2 mt-1">
+              <div className="grid grid-cols-2 gap-2 mt-1">
                 {[
-                  {value: 'post', label: '📮 پست'},
                   {value: 'courier', label: '🛵 پیک'},
                   {value: 'freight', label: '🚛 باربری'},
                 ].map(m => (

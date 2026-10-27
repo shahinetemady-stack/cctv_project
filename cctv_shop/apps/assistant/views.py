@@ -158,8 +158,6 @@ def _spec_summary(p: Product) -> str:
         parts.append(f"لنز {p.lens_type}")
     if p.focal_ratio and p.focal_ratio != "معمولی":
         parts.append(p.focal_ratio)
-    if p.housing_type:
-        parts.append(f"بدنه {p.housing_type}")
     if p.housing_material:
         parts.append(p.housing_material)
     if p.has_microphone:
@@ -170,8 +168,10 @@ def _spec_summary(p: Product) -> str:
         parts.append("سیم‌کارت‌خور")
     # مشخصات داینامیک دسته (رزولوشن، نوع لنز، دید در شب و…) — همان دیتاشیت صفحه محصول
     for k, v in (p.dynamic_specs or {}).items():
+        if isinstance(v, str) and v.strip().lower() in ("true", "false"):
+            v = v.strip().lower() == "true"
         if v not in (None, "", False) and len(parts) < 14:
-            parts.append(f"{k}: {v}")
+            parts.append(f"{k}: {'دارد' if v is True else v}")
     if p.short_description:
         parts.append(p.short_description[:100])
     return "، ".join(parts)

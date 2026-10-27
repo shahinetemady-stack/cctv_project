@@ -20,6 +20,7 @@ export default function Seo({
   image,
   geoTags = [],
   jsonLd,
+  noindex = false,
 }) {
   const canonicalUrl = absoluteUrl(canonical)
   const imageUrl = absoluteUrl(image)
@@ -31,6 +32,7 @@ export default function Seo({
 
   return (
     <Helmet>
+      {noindex && <meta name="robots" content="noindex, nofollow" />}
       {title && <title>{title}</title>}
       {description && <meta name="description" content={description} />}
       {keywords && <meta name="keywords" content={Array.isArray(keywords) ? keywords.join(', ') : keywords} />}

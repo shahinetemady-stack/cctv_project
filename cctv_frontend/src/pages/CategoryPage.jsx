@@ -63,7 +63,7 @@ export default function CategoryPage() {
   const totalPages = productsData ? Math.ceil(productsData.count / 24) : 0
 
   // ─── SEO/GEO ─────────────────────────────────────────────────
-  const canonical = `/categories/${category.slug}`
+  const canonical = `/categories/${category.slug}/`
   const breadcrumbLd = {
     '@context': 'https://schema.org',
     '@type': 'BreadcrumbList',

@@ -75,20 +75,31 @@ function InvoiceDetail({ id, onClose, onEdit }) {
     queryFn: () => api.get(`/accounting/purchase-invoices/${id}/`).then(r => r.data),
   })
   const qc = useQueryClient()
+  const { data: accounts = [] } = useQuery({
+    queryKey: ['accounts'],
+    queryFn: () => api.get('/accounting/accounts/').then(r => r.data),
+  })
 
   const payMut = useMutation({
     mutationFn: (d) => api.post('/accounting/payments/', d).then(r => r.data),
     onSuccess: () => {
       qc.invalidateQueries(['invoice-detail', id])
       qc.invalidateQueries(['purchase-invoices'])
+      setPayForm(f => ({ ...f, show: false, amount: '', reference: '', from_account_id: '' }))
     },
+    onError: (e) => setPayForm(f => ({ ...f, error: e.response?.data?.error || 'خطا در ثبت پرداخت' })),
   })
 
   const [payForm, setPayForm] = useState({
     show: false, direction: 'out', payment_type: 'transfer',
-    currency: 'CNY', amount: '', rate_irr: '',
+    currency: 'IRR', amount: '', rate_irr: '', from_account_id: '', error: '',
     date: todayTehran(), reference: '',
   })
+  useEffect(() => {
+    if (inv?.id) {
+      setPayForm(f => ({ ...f, currency: inv.purchase_type === 'foreign' ? 'CNY' : 'IRR' }))
+    }
+  }, [inv?.id])
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const deleteMut = useMutation({
@@ -277,15 +288,36 @@ function InvoiceDetail({ id, onClose, onEdit }) {
                 </select>
               </div>
               <div>
+                <label className="label text-xs mb-1 block">حساب مبدأ *</label>
+                <select value={payForm.from_account_id}
+                  onChange={e => setPayForm(f => ({ ...f, from_account_id: e.target.value }))}
+                  className="input text-xs">
+                  <option value="">انتخاب حساب</option>
+                  {accounts.filter(a => a.currency === payForm.currency && (
+                    payForm.payment_type === 'cash'
+                      ? ['cash', 'petty'].includes(a.account_type)
+                      : ['bank', 'virtual'].includes(a.account_type)
+                  )).map(a => <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>)}
+                </select>
+              </div>
+              <div>
                 <label className="label text-xs mb-1 block">مرجع</label>
                 <input value={payForm.reference} onChange={e => setPayForm(f => ({ ...f, reference: e.target.value }))} className="input text-xs" />
               </div>
             </div>
+            {payForm.error && <div className="text-xs text-red-400">{payForm.error}</div>}
             <div className="flex gap-2">
               <button onClick={() => {
+                if (!(Number(payForm.amount) > 0)) return setPayForm(f => ({ ...f, error: 'مبلغ معتبر را وارد کنید' }))
+                if (!payForm.from_account_id) return setPayForm(f => ({ ...f, error: 'حساب مبدأ را انتخاب کنید' }))
+                if (payForm.currency !== 'IRR' && !(Number(payForm.rate_irr) > 0)) {
+                  return setPayForm(f => ({ ...f, error: 'نرخ تبدیل به ریال را وارد کنید' }))
+                }
+                setPayForm(f => ({ ...f, error: '' }))
                 payMut.mutate({ contact_id: inv.supplier.id, invoice_id: id, direction: 'out', ...payForm })
-                setPayForm(f => ({ ...f, show: false, amount: '', reference: '' }))
-              }} className="btn-primary text-xs px-4 py-2">ثبت</button>
+              }} disabled={payMut.isPending} className="btn-primary text-xs px-4 py-2 disabled:opacity-50">
+                {payMut.isPending ? 'در حال ثبت...' : 'ثبت'}
+              </button>
               <button onClick={() => setPayForm(f => ({ ...f, show: false }))} className="btn-secondary text-xs px-4 py-2">انصراف</button>
             </div>
           </div>

@@ -64,12 +64,12 @@ class ProductAdmin(admin.ModelAdmin):
         }),
         ("ویژگی‌های برد دوربین", {
             "fields": ("board_name", "board_system", "board_resolution",
-                       "sensor_name", "sensor_size", "ai_processor", "board_dimensions"),
+                       "sensor_name", "sensor_size", "ai_processor", "board_dimensions", "board_fps"),
             "classes": ("collapse",),
         }),
         ("ویژگی‌های لنز دوربین", {
-            "fields": ("lens_name", "lens_degree", "lens_type",
-                       "focal_ratio", "lens_resolution"),
+            "fields": ("lens_degree", "lens_resolution", "focal_ratio", "lens_aperture",
+                       "lens_image_size", "lens_mount", "lens_kit", "lens_holder_pitch", "lens_fov"),
             "classes": ("collapse",),
         }),
         ("ویژگی‌های متعلقات", {
@@ -78,7 +78,7 @@ class ProductAdmin(admin.ModelAdmin):
             "classes": ("collapse",),
         }),
         ("ویژگی‌های بدنه دوربین", {
-            "fields": ("housing_material", "housing_type", "housing_size", "has_microphone"),
+            "fields": ("housing_material", "housing_size", "has_microphone"),
             "classes": ("collapse",),
         }),
         ("دیتاشیت", {"fields": ("datasheet_pdf",)}),
@@ -190,7 +190,16 @@ class PackageAdmin(admin.ModelAdmin):
     savings_display.short_description = "صرفه‌جویی"
 
 
-from apps.catalog.models import ProductPriceHistory
+from apps.catalog.models import ProductPriceHistory, ProductReview
+
+@admin.register(ProductReview)
+class ProductReviewAdmin(admin.ModelAdmin):
+    list_display  = ["product", "author_name", "rating", "is_approved", "created_at"]
+    list_filter   = ["is_approved", "rating", "created_at"]
+    list_editable = ["is_approved"]
+    search_fields = ["product__name", "author_name", "body"]
+    autocomplete_fields = ["product"]
+
 
 @admin.register(ProductPriceHistory)
 class ProductPriceHistoryAdmin(admin.ModelAdmin):

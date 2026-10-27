@@ -350,11 +350,11 @@ function PayslipsTab() {
                   return (
                     <tr key={s.id} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
                       <td style={{ ...tdS, fontWeight: 600 }}>{s.staff_name}</td>
-                      <td style={tdS}>{fmt(s.gross_amount)} ت</td>
+                      <td style={tdS}>{fmt(s.gross_amount)} ریال</td>
                       <td style={{ ...tdS, color: Number(s.leave_deduction) ? '#FF3B3B' : 'var(--color-text-secondary)' }}>
-                        {Number(s.leave_deduction) ? fmt(s.leave_deduction) + ' ت' : '—'}
+                        {Number(s.leave_deduction) ? fmt(s.leave_deduction) + ' ریال' : '—'}
                       </td>
-                      <td style={{ ...tdS, fontWeight: 700, color: '#FBC02D' }}>{fmt(s.net_amount)} ت</td>
+                      <td style={{ ...tdS, fontWeight: 700, color: '#FBC02D' }}>{fmt(s.net_amount)} ریال</td>
                       <td style={tdS}>
                         <span className={`badge ${badge.cls}`} style={{ fontSize: 10, padding: '2px 8px' }}>{badge.label}</span>
                         {s.status === 'confirmed' && Number(s.paid_amount) > 0 && (
@@ -672,7 +672,7 @@ function StaffProfilesTab() {
                           </div>
                         )}
                       </td>
-                      <td style={{ ...tdS, fontWeight: 600 }}>{p?.has_base_salary ? fmt(p.base_amount) + ' ت' : '—'}</td>
+                      <td style={{ ...tdS, fontWeight: 600 }}>{p?.has_base_salary ? fmt(p.base_amount) + ' ریال' : '—'}</td>
                       <td style={tdS}>
                         <button onClick={() => setEditing(s)}
                           className="text-xs px-2 py-1 rounded-lg bg-brand/15 text-brand hover:bg-brand/25 transition-all">
@@ -921,7 +921,7 @@ function LeaveBonusTab() {
                     <tr key={r.id} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)', background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
                       <td style={{ ...tdS, fontWeight: 600 }}>{r.staff_name}</td>
                       <td style={{ ...tdS, fontWeight: 700, color: Number(r.amount) >= 0 ? '#00C896' : '#FF3B3B', whiteSpace: 'nowrap' }}>
-                        {Number(r.amount) >= 0 ? '+' : '−'}{fmt(Math.abs(Number(r.amount)))} ت
+                        {Number(r.amount) >= 0 ? '+' : '−'}{fmt(Math.abs(Number(r.amount)))} ریال
                       </td>
                       <td style={{ ...tdS, color: 'var(--color-text-secondary)', maxWidth: 110 }} className="truncate">{r.note || '—'}</td>
                       <td style={{ ...tdS, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>{jalaliText(r.date)}</td>

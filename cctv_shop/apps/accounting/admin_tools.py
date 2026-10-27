@@ -107,6 +107,10 @@ def _soft_reset():
     n_c = Contact.objects.count()
     Contact.objects.all().update(opening_balance_irr=0, opening_balance_cny=0)
     report["مانده اول دوره طرف حساب‌ها صفر شد"] = n_c
+    from apps.users.models import UserProfile
+    UserProfile.objects.all().update(
+        opening_balance_irr=0, opening_balance_cny=0, payment_credit_irr=0,
+    )
     # موجودی اولیه حساب‌های بانکی/صندوق هم صفر می‌شود (تراکنش‌ها که حذف شدند)
     from apps.accounting.models import Account
     n_a = Account.objects.count()

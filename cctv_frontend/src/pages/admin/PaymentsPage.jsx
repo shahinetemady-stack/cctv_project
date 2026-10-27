@@ -288,9 +288,22 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
   const deductionValue = form.account_amount !== '' ? form.account_amount : computedDeduction()
 
   const mut = useMutation({
-    mutationFn: (d) => editing
-      ? api.patch(`/accounting/payments/${editing.id}/`, d).then(r => r.data)
-      : api.post('/accounting/payments/', d).then(r => r.data),
+    mutationFn: async (d) => {
+      if (!editing) return api.post('/accounting/payments/', d).then(r => r.data)
+      const { cheques: chequeRows, ...payload } = d
+      for (const cheque of chequeRows || []) {
+        if (cheque.id) {
+          await api.patch(`/accounting/cheques/${cheque.id}/`, {
+            serial_number: cheque.serial_number,
+            account_number: cheque.account_number || '',
+            bank_branch: cheque.bank_branch || '',
+            cheque_date: cheque.cheque_date,
+            amount: cheque.amount,
+          })
+        }
+      }
+      return api.patch(`/accounting/payments/${editing.id}/`, payload).then(r => r.data)
+    },
     onSuccess: (r) => {
       qc.invalidateQueries(['payments-list'])
       qc.invalidateQueries(['accounts'])
@@ -375,9 +388,10 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
         cheque_mode: 'endorsed',
         cheque_ids: selectedChequeIds,
       }),
-      ...(isCheque && !isEndorseMode && !editing && {
-        cheque_mode: isReceive ? 'received' : 'issued',
+      ...(isCheque && !isEndorseMode && {
+        ...(!editing && { cheque_mode: isReceive ? 'received' : 'issued' }),
         cheques: cheques.map(c => ({
+          id: c.id,
           serial_number: c.serial_number, account_number: c.account_number || '',
           bank_branch: c.bank_branch || '', cheque_date: c.cheque_date,
           amount: Number(String(c.amount).replace(/[^\d]/g, '')) || 0,
@@ -496,7 +510,7 @@ export function PaymentForm({ direction, editing = null, onClose, onSuccess }) {
           </div>
 
           {/* نوع عملیات سرمایه‌گذار — سود مشارکت (لینک به هزینه باز سود) یا برداشت اصل سرمایه */}
-          {modeInvestor && selectedContact && investorContactIds.has(String(selectedContact.id)) && (
+          {modeInvestor && selectedContact && investorContactIds.has(rawId(selectedContact.id)) && (
             <div>
               <label className="label text-xs mb-1 block">نوع عملیات</label>
               <select value={form.investor_mode} onChange={e => setForm(f => ({ ...f, investor_mode: e.target.value }))}
@@ -990,10 +1004,7 @@ function TransferForm({ onClose }) {
   }, [rateData])
 
   const mut = useMutation({
-    mutationFn: async (payloads) => {
-      await api.post('/accounting/payments/', payloads[0])
-      if (payloads[1]) return api.post('/accounting/payments/', payloads[1]).then(r => r.data)
-    },
+    mutationFn: (payload) => api.post('/accounting/payments/internal-transfer/', payload).then(r => r.data),
     onSuccess: () => {
       qc.invalidateQueries(['payments-list'])
       qc.invalidateQueries(['accounts'])
@@ -1028,29 +1039,15 @@ function TransferForm({ onClose }) {
       if (!rate || rate <= 0) return setMsg({ type: 'error', text: 'نرخ تبدیل را وارد کنید' })
     }
     setMsg(null)
-    const base = {
-      payment_type: 'transfer',
+    mut.mutate({
+      from_account_id: form.from_account_id,
+      to_account_id: form.to_account_id,
+      amount: amountFrom,
+      rate_irr: rate,
       date: form.date,
       reference: form.reference,
-      rate_irr: rate,
       note: form.note,
-    }
-    if (crossCurrency) {
-      // دو رکورد: برداشت از مبدا + واریز به مقصد با ارز و مبلغ خودشان
-      mut.mutate([
-        { ...base, direction: 'out', from_account_id: form.from_account_id,
-          currency: fromAcc.currency, amount: amountFrom,
-          note: `جابجایی به ${toAcc.name}${form.note ? ' — ' + form.note : ''}` },
-        { ...base, direction: 'in', to_account_id: form.to_account_id,
-          currency: toAcc.currency, amount: Math.round(amountTo * 100) / 100,
-          note: `جابجایی از ${fromAcc.name}${form.note ? ' — ' + form.note : ''}` },
-      ])
-    } else {
-      mut.mutate([
-        { ...base, direction: 'out', from_account_id: form.from_account_id,
-          to_account_id: form.to_account_id, currency: fromAcc?.currency || 'IRR', amount: amountFrom },
-      ])
-    }
+    })
   }
 
   return (

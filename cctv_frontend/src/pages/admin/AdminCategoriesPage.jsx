@@ -6,7 +6,7 @@ import api from '../../services/api'
 import { PageLoader } from '../../components/ui'
 import CategoryFieldsManager from '../../components/admin/CategoryFieldsManager'
 
-const TYPE_LABEL = { board: 'برد', lens: 'لنز', modem: 'متعلقات', housing: 'بدنه', other: 'سایر' }
+const TYPE_LABEL = { board: 'برد', lens: 'لنز', modem: 'مودم', housing: 'بدنه', accessory: 'لوازم جانبی', recorder: 'برد دستگاه ضبط', other: 'سایر' }
 
 // ─── صفحه مدیریت دسته‌بندی ────────────────────────────────────
 export default function AdminCategoriesPage() {

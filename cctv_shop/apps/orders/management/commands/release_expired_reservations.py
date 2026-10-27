@@ -10,11 +10,10 @@ What this command does:
   1. پیدا کردن تمام StockReservation‌هایی که:
        - is_released = False  (هنوز آزاد نشده)
        - reserved_until < now  (زمانشان گذشته)
-  2. آزاد کردن هر رزرو:
-       - variant.reserved_qty -= reservation.quantity  (فقط reserved_qty)
-       - stock_quantity دست نمی‌خورد
-  3. تغییر وضعیت سفارش‌های مرتبط به CANCELLED
-       (فقط اگر همه آیتم‌های سفارش آزاد شده باشند)
+  2. فقط برای سفارش‌های «خرید مستقیم» (مشتری عمومی — پرداخت با درگاه):
+       - اگر مشتری بستانکار باشد، سفارش از بستانکاری تسویه می‌شود (نه کنسل)
+       - وگرنه رزرو آزاد و سفارش CANCELLED می‌شود
+  3. سفارش‌های همکار/استعلامی دست‌نخورده می‌مانند — پرسنل وضعیتشان را تعیین می‌کند
   4. لاگ خروجی برای cron و بررسی اعداد
 """
 
@@ -73,6 +72,17 @@ class Command(BaseCommand):
         for order_id, reservations in order_reservation_map.items():
             order = reservations[0].order  # already select_related
 
+            # فقط سفارش‌های خرید مستقیم (مشتری عمومی — پرداخت با درگاه) خودکار
+            # مدیریت می‌شوند؛ سفارش‌های همکار/استعلامی دست‌نخورده می‌مانند تا
+            # پرسنل وضعیتشان را تعیین کند (رزروشان هم آزاد نمی‌شود)
+            if order.order_type != Order.OrderType.DIRECT_PURCHASE:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"  ⚠ سفارش {order.order_number} همکار/استعلامی است — به پرسنل سپرده شد"
+                    )
+                )
+                continue
+
             # فقط سفارش‌هایی که در وضعیت "در انتظار پرداخت" هستند کنسل می‌شوند
             if order.status != Order.Status.AWAITING_PAYMENT:
                 self.stdout.write(
@@ -87,8 +97,32 @@ class Command(BaseCommand):
             )
 
             if not dry_run:
+                # قبل از کنسل: اگر مشتری بستانکار است سفارش از حسابش تسویه شود
+                from apps.orders.services import try_settle_order_with_credit
+                try:
+                    if try_settle_order_with_credit(order):
+                        self.stdout.write(
+                            self.style.SUCCESS(
+                                f"      ✓ سفارش {order.order_number} از بستانکاری مشتری تسویه شد (کنسل نشد)"
+                            )
+                        )
+                        continue
+                except Exception as exc:
+                    # تسویه ناقص rollback شد — این نوبت کنسل نمی‌شود تا بررسی شود
+                    self.stdout.write(
+                        self.style.ERROR(
+                            f"      ✗ خطا در تسویه از بستانکاری سفارش {order.order_number}: {exc}"
+                        )
+                    )
+                    continue
+
+                invoice = getattr(order, "sale_invoice", None)
+                if invoice and (invoice.sale_payments.exists() or invoice.paid_amount > 0):
+                    self.stdout.write(self.style.ERROR(
+                        f"      ✗ سفارش {order.order_number} دریافت دارد؛ ابتدا سند دریافت باید برگشت بخورد"
+                    ))
+                    continue
                 with transaction.atomic():
-                    # آزاد کردن هر رزرو
                     for reservation in reservations:
                         self.stdout.write(
                             f"      آزاد کردن {reservation.quantity}× "
@@ -99,13 +133,8 @@ class Command(BaseCommand):
                         reservation.release(reason="expired")
                         released_count += 1
 
-                    # کنسل کردن سفارش
-                    order.status = Order.Status.CANCELLED
-                    order.admin_notes = (
-                        (order.admin_notes + "\n" if order.admin_notes else "")
-                        + f"[AUTO] کنسل شد — مهلت پرداخت منقضی — {timezone.localtime(now).strftime('%Y-%m-%d %H:%M')}"
-                    )
-                    order.save(update_fields=["status", "admin_notes", "updated_at"])
+                    from apps.orders.services import cancel_order
+                    order = cancel_order(order, reason="expired")
                     cancelled_order_ids.add(order_id)
 
                     self.stdout.write(

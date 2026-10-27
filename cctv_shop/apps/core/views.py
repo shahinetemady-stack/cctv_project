@@ -406,6 +406,81 @@ def _torob_product_meta(product, request):
     return ctx
 
 
+def _offer_shipping_return():
+    """فیلدهای اجباری جدید گوگل برای Offer — سیاست مرجوعی و جزئیات ارسال.
+    بدون این دو فیلد سرچ کنسول روی Product snippets / Merchant listings
+    اخطار زرد Missing field می‌دهد. مقادیر ثابت سیاست فروشگاه است."""
+    return {
+        "hasMerchantReturnPolicy": {
+            "@type": "MerchantReturnPolicy",
+            "applicableCountry": "IR",
+            "returnPolicyCategory": "https://schema.org/MerchantReturnFiniteReturnWindow",
+            "merchantReturnDays": 7,
+            "returnMethod": "https://schema.org/ReturnByMail",
+            "returnFees": "https://schema.org/FreeReturn",
+        },
+        "shippingDetails": {
+            "@type": "OfferShippingDetails",
+            "shippingRate": {
+                "@type": "MonetaryAmount",
+                "value": 0,
+                "currency": "IRR",
+            },
+            "shippingDestination": {
+                "@type": "DefinedRegion",
+                "addressCountry": "IR",
+            },
+            "deliveryTime": {
+                "@type": "ShippingDeliveryTime",
+                "handlingTime": {
+                    "@type": "QuantitativeValue",
+                    "minValue": 0,
+                    "maxValue": 1,
+                    "unitCode": "DAY",
+                },
+                "transitTime": {
+                    "@type": "QuantitativeValue",
+                    "minValue": 1,
+                    "maxValue": 3,
+                    "unitCode": "DAY",
+                },
+            },
+        },
+    }
+
+
+def _review_schema(obj):
+    """aggregateRating + review از نظرهای تأییدشده دیتابیس.
+    اگر نظر تأییدشده‌ای نباشد چیزی برنمی‌گردد — گوگل امتیاز ساختگی/پیش‌فرض را
+    خلاف دستورالعمل می‌داند و بابتش جریمه دستی می‌دهد، پس فیلد فیک نمی‌سازیم."""
+    from django.db.models import Avg
+    reviews = list(obj.reviews.filter(is_approved=True).order_by("-created_at")[:10])
+    if not reviews:
+        return None, None
+    avg = obj.reviews.filter(is_approved=True).aggregate(a=Avg("rating"))["a"]
+    approved_count = obj.reviews.filter(is_approved=True).count()
+    aggregate = {
+        "@type": "AggregateRating",
+        "ratingValue": round(float(avg), 1),
+        "reviewCount": approved_count,
+        "bestRating": 5,
+        "worstRating": 1,
+    }
+    review_list = [{
+        "@type": "Review",
+        "author": {"@type": "Person", "name": r.author_name},
+        "datePublished": r.created_at.date().isoformat(),
+        "reviewBody": r.body or r.author_name,
+        "reviewRating": {
+            "@type": "Rating",
+            "ratingValue": r.rating,
+            "bestRating": 5,
+            "worstRating": 1,
+        },
+    } for r in reviews]
+    return aggregate, review_list
+
+
 def _search_page_context(obj, kind, request):
     """کنتکست کامل صفحه برای خزنده‌های جستجو/AI: بدنه، مشخصات، قیمت، JSON-LD، لینک‌های داخلی."""
     import json
@@ -428,11 +503,15 @@ def _search_page_context(obj, kind, request):
             ("سیستم", obj.board_system), ("رزولوشن", obj.board_resolution),
             ("سنسور", obj.sensor_name), ("اندازه سنسور", obj.sensor_size),
             ("پردازنده", obj.ai_processor), ("ابعاد برد", obj.board_dimensions),
+            ("نرخ فریم", obj.board_fps),
             ("رزولوشن لنز", obj.lens_resolution), ("فاصله کانونی", obj.lens_degree),
-            ("نوع لنز", obj.lens_type), ("نوع کاربرد", obj.focal_ratio),
+            ("کلاس نوری لنز", obj.focal_ratio), ("ضریب دیافراگم", obj.lens_aperture),
+            ("سایز سنسور سازگار", obj.lens_image_size), ("نوع مانت / رزوه", obj.lens_mount),
+            ("اقلام همراه", obj.lens_kit), ("فاصله پیچ هولدر", obj.lens_holder_pitch),
+            ("زاویه دید افقی", obj.lens_fov),
             ("مدل", obj.modem_model), ("نوع", obj.modem_type),
             ("ولتاژ کاری", obj.voltage), ("آمپر خروجی", obj.ampere_output),
-            ("جنس بدنه", obj.housing_material), ("نوع بدنه", obj.housing_type),
+            ("جنس بدنه", obj.housing_material),
             ("سایز دوربین", obj.housing_size),
         ]
         ctx["specs"] = [(label, val) for label, val in spec_fields if val]
@@ -440,9 +519,25 @@ def _search_page_context(obj, kind, request):
             ctx["specs"].append(("قابلیت میکروفون", "دارد"))
         if obj.sim_card:
             ctx["specs"].append(("قابلیت سیم‌کارت", "دارد"))
-        for key, val in (obj.dynamic_specs or {}).items():
-            if val not in (None, "", False):
-                ctx["specs"].append((key, val))
+        # مشخصات سفارشی دسته — با لیبل فارسی فیلد؛ بولین True به «دارد» و False حذف می‌شود
+        dyn = obj.dynamic_specs or {}
+        if dyn and obj.category_id:
+            cat = obj.category
+            dyn_fields = []
+            seen_keys = set()
+            for c in ([cat.parent, cat] if cat.parent_id else [cat]):
+                if c is None:
+                    continue
+                for f in c.spec_fields.filter(is_active=True):
+                    if f.key not in seen_keys:
+                        seen_keys.add(f.key)
+                        dyn_fields.append(f)
+            for f in dyn_fields:
+                val = dyn.get(f.key)
+                if isinstance(val, str) and val.strip().lower() in ("true", "false"):
+                    val = val.strip().lower() == "true"
+                if val not in (None, "", False):
+                    ctx["specs"].append((f.label, "دارد" if val is True else val))
         ctx["related_products"] = obj.compatible_with.filter(is_active=True)[:8]
         ld = {
             "@context": "https://schema.org", "@type": "Product",
@@ -462,7 +557,18 @@ def _search_page_context(obj, kind, request):
                 "availability": ("https://schema.org/InStock" if obj.available_stock > 0
                                  else "https://schema.org/OutOfStock"),
                 "url": ctx.get("page_url") or request.build_absolute_uri(f"/products/{obj.slug}/"),
+                **_offer_shipping_return(),
             }
+        aggregate, review_list = _review_schema(obj)
+        if aggregate:
+            ld["aggregateRating"] = aggregate
+            ld["review"] = review_list
+        # مشخصات فنی به‌صورت PropertyValue استاندارد — خواندنی برای گوگل و موتورهای AI
+        if ctx["specs"]:
+            ld["additionalProperty"] = [
+                {"@type": "PropertyValue", "name": label, "value": str(val)}
+                for label, val in ctx["specs"]
+            ]
         ld = {k: v for k, v in ld.items() if v is not None}
 
     elif kind == "categories":
@@ -485,6 +591,7 @@ def _search_page_context(obj, kind, request):
             "offers": {
                 "@type": "Offer", "priceCurrency": "IRR",
                 "price": obj.final_price, "availability": "https://schema.org/InStock",
+                **_offer_shipping_return(),
             },
         }
 

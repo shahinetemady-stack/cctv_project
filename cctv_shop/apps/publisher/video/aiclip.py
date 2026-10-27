@@ -43,8 +43,8 @@ _CATEGORY_MOOD = {
     "behind_scenes": "authentic workshop behind-the-scenes feel",
 }
 
-_PROMPT_SYSTEM = """You write prompts for Google Veo, an AI video generator. Output ONLY the video prompt itself — no quotes, no explanation, no JSON.
-Rules: English only, at most 100 words, a single paragraph. Style: cinematic product commercial, dramatic studio lighting, slow smooth camera move (dolly or orbit), shallow depth of field, vertical 9:16 composition. Describe the product, the scene and the camera move. No text, logos, watermarks or subtitles in the video."""
+_PROMPT_SYSTEM = """You write prompts for an AI video generator. Output ONLY the video prompt itself — no quotes, no explanation, no JSON.
+The clip is a BACKGROUND PLATE for a product commercial, not a product animation. Rules: English only, at most 100 words, a single paragraph. Style: cinematic atmosphere for a security-technology brand — dark studio environment, warm golden accent lighting, slow subtle camera drift, dust particles or soft light rays, shallow depth of field, medium or wide shot, vertical 9:16. Keep the center of the frame dark and empty (negative space) — a product card will be composited there later. No text, no logos, no watermarks, no people. Never show a specific product in close-up — abstract surfaces, bokeh, smoke and light only, so nothing can deform. If a reference image is provided, use it only for color palette and mood, not as a subject."""
 
 
 def _relay_config() -> tuple[str, str]:
@@ -59,28 +59,38 @@ def _headers(token: str) -> dict | None:
 
 
 def _api_key() -> str:
-    from apps.assistant.models import AssistantSettings
+    """اولویت با کلید Veo تنظیمات publisher است؛ بعد کلید Gemini دستیار و در انتها env."""
+    from ..models import PublisherSettings
 
-    key = AssistantSettings.get_instance().gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
+    key = PublisherSettings.get_instance().veo_api_key.strip()
+    if not key:
+        from apps.assistant.models import AssistantSettings
+
+        key = AssistantSettings.get_instance().gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
     if not key:
         raise VideoBuildError("کلید API جمینای تنظیم نشده — ساخت هوک AI ممکن نیست")
     return key
 
 
 def _product_for(post):
-    idea = post.idea
-    return idea.product if idea and idea.product_id else None
+    """محصول مبنا برای تصویر مرجع — زنجیرهٔ کامل (ایده ← مقاله ← جدیدترین با تصویر)
+    تا هوک هرگز محصول موهومی نسازد؛ هیچ تصویری در هیچ محصولی نبود → None (text-to-video)."""
+    from .builder import resolve_reference_product
+
+    return resolve_reference_product(post)
 
 
 def _fallback_prompt(post, product) -> str:
-    """پرامپت قالبی وقتی LLM در دسترس نیست — حداکثر ~۱۰۰ کلمهٔ انگلیسی."""
-    name = product.name if product is not None else "a professional CCTV camera part"
-    brand = f" by {product.brand}" if product is not None and product.brand else ""
+    """پرامپت قالبی وقتی LLM در دسترس نیست — صحنهٔ اتمسفریک (نه انیمیشن محصول)."""
+    hint = ""
+    if product is not None and product.brand and product.brand.isascii():
+        hint = f" inspired by {product.brand} CCTV technology"
     return (
-        f"Cinematic product commercial of {name}{brand}. "
-        "Dramatic studio lighting on a dark background, a slow smooth orbiting camera move "
-        "revealing fine technical details, shallow depth of field, subtle reflections, "
-        "premium industrial mood, vertical 9:16 composition. No text, no logos, no people."
+        f"Cinematic atmosphere plate for a security-technology brand{hint}. "
+        "Dark studio environment with warm golden accent lighting, slow subtle camera drift, "
+        "floating dust particles and soft light rays, shallow depth of field, abstract dark "
+        "surfaces and bokeh, medium-wide shot. The center of the frame stays dark and empty "
+        "for a product card overlay. Vertical 9:16. No text, no logos, no people, no product close-up."
     )
 
 
@@ -100,10 +110,10 @@ def _build_prompt(post) -> str:
         product_line = "a professional CCTV camera part"
     mood = _CATEGORY_MOOD.get(post.idea.category if post.idea else "", _CATEGORY_MOOD["product_showcase"])
     user = (
-        f"Product: {product_line}\n"
+        f"Product domain: {product_line}\n"
         f"Content idea: {post.title}\n"
         f"Mood: {mood}\n"
-        "Write the Veo prompt now."
+        "Write the background-plate prompt now — atmosphere only, no product subject."
     )
     try:
         from apps.assistant.engine import ask_llm
@@ -180,6 +190,21 @@ def _poll_operation(base: str, headers, key: str, name: str, deadline: float) ->
     raise VideoBuildError("زمان تولید ویدیو بیش از حد طول کشید")
 
 
+def _validate_download(out_path) -> None:
+    """فایل دانلودشده باید >۱۰۰KB و خوانا برای ffprobe باشد."""
+    if not os.path.exists(out_path) or os.path.getsize(out_path) < MIN_BYTES:
+        raise VideoBuildError("فایل ویدیوی هوک ناقص دانلود شد")
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        probe = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(out_path)],
+            capture_output=True, timeout=30,
+        )
+        if probe.returncode != 0:
+            raise VideoBuildError("فایل ویدیوی هوک خراب است (ffprobe آن را نخواند)")
+
+
 def _download_video(base: str, headers, key: str, response: dict, out_path, deadline: float) -> None:
     """آدرس ویدیوی تولیدشده را از پاسخ عملیات می‌خواند و از طریق رله دانلود می‌کند."""
     gen = response.get("generateVideoResponse") or {}
@@ -205,17 +230,7 @@ def _download_video(base: str, headers, key: str, response: dict, out_path, dead
     except requests.RequestException as exc:
         raise VideoBuildError(f"دانلود ویدیوی هوک ناموفق بود: {_http_detail(exc)}") from exc
 
-    if not os.path.exists(out_path) or os.path.getsize(out_path) < MIN_BYTES:
-        raise VideoBuildError("فایل ویدیوی هوک ناقص دانلود شد")
-    ffprobe = shutil.which("ffprobe")
-    if ffprobe:
-        probe = subprocess.run(
-            [ffprobe, "-v", "error", "-show_entries", "format=duration",
-             "-of", "csv=p=0", str(out_path)],
-            capture_output=True, timeout=30,
-        )
-        if probe.returncode != 0:
-            raise VideoBuildError("فایل ویدیوی هوک خراب است (ffprobe آن را نخواند)")
+    _validate_download(out_path)
 
 
 def _http_detail(exc: requests.RequestException) -> str:

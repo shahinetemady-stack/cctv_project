@@ -4,12 +4,13 @@ apps/production/models.py
 امور تولید: دستوره مونتاژ (BOM) + دستور مونتاژ.
 محصول نهایی یک Product معمولی است (دسته «دوربین و دستگاه ضبط») با یک واریانت —
 پس بدون هیچ تغییری در سایت/سبد/فاکتور قابل فروش است. اجرای مونتاژ موجودی قطعات
-را از انبار کم و محصول نهایی را اضافه می‌کند و بهای تمام‌شده را در
+را از انبار مبدأ کم و محصول نهایی را به انبار مقصد اضافه می‌کند و بهای تمام‌شده را در
 purchase_price_cny واریانت نهایی (تقسیم بر نرخ یوان روز) می‌نشاند تا
 قیمت‌های سایت از همان فرمول دسته محاسبه شوند.
 """
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class AssemblyRecipe(models.Model):
@@ -48,7 +49,7 @@ class AssemblyRecipeItem(models.Model):
 
 
 class AssemblyOrder(models.Model):
-    """دستور مونتاژ — هر اجرا: مصرف قطعات + تولید محصول نهایی در یک انبار."""
+    """دستور مونتاژ — هر اجرا: مصرف قطعات از انبار مبدأ + تولید محصول نهایی در انبار مقصد."""
     class Status(models.TextChoices):
         DONE      = "done",      "انجام شده"
         CANCELLED = "cancelled", "برگشت داده شده"
@@ -57,7 +58,11 @@ class AssemblyOrder(models.Model):
                         related_name="assembly_orders", verbose_name="محصول نهایی")
     quantity       = models.PositiveIntegerField(verbose_name="تعداد تولید")
     warehouse      = models.ForeignKey("inventory.Warehouse", on_delete=models.PROTECT,
-                        related_name="assembly_orders", verbose_name="انبار")
+                        related_name="assembly_orders", verbose_name="انبار مقصد (محصول نهایی)")
+    source_warehouse = models.ForeignKey("inventory.Warehouse", on_delete=models.PROTECT,
+                        null=True, blank=True, related_name="assembly_orders_sourced",
+                        verbose_name="انبار مبدأ (قطعات)",
+                        help_text="خالی = همان انبار مقصد (دستورهای قدیمی)")
     unit_cost_irr  = models.PositiveBigIntegerField(default=0, verbose_name="بهای تمام‌شده واحد (ریال)")
     total_cost_irr = models.PositiveBigIntegerField(default=0, verbose_name="بهای تمام‌شده کل (ریال)")
     # اجرت مونتاژ و لوازم مصرفی — برون‌سپاری به طرف حساب؛ جزو بهای تمام‌شده لحاظ و
@@ -72,6 +77,7 @@ class AssemblyOrder(models.Model):
                         verbose_name="سند هزینه")
     status         = models.CharField(max_length=20, choices=Status.choices,
                         default=Status.DONE, verbose_name="وضعیت")
+    production_date = models.DateField(default=timezone.localdate, verbose_name="تاریخ تولید")
     note           = models.TextField(blank=True, verbose_name="توضیحات")
     created_by     = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
                         null=True, blank=True, verbose_name="ثبت‌کننده")

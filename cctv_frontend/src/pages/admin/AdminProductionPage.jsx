@@ -6,6 +6,9 @@ import api from '../../services/api'
 import { PageLoader } from '../../components/ui'
 import AmountInput from '../../components/ui/AmountInput'
 import SearchSelect from '../../components/ui/SearchSelect'
+import JalaliDateInput from '../../components/ui/JalaliDateInput'
+import { todayTehran } from '../../utils/date'
+import { jalaliText } from '../../utils/jalali'
 import usePermissions from '../../hooks/usePermissions'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
@@ -16,8 +19,8 @@ const normalize = (s) => String(s ?? '')
   .replace(/ك/g, 'ک').replace(/ي/g, 'ی')
   .toLowerCase()
 
-// ─── مودال ساخت محصول نهایی ───
-function NewProductModal({ categories, onClose, onCreated }) {
+// ─── فرم خام ساخت محصول نهایی (همیشه بالای صفحه) ───
+function NewProductForm({ categories, onCreated }) {
   const [form, setForm] = useState({ name: '', category_id: '', model_number: '', sku: '' })
   const [busy, setBusy] = useState(false)
   const submit = async () => {
@@ -30,49 +33,45 @@ function NewProductModal({ categories, onClose, onCreated }) {
         model_number: form.model_number.trim(), sku: form.sku.trim(),
       })
       toast.success(`محصول نهایی با کد ${r.data.sku} ساخته شد`)
+      setForm({ name: '', category_id: '', model_number: '', sku: '' })
       onCreated(r.data)
     } catch (e) {
       toast.error(e.response?.data?.error || 'خطا در ساخت محصول')
     } finally { setBusy(false) }
   }
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div className="card p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <h3 className="text-sm font-semibold text-white mb-4">محصول نهایی جدید (دوربین / دستگاه مونتاژی)</h3>
-        <div className="space-y-3">
-          <div>
-            <label className="label text-xs block mb-1">نام محصول *</label>
-            <input className="input-dark text-sm w-full" value={form.name}
-              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              placeholder="مثلاً دوربین مداربسته ۵ مگاپیکسل دام" />
-          </div>
-          <div>
-            <label className="label text-xs block mb-1">دسته *</label>
-            <select className="input-dark text-sm w-full" value={form.category_id}
-              onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
-              <option value="">انتخاب دسته...</option>
-              {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label text-xs block mb-1">شماره مدل</label>
-              <input className="input-dark text-sm w-full" value={form.model_number}
-                onChange={e => setForm(f => ({ ...f, model_number: e.target.value }))} />
-            </div>
-            <div>
-              <label className="label text-xs block mb-1">SKU (اختیاری)</label>
-              <input className="input-dark text-sm w-full" dir="ltr" value={form.sku}
-                onChange={e => setForm(f => ({ ...f, sku: e.target.value }))} placeholder="P-… خودکار" />
-            </div>
-          </div>
+    <div className="card p-4">
+      <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-1">
+        <Plus size={14} /> محصول نهایی جدید (دوربین / دستگاه مونتاژی)
+      </h3>
+      <div className="flex items-end gap-2 flex-wrap">
+        <div className="flex-1 min-w-[200px]">
+          <label className="label text-[10px] block mb-1">نام محصول *</label>
+          <input className="input-dark text-xs w-full" value={form.name}
+            onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+            placeholder="مثلاً دوربین مداربسته ۵ مگاپیکسل دام" />
         </div>
-        <div className="flex justify-end gap-2 mt-5">
-          <button onClick={onClose} className="btn-ghost text-xs px-4 py-1.5">انصراف</button>
-          <button onClick={submit} disabled={busy} className="btn-primary text-xs px-4 py-1.5 disabled:opacity-50">
-            {busy ? '...' : 'ساخت محصول'}
-          </button>
+        <div className="min-w-[160px]">
+          <label className="label text-[10px] block mb-1">دسته *</label>
+          <select className="input-dark text-xs w-full" value={form.category_id}
+            onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
+            <option value="">انتخاب دسته...</option>
+            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
         </div>
+        <div className="w-32">
+          <label className="label text-[10px] block mb-1">شماره مدل</label>
+          <input className="input-dark text-xs w-full" value={form.model_number}
+            onChange={e => setForm(f => ({ ...f, model_number: e.target.value }))} />
+        </div>
+        <div className="w-32">
+          <label className="label text-[10px] block mb-1">SKU (اختیاری)</label>
+          <input className="input-dark text-xs w-full" dir="ltr" value={form.sku}
+            onChange={e => setForm(f => ({ ...f, sku: e.target.value }))} placeholder="P-… خودکار" />
+        </div>
+        <button onClick={submit} disabled={busy} className="btn-primary text-xs px-4 py-1.5 disabled:opacity-50">
+          {busy ? '...' : 'ساخت محصول'}
+        </button>
       </div>
     </div>
   )
@@ -115,7 +114,9 @@ function RecipeCard({ recipe, variants, warehouses, defaultWarehouseId, contacts
   const [dirty, setDirty] = useState(false)
   const [savingBom, setSavingBom] = useState(false)
   const [qty, setQty] = useState('1')
+  const [prodDate, setProdDate] = useState(todayTehran())
   const [warehouseId, setWarehouseId] = useState(String(defaultWarehouseId || ''))
+  const [sourceWarehouseId, setSourceWarehouseId] = useState(String(defaultWarehouseId || ''))
   const [assemblerId, setAssemblerId] = useState('')
   const [labor, setLabor] = useState('')
   const [consumables, setConsumables] = useState('')
@@ -163,7 +164,9 @@ function RecipeCard({ recipe, variants, warehouses, defaultWarehouseId, contacts
     try {
       const r = await api.post('/production/orders/', {
         recipe_id: recipe.id, quantity: q,
+        production_date: prodDate || undefined,
         warehouse_id: warehouseId ? Number(warehouseId) : undefined,
+        source_warehouse_id: sourceWarehouseId ? Number(sourceWarehouseId) : undefined,
         assembler_id: assemblerId ? Number(assemblerId) : undefined,
         labor_cost_irr: laborN, consumables_cost_irr: consumablesN,
         note,
@@ -180,13 +183,13 @@ function RecipeCard({ recipe, variants, warehouses, defaultWarehouseId, contacts
 
   return (
     <div className="card p-4">
-      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-        <div>
-          <span className="font-semibold text-white text-sm">{recipe.product_name}</span>
-          <span className="text-[10px] text-gray-steel mr-2" dir="ltr">{recipe.sku}</span>
-          <span className="text-[10px] text-gray-steel mr-2">{recipe.category_name}</span>
+      <div className="text-center mb-3">
+        <div className="font-bold text-gold text-lg">{recipe.product_name}</div>
+        <div className="text-[10px] text-gray-steel mt-0.5">
+          <span dir="ltr">{recipe.sku}</span>
+          {recipe.category_name && <span> · {recipe.category_name}</span>}
         </div>
-        <div className="flex items-center gap-3 text-[11px]">
+        <div className="flex items-center justify-center gap-4 text-[11px] mt-1.5">
           <span className="text-gray-steel">موجودی: <b className={recipe.stock_quantity > 0 ? 'text-green-400' : 'text-red-400'}>{fmt(recipe.stock_quantity)}</b></span>
           <span className="text-gray-steel">بهای واحد: <b className="text-gold">{fmt(unitCost)}</b> ریال</span>
         </div>
@@ -198,12 +201,15 @@ function RecipeCard({ recipe, variants, warehouses, defaultWarehouseId, contacts
           <tr className="text-gray-steel border-b border-white/10">
             <th className="text-right py-1 font-normal">قطعه</th>
             <th className="text-center py-1 font-normal w-20">تعداد</th>
-            <th className="text-center py-1 font-normal">موجودی</th>
+            <th className="text-center py-1 font-normal">موجودی انبار مبدأ</th>
             <th className="text-center py-1 font-normal w-10"></th>
           </tr>
         </thead>
         <tbody>
-          {items.map(i => (
+          {items.map(i => {
+            const whStock = i.warehouse_stocks?.[sourceWarehouseId] ?? 0
+            const needed = i.quantity * (Number(qty) || 1)
+            return (
             <tr key={i.variant_id} className="border-b border-white/5">
               <td className="py-1.5">
                 <span className="text-white">{i.name}</span>
@@ -216,7 +222,13 @@ function RecipeCard({ recipe, variants, warehouses, defaultWarehouseId, contacts
                     className="input-dark text-xs w-14 text-center" />
                 ) : fmt(i.quantity)}
               </td>
-              <td className={`py-1.5 text-center ${i.stock_quantity > 0 ? 'text-green-400' : 'text-red-400'}`}>{fmt(i.stock_quantity)}</td>
+              <td className={`py-1.5 text-center ${whStock >= needed ? 'text-green-400' : 'text-red-400'}`}
+                title={`موجودی کل همه انبارها: ${fmt(i.stock_quantity)}`}>
+                {fmt(whStock)}
+                {whStock < needed && (
+                  <div className="text-[9px] text-red-400/80">نیاز {fmt(needed)}</div>
+                )}
+              </td>
               <td className="py-1.5 text-center">
                 {canManage && (
                   <button onClick={() => removeItem(i.variant_id)} className="text-gray-steel hover:text-red-400">
@@ -225,7 +237,8 @@ function RecipeCard({ recipe, variants, warehouses, defaultWarehouseId, contacts
                 )}
               </td>
             </tr>
-          ))}
+            )
+          })}
         </tbody>
       </table>
 
@@ -251,7 +264,18 @@ function RecipeCard({ recipe, variants, warehouses, defaultWarehouseId, contacts
                 className="input-dark text-xs w-20 text-center" />
             </div>
             <div>
-              <label className="label text-[10px] block mb-1">انبار</label>
+              <label className="label text-[10px] block mb-1">تاریخ تولید</label>
+              <JalaliDateInput value={prodDate} onChange={setProdDate} className="input-dark text-xs" />
+            </div>
+            <div>
+              <label className="label text-[10px] block mb-1">انبار قطعات (مبدأ)</label>
+              <select value={sourceWarehouseId} onChange={e => setSourceWarehouseId(e.target.value)}
+                className="input-dark text-xs">
+                {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label text-[10px] block mb-1">انبار محصول نهایی (مقصد)</label>
               <select value={warehouseId} onChange={e => setWarehouseId(e.target.value)}
                 className="input-dark text-xs">
                 {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
@@ -309,7 +333,7 @@ function RecipeCard({ recipe, variants, warehouses, defaultWarehouseId, contacts
 export default function AdminProductionPage() {
   const { can } = usePermissions()
   const qc = useQueryClient()
-  const [showNew, setShowNew] = useState(false)
+  const [search, setSearch] = useState('')
 
   const { data, isLoading } = useQuery({
     queryKey: ['production-recipes'],
@@ -346,6 +370,13 @@ export default function AdminProductionPage() {
 
   if (isLoading || !data) return <PageLoader />
   const canManage = can('production_manage')
+  const nq = normalize(search.trim())
+  // یک جستجوی مشترک: هم فرمول‌های تولید (نام/SKU محصول نهایی یا هر قطعه‌اش) و هم سابقه تولید
+  const filteredOrders = nq ? orders.filter(o => normalize(o.product_name).includes(nq)) : orders
+  const filteredRecipes = nq ? data.recipes.filter(r =>
+    normalize(r.product_name).includes(nq) || normalize(r.sku).includes(nq) ||
+    r.items.some(i => normalize(i.name).includes(nq) || normalize(i.sku).includes(nq))
+  ) : data.recipes
 
   // فقط دسته‌های زیردرخت «دوربین و دستگاه ضبط» برای محصول نهایی پیشنهاد می‌شود (بقیه هم مجاز)
   const categories = categoriesRaw
@@ -357,18 +388,28 @@ export default function AdminProductionPage() {
 
   return (
     <div className="container-main py-8 max-w-5xl">
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-2">
+      <div className="mb-4">
         <h1 className="font-display font-bold text-2xl text-white">🏭 امور تولید</h1>
-        {canManage && (
-          <button onClick={() => setShowNew(true)} className="btn-primary text-xs px-4 py-2 flex items-center gap-1">
-            <Plus size={14} /> محصول نهایی جدید
-          </button>
-        )}
       </div>
 
+      {/* جستجوی مشترک — فرمول تولید + سابقه تولید */}
+      <div className="relative mb-4">
+        <Search size={15} className="absolute top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" style={{ right: 10 }} />
+        <input value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="جستجوی نام کالا — فرمول تولید و سابقه تولید آن نمایش داده می‌شود..."
+          className="input-dark text-sm w-full" style={{ paddingRight: '2.25rem' }} />
+      </div>
+
+      {/* فرم خام ساخت محصول نهایی */}
+      {canManage && (
+        <div className="mb-6">
+          <NewProductForm categories={sortedCats} onCreated={() => refresh()} />
+        </div>
+      )}
+
       <div className="text-[11px] text-gray-steel mb-4">
-        دستوره مونتاژ (BOM) هر محصول را تعریف کنید؛ با «اجرای مونتاژ» قطعات از انبار کم و محصول نهایی با بهای
-        تمام‌شده محاسبه‌شده به انبار واریز می‌شود و بلافاصله با قیمت فرمول دسته‌اش در سایت قابل فروش است.
+        دستوره مونتاژ (BOM) هر محصول را تعریف کنید؛ با «اجرای مونتاژ» قطعات از انبار مبدأ کم و محصول نهایی با بهای
+        تمام‌شده محاسبه‌شده به انبار مقصد واریز می‌شود و بلافاصله با قیمت فرمول دسته‌اش در سایت قابل فروش است.
       </div>
 
       {/* رسیپی‌ها */}
@@ -376,10 +417,13 @@ export default function AdminProductionPage() {
         {data.recipes.length === 0 && (
           <div className="card p-12 text-center">
             <div className="text-4xl mb-3">🏭</div>
-            <div className="text-gray-steel text-sm">هنوز محصول نهایی تعریف نشده — با «محصول نهایی جدید» شروع کنید</div>
+            <div className="text-gray-steel text-sm">هنوز محصول نهایی تعریف نشده — با فرم بالا شروع کنید</div>
           </div>
         )}
-        {data.recipes.map(r => (
+        {data.recipes.length > 0 && filteredRecipes.length === 0 && (
+          <div className="card p-6 text-center text-gray-steel text-sm">فرمول تولیدی با این نام یافت نشد</div>
+        )}
+        {filteredRecipes.map(r => (
           <RecipeCard key={r.id} recipe={r} variants={variants} warehouses={data.warehouses}
             defaultWarehouseId={data.default_warehouse_id} contacts={contacts} canManage={canManage} onChanged={refresh} />
         ))}
@@ -391,17 +435,21 @@ export default function AdminProductionPage() {
         <table className="w-full text-xs" style={{ borderCollapse: 'collapse', minWidth: 640 }}>
           <thead>
             <tr className="text-gray-steel border-b border-white/10">
-              {['محصول', 'تعداد', 'انبار', 'بهای واحد', 'بهای کل', 'مونتاژکار', 'وضعیت', 'ثبت‌کننده', 'تاریخ', ''].map(h => (
+              {['محصول', 'تعداد', 'مبدأ ← مقصد', 'بهای واحد', 'بهای کل', 'مونتاژکار', 'وضعیت', 'ثبت‌کننده', 'تاریخ', ''].map(h => (
                 <th key={h} className="py-2 px-2 font-normal text-center first:text-right">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {orders.map(o => (
+            {filteredOrders.map(o => (
               <tr key={o.id} className="border-b border-white/5">
                 <td className="py-2 px-2 text-white">{o.product_name}</td>
                 <td className="py-2 px-2 text-center">{fmt(o.quantity)}</td>
-                <td className="py-2 px-2 text-center text-gray-steel">{o.warehouse_name}</td>
+                <td className="py-2 px-2 text-center text-gray-steel">
+                  {o.source_warehouse_name === o.warehouse_name
+                    ? o.warehouse_name
+                    : `${o.source_warehouse_name} ← ${o.warehouse_name}`}
+                </td>
                 <td className="py-2 px-2 text-center text-gold">{fmt(o.unit_cost_irr)}</td>
                 <td className="py-2 px-2 text-center">
                   {fmt(o.total_cost_irr)}
@@ -418,32 +466,30 @@ export default function AdminProductionPage() {
                   <span className={o.status === 'done' ? 'badge-green' : 'badge-red'}>{o.status_display}</span>
                 </td>
                 <td className="py-2 px-2 text-center text-gray-steel">{o.created_by}</td>
-                <td className="py-2 px-2 text-center text-gray-steel" dir="ltr">
-                  {new Date(o.created_at).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}
-                  {' '}
-                  {new Date(o.created_at).toLocaleTimeString('fa-IR', { timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit' })}
+                <td className="py-2 px-2 text-center text-gray-steel" style={{ whiteSpace: 'nowrap' }}>
+                  <div>{o.production_date ? jalaliText(o.production_date) : new Date(o.created_at).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' })}</div>
+                  <div className="text-[9px] text-gray-steel/70" dir="ltr">
+                    {new Date(o.created_at).toLocaleTimeString('fa-IR', { timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit' })}
+                  </div>
                 </td>
                 <td className="py-2 px-2 text-center">
                   {o.status === 'done' && canManage && (
                     <button onClick={() => { if (confirm('این دستور برگشت داده شود؟ قطعات به انبار برمی‌گردند و محصول نهایی خارج می‌شود.')) cancelMut.mutate(o.id) }}
-                      className="text-gray-steel hover:text-orange-400" title="برگشت دستور">
-                      <RotateCcw size={13} />
+                      className="btn-ghost text-[10px] px-2 py-1 flex items-center gap-1 text-orange-300 hover:text-orange-200 whitespace-nowrap">
+                      <RotateCcw size={12} /> برگشت از تولید
                     </button>
                   )}
                 </td>
               </tr>
             ))}
-            {orders.length === 0 && (
-              <tr><td colSpan={10} className="py-8 text-center text-gray-steel">هنوز دستوری ثبت نشده</td></tr>
+            {filteredOrders.length === 0 && (
+              <tr><td colSpan={10} className="py-8 text-center text-gray-steel">
+                {orders.length === 0 ? 'هنوز دستوری ثبت نشده' : 'دستوری با این نام محصول یافت نشد'}
+              </td></tr>
             )}
           </tbody>
         </table>
       </div>
-
-      {showNew && (
-        <NewProductModal categories={sortedCats} onClose={() => setShowNew(false)}
-          onCreated={() => { setShowNew(false); refresh() }} />
-      )}
     </div>
   )
 }

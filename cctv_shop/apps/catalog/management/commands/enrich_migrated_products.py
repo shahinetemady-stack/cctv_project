@@ -124,11 +124,6 @@ def extract_specs(product):
             out["focal_ratio"] = "معمولی"
 
     elif cat_type == "housing":
-        slug = product.category.slug if product.category_id else ""
-        if "bullet" in slug:
-            out["housing_type"] = "Bullet"
-        elif "dome" in slug:
-            out["housing_type"] = "Dome"
         if re.search(r"فلز و پلاستیک", text):
             out["housing_material"] = "فلز و پلاستیک"
         elif re.search(r"فلزی?", text):

@@ -1,0 +1,551 @@
+// Instagram Messaging API webhook — پاسخگوی خودکار DM با Gemini
+// GET  /webhook → تأیید اولیه متا (hub.challenge)
+// POST /webhook → رویدادهای پیام
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const db = require('./db');
+const { callGemini } = require('./gemini');
+
+const PORT = Number(process.env.IG_PORT || 3100);
+const VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || 'doorbinkar-verify-2026';
+const PAGE_TOKEN = process.env.IG_PAGE_TOKEN || '';
+const PROMPT_FILE = process.env.IG_PROMPT_FILE || path.join(__dirname, '..', 'prompts', 'doorbinkar.txt');
+const GRAPH_VERSION = process.env.GRAPH_VERSION || 'v21.0';
+// توکن‌های «Instagram Business Login» (شروع با IGAA) فقط روی graph.instagram.com
+// کار می‌کنند؛ توکن‌های Facebook Login روی graph.facebook.com.
+const GRAPH_BASE = process.env.GRAPH_BASE
+  || (PAGE_TOKEN.startsWith('IGAA') ? 'https://graph.instagram.com' : 'https://graph.facebook.com');
+const ACCOUNT_KEY = 'ig';
+
+// ─── اتصال به دیتای واقعی سایت (قیمت/موجودی/لینک) ────────────────
+const SITE = (process.env.SITE_API || 'https://doorbinkar.com').replace(/\/+$/, '');
+const SHOP_TOKEN = process.env.BOT_API_TOKEN || '';      // هدر X-Bot-Token برای /api/core/bot/price/
+const FETCH_TIMEOUT = 15000;
+
+const toToman = irr => Math.round(Number(irr || 0) / 10).toLocaleString('fa-IR');
+
+// جستجوی هوشمند سایت — کلمات محاوره‌ای و مترادف‌ها را خودش هندل می‌کند
+async function searchProducts(q) {
+  const res = await fetch(`${SITE}/api/catalog/products/search/?q=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.results || []).slice(0, 8);
+}
+
+async function priceLookup(body) {
+  if (!SHOP_TOKEN) return null;
+  const res = await fetch(`${SITE}/api/core/bot/price/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Bot-Token': SHOP_TOKEN },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+// امتیاز ارتباط نتیجه با کوئری — مدل/نام دقیق بالاتر از مچ در سنسور/کلمات‌کلیدی
+function relevanceScore(p, q) {
+  const esc = q.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const tokRe = new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, 'i');
+  const model = String(p.model_number || '').toLowerCase();
+  const name = String(p.name || '').toLowerCase();
+  const ql = q.toLowerCase();
+  let s = 0;
+  if (model === ql) s += 120;
+  if (tokRe.test(model)) s += 80;
+  else if (model.includes(ql)) s += 40;
+  if (tokRe.test(name)) s += 30;
+  else if (name.includes(ql)) s += 15;
+  return s;
+}
+
+// مرتبط‌ترین محصول با پیام + قیمت واقعی‌اش → آبجکت کانتکست (برای Gemini و کارت محصول)
+async function productContext(text) {
+  let query = text;
+  let results = await searchProducts(query).catch(() => []);
+  // مدل‌هایی مثل K2K4 در سایت با اسلش ثبت شده‌اند (TF K2/K4B) → تلاش دوم با اسلش
+  if (!results.length && /\d(?=[a-zA-Z])/.test(text)) {
+    query = text.replace(/(\d)(?=[a-zA-Z])/g, '$1/');
+    results = await searchProducts(query).catch(() => []);
+  }
+  if (!results.length) return null;
+  let best = null, bestScore = 0;
+  for (const p of results) { const s = relevanceScore(p, query); if (s > bestScore) { bestScore = s; best = p; } }
+  if (bestScore < 40) {
+    // کوئری فارسی محاوره‌ای: تطبیق توکن روی نام محصول
+    const toks = text.split(/\s+/).filter(t => t.length >= 3);
+    best = results.find(p => toks.some(t => String(p.name || '').includes(t))) || null;
+  }
+  if (!best) return null;
+  const info = await priceLookup({ product_id: best.id }).catch(() => null);
+  if (!info?.product) return null;
+  const pr = info.product;
+  return {
+    name: pr.name,
+    priceToman: toToman(info.price),
+    inStock: !!pr.in_stock,
+    url: pr.url,
+    geminiLine: `محصول مرتبط در فروشگاه: ${pr.name} | قیمت عمومی: ${toToman(info.price)} تومان | موجودی: ${pr.in_stock ? 'موجود' : 'ناموجود'} | لینک: ${pr.url}`,
+  };
+}
+
+// کارت محصول برای دایرکت — قیمت عمومی + دعوت به ثبت‌نام همکاری
+function productCard(p) {
+  return `📦 ${p.name}\n` +
+    `💰 قیمت عمومی: ${p.priceToman} تومان\n` +
+    `${p.inStock ? '✅ موجود' : '❌ ناموجود'}\n` +
+    `🔗 ${p.url}\n` +
+    `💼 جهت مشاهده قیمت ویژه همکاری، در سایت doorbinkar.com به‌عنوان همکار ثبت‌نام کنید.`;
+}
+
+// آیا متن حاوی کد قطعه است؟ (توکن لاتین/عددی با حداقل یک رقم — مثل 2053 یا F38 یا H5AI)
+const faToEnDigits = s => s.replace(/[۰-۹٠-٩]/g, d => '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩'.indexOf(d) % 10);
+function extractProductCode(text) {
+  const t = faToEnDigits(text);
+  const m = t.match(/[A-Za-z0-9][A-Za-z0-9\-+]{1,19}/);
+  return m && /\d/.test(m[0]) ? m[0] : null;
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const humanDelay = () => 3000 + Math.floor(Math.random() * 4000);
+
+function getPrompt() {
+  try { return fs.readFileSync(PROMPT_FILE, 'utf8'); } catch { return ''; }
+}
+
+async function sendIgText(recipientId, text) {
+  if (!PAGE_TOKEN) throw new Error('IG_PAGE_TOKEN is not set');
+  const res = await fetch(`${GRAPH_BASE}/${GRAPH_VERSION}/me/messages?access_token=${PAGE_TOKEN}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipient: { id: recipientId }, message: { text } }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Graph ${res.status}: ${body.slice(0, 300)}`);
+  }
+}
+
+// ─── دروازه فالو ─────────────────────────────────────────────────
+// فایل ig_gate.json کنار src/ — بدون ری‌استارت خوانده می‌شود.
+// عبور از دروازه با چک واقعی فالو از API متا است (is_user_follow_business)؛
+// دکمه «فالو کردم» فقط متن «فالو کردم» را می‌فرستد و به‌تنهایی کافی نیست.
+const GATE_FILE = path.join(__dirname, '..', 'ig_gate.json');
+const Database = require('better-sqlite3');
+const gateDb = new Database(path.join(__dirname, '..', 'data', 'bot.db'));
+gateDb.exec('CREATE TABLE IF NOT EXISTS follow_gate (key TEXT PRIMARY KEY, status TEXT, pending TEXT, ts INTEGER)');
+const gateUpsert = gateDb.prepare(`INSERT INTO follow_gate (key, status, pending, ts) VALUES (?, ?, ?, ?)
+  ON CONFLICT(key) DO UPDATE SET status=excluded.status, pending=excluded.pending, ts=excluded.ts`);
+
+const GATE_DEFAULTS = {
+  enabled: true,
+  profile_url: 'https://instagram.com/doorbinkar1/',
+  follow_btn_title: 'فالو کردن پیج 💚',
+  ask_text: 'ممنون میشم قبل ارسال لینک فالوم کنی 💚 بعد دکمه «فالو کردم» رو بزن.',
+  ask_text_short: 'ممنون میشم قبل ارسال لینک فالوم کنی 💚 بعد دکمه «فالو کردم» رو بزن.',
+  ask_text_comment: 'ممنون میشم قبل ارسال لینک فالوم کنی 💚 instagram.com/doorbinkar1 — بعد همینجا بنویس «فالو کردم».',
+  confirm_title: 'فالو کردم',
+  confirm_regex: 'فالو کردم',
+  still_not_following_text: 'فالوت هنوز توی سیستم ثبت نشده 🙏 اگر تازه فالو کردی، چند لحظه صبر کن و دوباره دکمه رو بزن.',
+  thanks_text: 'ممنون بابت فالو 💚 بفرما، چه قطعه‌ای برای مونتاژ لازم داری؟',
+  confirmed_text: 'ممنون بابت فالو 💚',
+};
+
+function getGate() {
+  try { return { ...GATE_DEFAULTS, ...JSON.parse(fs.readFileSync(GATE_FILE, 'utf8')) }; } catch { return GATE_DEFAULTS; }
+}
+const gateRow = key => gateDb.prepare('SELECT status, pending, ts FROM follow_gate WHERE key=?').get(key);
+const gateStatus = jid => gateRow('ig:' + jid)?.status || 'none';
+function gateSet(key, status, pendingArr) {
+  gateUpsert.run(key, status, JSON.stringify(pendingArr), Date.now());
+}
+function pushPending(key, item) {
+  const r = gateRow(key);
+  const arr = r?.pending ? JSON.parse(r.pending) : [];
+  arr.push(item);
+  gateSet(key, r?.status || 'pending', arr);
+}
+function drainPending(key) {
+  const r = gateRow(key);
+  const arr = r?.pending ? JSON.parse(r.pending) : [];
+  if (arr.length) gateSet(key, r?.status || 'pending', []);
+  return arr;
+}
+
+function isGateConfirm(text, payload, gate) {
+  if (payload === 'FOLLOW_OK') return true;
+  try { return new RegExp(gate.confirm_regex || 'فالو کردم').test(text || ''); }
+  catch { return (text || '').includes('فالو کردم'); }
+}
+
+// پروفایل کاربر از روی IGSID — username + وضعیت فالو واقعی (is_user_follow_business)
+async function fetchProfile(igsid) {
+  const res = await fetch(`${GRAPH_BASE}/${GRAPH_VERSION}/${igsid}?fields=username,is_user_follow_business&access_token=${PAGE_TOKEN}`, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+  if (!res.ok) return null;
+  const j = await res.json();
+  return { username: j.username || null, following: j.is_user_follow_business === true };
+}
+
+// پیام دروازه فالو در دایرکت: دکمه «فالو کردم»
+// کوئیک‌ریپلای موقتی است (با ترک چت محو می‌شود)؛ دکمه postback در قالب دکمه‌ای
+// داخل خود پیام می‌ماند و همیشه قابل فشردن است — پس هر دو فرستاده می‌شوند.
+// با فشردن هر کدام، «فالو کردم» به ربات می‌رسد و وضعیت فالو از API چک می‌شود.
+async function sendIgGateAsk(recipientId, text, gate) {
+  if (!PAGE_TOKEN) throw new Error('IG_PAGE_TOKEN is not set');
+  const send = message => fetch(`${GRAPH_BASE}/${GRAPH_VERSION}/me/messages?access_token=${PAGE_TOKEN}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipient: { id: recipientId }, message }),
+  });
+  const qr = [{ content_type: 'text', title: gate.confirm_title, payload: 'FOLLOW_OK' }];
+  // تلاش ۱: قالب دکمه‌ای با دکمه postback پایدار + کوئیک‌ریپلای
+  let res = await send({
+    attachment: { type: 'template', payload: { template_type: 'button', text, buttons: [{ type: 'postback', title: gate.confirm_title, payload: 'FOLLOW_OK' }] } },
+    quick_replies: qr,
+  });
+  // تلاش ۲: فقط کوئیک‌ریپلای
+  if (!res.ok) res = await send({ text, quick_replies: qr });
+  // تلاش ۳: متن ساده همراه لینک پروفایل
+  if (!res.ok) res = await send({ text: `${text}\n${gate.profile_url}` });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Graph ${res.status}: ${body.slice(0, 300)}`);
+  }
+}
+
+// ─── منطق پاسخ به دایرکت ─────────────────────────────────────────
+async function answerQuestion(senderId, text) {
+  await sleep(humanDelay());
+  // پیام‌های دروازه فالو نباید در تاریخچه مدل باشند — وگرنه مدل آن‌ها را تقلید می‌کند
+  const gate = getGate();
+  const gateBits = [gate.ask_text, gate.ask_text_short, gate.thanks_text, gate.confirmed_text, gate.still_not_following_text]
+    .filter(Boolean).map(t => t.slice(0, 20));
+  const history = db.getHistory(ACCOUNT_KEY, senderId)
+    .filter(m => m.role !== 'model' || !gateBits.some(b => m.text.includes(b)))
+    .slice(0, -1);
+  const continued = history.some(m => m.role === 'model');
+  // کد قطعه (حتی با ارقام فارسی) → جستجوی مستقیم؛ وگرنه جستجو با متن نرمال‌شده
+  const code = extractProductCode(text);
+  const ctx = await productContext(code || faToEnDigits(text)).catch(() => null);
+  let augmented;
+  if (ctx) {
+    augmented = `${text}\n\n[اطلاعات واقعی سایت — فقط برای آگاهی تو؛ قیمت/لینک دقیق را سیستم جداگانه ضمیمه می‌کند پس خودت قیمت نگو:\n${ctx.geminiLine}]`;
+  } else if (code) {
+    // کد داده ولی در سایت چیزی پیدا نشد — صادقانه بگو نداریم
+    augmented = `${text}\n\n[بررسی سیستم: هیچ محصولی با کد «${code}» در فروشگاه پیدا نشد. صادقانه بگو با این کد محصولی نداریم و بپرس مدل یا کد دقیق‌تری دارد یا قطعه دیگری لازم دارد. هرگز نام/قیمت/لینک/کارت محصول از خودت نساز.]`;
+  } else {
+    augmented = text;
+  }
+
+  let sysPrompt = getPrompt();
+  if (continued) sysPrompt += '\n\nاین گفتگو از قبل جاری است؛ بدون هیچ سلام و احوال‌پرسی مستقیم وارد جواب شو.';
+  sysPrompt += '\n\nدرخواست فالو کردن پیج را سیستم جداگانه مدیریت می‌کند؛ تو هرگز درباره فالو کردن چیزی ننویس و از کاربر نخواه پیج را فالو کند.';
+  sysPrompt += '\n\nفقط محصول‌هایی واقعی‌اند که سیستم در بخش [اطلاعات واقعی سایت] می‌دهد. اگر سیستم محصولی نداده یعنی نداریم؛ هرگز نام، قیمت، لینک یا کارت محصول (خط‌های 📦 💰 🔗 💼) از خودت نساز.';
+
+  let reply = null;
+  try {
+    reply = await callGemini(sysPrompt, history, augmented);
+  } catch (e) {
+    console.error('[ig] gemini failed:', e.message);
+    // اگر محصولی پیدا شده حداقل کارتش را بفرست؛ وگرنه پیام جایگزین مؤدبانه به‌جای سکوت
+    reply = ctx ? '' : (continued ? 'الان کمی شلوغیم 🙏 لطفاً چند دقیقه دیگر دوباره پیام بدهید.' : 'سلام 🌸 الان کمی شلوغیم، لطفاً چند دقیقه دیگر دوباره پیام بدهید.');
+  }
+
+  // سلام تکراری در گفتگوی جاری حذف شود (توریق ایمنی کنار دستور پرامپت)
+  if (continued && reply) {
+    const stripped = reply.replace(/^(سلام( مجدد)?|درود)[^.!؟?\n]*[.!؟?,،\n]\s*/u, '').trim();
+    if (stripped) reply = stripped;
+  }
+
+  // وقتی محصولی پیدا نشده، ادعای «لینک/قیمت را فرستادم» مدل حذف شود (ضدتوهم)
+  if (!ctx && reply) {
+    reply = reply.replace(/(قیمت و )?لینک[^؟?\n.!]{0,50}?فرستادم[ .\n!؟?]*/g, '').trim();
+    // کارت محصول ساختگی (خط‌های 📦 💰 🔗 💼 و ✅/❌ همراه) هم حذف شود — مدل گاهی
+    // قالب کارت را از تاریخچه تقلید می‌کند و محصول/قیمت/لینک غیرواقعی می‌سازد
+    if (/^[📦💰🔗💼]/mu.test(reply)) {
+      const kept = reply.split('\n').filter(l => !/^[📦💰🔗💼✅❌]/u.test(l.trim()));
+      reply = kept.join('\n').trim() || 'متأسفانه محصولی با این کد در فروشگاه پیدا نکردم 🙏 اگر مدل یا کد دقیق‌تری دارید بفرستید، یا بگویید چه قطعه‌ای لازم دارید تا راهنمایی‌تان کنم.';
+    }
+  }
+
+  // کارت محصول (قیمت عمومی + لینک + دعوت به ثبت‌نام همکاری) همیشه توسط سیستم ضمیمه می‌شود
+  if (ctx) reply = (reply ? reply + '\n\n' : '') + productCard(ctx);
+
+  await sendIgText(senderId, reply);
+  db.logMessage(ACCOUNT_KEY, senderId, 'model', reply);
+  console.log(`[ig] -> ${senderId}: ${reply.slice(0, 80)}`);
+}
+
+// بعد از عبور از دروازه: موارد pending (لینک کلیدواژه / کارت محصول / سؤال) تحویل داده می‌شود
+async function deliverAfterConfirm(senderId, gate, username) {
+  if (username === undefined) username = (await fetchProfile(senderId).catch(() => null))?.username || null;
+  // اول pendingها خوانده شوند، بعد وضعیت ok ثبت شود (ترتیب مهم است)
+  const items = drainPending('ig:' + senderId).concat(username ? drainPending('u:' + username) : []);
+  gateSet('ig:' + senderId, 'ok', []);
+  // فقط آخرین سؤال جواب داده می‌شود تا کاربر با چند جواب پشت‌سرهم اذیت نشود
+  const lastQ = items.map((it, i) => it.kind === 'question' ? i : -1).filter(i => i >= 0).pop();
+  const deliver = items.filter((it, i) => it.kind !== 'question' || i === lastQ);
+  await sleep(humanDelay());
+  const hello = deliver.length ? gate.confirmed_text : gate.thanks_text;
+  try {
+    await sendIgText(senderId, hello);
+    db.logMessage(ACCOUNT_KEY, senderId, 'model', hello);
+  } catch (e) { console.error('[ig] gate hello send failed:', e.message); }
+  for (const it of deliver) {
+    await sleep(1500 + Math.floor(Math.random() * 2000));
+    try {
+      if (it.kind === 'kw-link' || it.kind === 'product-card') {
+        await sendIgText(senderId, it.text);
+        db.logMessage(ACCOUNT_KEY, senderId, 'model', it.text);
+        console.log(`[ig] -> ${senderId}: pending ${it.kind} delivered ✅`);
+      } else if (it.kind === 'question') {
+        await answerQuestion(senderId, it.text);
+      }
+    } catch (e) { console.error(`[ig] pending ${it.kind} delivery failed:`, e.message); }
+  }
+}
+
+async function handleMessage(senderId, text, quickPayload) {
+  console.log(`[ig] ${senderId}: ${text.slice(0, 80)}`);
+  db.logMessage(ACCOUNT_KEY, senderId, 'user', text);
+
+  // ─── دروازه فالو برای کاربران جدید ───
+  const gate = getGate();
+  if (gate.enabled) {
+    let status = gateStatus(senderId);
+    if (status === 'none') {
+      // گفتگوهای قدیمی (قبل از این قابلیت) معاف‌اند
+      const hasHistory = db.getHistory(ACCOUNT_KEY, senderId).some(m => m.role === 'model');
+      if (hasHistory) { gateSet('ig:' + senderId, 'ok', []); status = 'ok'; }
+    }
+    // توجه: فیلد is_user_follow_business متا نوسان دارد (همان کاربر را در فاصله چند دقیقه
+    // یک‌بار true و یک‌بار false گفت) — پس بعد از اولین تأیید موفق، کاربر معتمد می‌ماند.
+    // چک مجدد فقط اگر صریحاً در ig_gate.json با "recheck_followers": true فعال شود.
+    if (status === 'ok' && gate.recheck_followers === true) {
+      let prof = await fetchProfile(senderId).catch(() => null);
+      if (prof && !prof.following) {
+        await sleep(2500);
+        prof = await fetchProfile(senderId).catch(() => null); // تأیید دوم در برابر نوسان API
+      }
+      if (prof && !prof.following) {
+        gateSet('ig:' + senderId, 'pending', []);
+        status = 'pending';
+        console.log(`[ig] ${senderId}: unfollowed → back to gate`);
+      }
+    }
+    if (status !== 'ok') {
+      const confirmed = isGateConfirm(text, quickPayload, gate);
+      // چک واقعی فالو از API متا — دکمه/متن «فالو کردم» به‌تنهایی کافی نیست
+      const prof = await fetchProfile(senderId).catch(() => null);
+      // اگر پروفایل خوانده نشد (خطای موقت API)، به تأیید خود کاربر اعتماد می‌کنیم
+      const passed = prof ? prof.following : confirmed;
+      // حرف‌های مربوط به دروازه (کردم، باشه و…) سؤال حساب نمی‌شوند
+      const GATE_CHATTER = /^(کردم|فالو|فالو کردم|باشه|حتما|چشم|اوکی|ok|okay|done)[!💚🙏. ]*$/i;
+      if (!confirmed && !GATE_CHATTER.test(text.trim())) pushPending('ig:' + senderId, { kind: 'question', text });
+      if (passed) {
+        console.log(`[ig] ${senderId}: follow verified ✅ (following=${prof?.following})`);
+        await deliverAfterConfirm(senderId, gate, prof?.username);
+      } else {
+        console.log(`[ig] ${senderId}: NOT following yet (checked via API)`);
+        await sleep(humanDelay());
+        // اگر فالو نکرده بود، همان پیام دروازه با دکمه «فالو کردم» تکرار می‌شود
+        const ask = status === 'pending' ? gate.ask_text_short : gate.ask_text;
+        await sendIgGateAsk(senderId, ask, gate);
+        db.logMessage(ACCOUNT_KEY, senderId, 'model', ask);
+        console.log(`[ig] -> ${senderId}: follow gate asked`);
+      }
+      return;
+    }
+  }
+
+  await answerQuestion(senderId, text);
+}
+
+// ─── کامنت → دایرکت (کلمه کلیدی → لینک) ─────────────────────────
+// فایل ig_keywords.json کنار src/ — هر بار خوانده می‌شود تا بدون ری‌استارت ویرایش شود.
+// ساختار: { "کلمه": { "dm_text": "متن دایرکت با لینک", "public_replies": ["ریپلای عمومی ۱", ...] } }
+const KEYWORDS_FILE = path.join(__dirname, '..', 'ig_keywords.json');
+const OUR_USERNAMES = new Set(['doorbinkar1']);
+const OUR_IDS = new Set(['28550280594591265', '17841426965878589']);
+const COMMENT_COOLDOWN_MS = 10 * 60 * 1000; // هر کاربر حداکثر یک اتوماسیون در ۱۰ دقیقه
+const lastCommentReply = new Map();
+
+function getKeywords() {
+  try { return JSON.parse(fs.readFileSync(KEYWORDS_FILE, 'utf8')); } catch { return {}; }
+}
+
+function matchKeyword(text, keywords) {
+  const t = text.trim().toLowerCase();
+  // اول طولانی‌ترین کلیدواژه‌ها تا «قیمت عمده» قبل از «قیمت» مچ شود
+  for (const kw of Object.keys(keywords).sort((a, b) => b.length - a.length)) {
+    if (t.includes(kw.toLowerCase())) return kw;
+  }
+  return null;
+}
+
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+async function sendPrivateReply(commentId, text) {
+  if (!PAGE_TOKEN) throw new Error('IG_PAGE_TOKEN is not set');
+  const res = await fetch(`${GRAPH_BASE}/${GRAPH_VERSION}/me/messages?access_token=${PAGE_TOKEN}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipient: { comment_id: commentId }, message: { text } }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Graph ${res.status}: ${body.slice(0, 300)}`);
+  }
+}
+
+async function sendPublicReply(commentId, text) {
+  if (!PAGE_TOKEN) throw new Error('IG_PAGE_TOKEN is not set');
+  const res = await fetch(`${GRAPH_BASE}/${GRAPH_VERSION}/${commentId}/replies?access_token=${PAGE_TOKEN}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: text }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Graph ${res.status}: ${body.slice(0, 300)}`);
+  }
+}
+
+async function handleComment(value) {
+  const username = value.from?.username || '';
+  const fromId = value.from?.id || '';
+  const commentId = value.id;
+  const text = (value.text || '').trim();
+  if (!commentId || !text) return;
+  // کامنت خودمان یا ریپلای‌هایمان را نادیده بگیر (جلوگیری از حلقه)
+  if (OUR_USERNAMES.has(username) || OUR_IDS.has(fromId)) return;
+
+  const keywords = getKeywords();
+  const kw = matchKeyword(text, keywords);
+
+  const now = Date.now();
+  if (now - (lastCommentReply.get(username) || 0) < COMMENT_COOLDOWN_MS) {
+    if (kw) console.log(`[ig-c] cooldown skip @${username}`);
+  }
+
+  // اگر کلمه کلیدی نبود، شاید کد قطعه باشد → کارت محصول (قیمت عمومی) در دایرکت
+  if (!kw) {
+    const code = extractProductCode(text);
+    if (!code) return; // نه کلیدواژه نه کد قطعه — بی‌خیال
+    if (now - (lastCommentReply.get(username) || 0) < COMMENT_COOLDOWN_MS) return;
+    const p = await productContext(code).catch(() => null);
+    if (!p) return; // چنین قطعه‌ای نداریم
+    lastCommentReply.set(username, now);
+    console.log(`[ig-c] @${username}: کد «${code}» → کارت محصول در DM`);
+    db.logMessage(ACCOUNT_KEY, 'comment:' + username, 'user', text);
+    await sleep(humanDelay());
+    const dm = `سلام ${username ? '@' + username + ' ' : ''}🌟\nممنون از کامنتت. مشخصات قطعه‌ای که پرسیدی:\n\n` + productCard(p);
+    const gate = getGate();
+    if (gate.enabled && username) {
+      // کارت بعد از تأیید فالو در دایرکت تحویل داده می‌شود
+      pushPending('u:' + username, { kind: 'product-card', text: dm });
+      await sendPrivateReply(commentId, gate.ask_text_comment);
+      db.logMessage(ACCOUNT_KEY, 'comment:' + username, 'model', gate.ask_text_comment);
+      console.log(`[ig-c] -> DM @${username} (follow gate) ✅`);
+    } else {
+      await sendPrivateReply(commentId, dm);
+      db.logMessage(ACCOUNT_KEY, 'comment:' + username, 'model', dm);
+      console.log(`[ig-c] -> DM @${username} (product card) ✅`);
+    }
+    return;
+  }
+
+  if (now - (lastCommentReply.get(username) || 0) < COMMENT_COOLDOWN_MS) return;
+  lastCommentReply.set(username, now);
+
+  const conf = keywords[kw];
+  console.log(`[ig-c] @${username}: «${text.slice(0, 60)}» → کلیدواژه «${kw}»`);
+  db.logMessage(ACCOUNT_KEY, 'comment:' + username, 'user', text);
+
+  await sleep(humanDelay());
+
+  // ۱) دایرکت با لینک (با دروازه فالو اگر فعال باشد — لینک بعد از تأیید «فالو کردم» می‌رسد)
+  const gate = getGate();
+  if (gate.enabled && username) {
+    pushPending('u:' + username, { kind: 'kw-link', text: conf.dm_text });
+    await sendPrivateReply(commentId, gate.ask_text_comment);
+    db.logMessage(ACCOUNT_KEY, 'comment:' + username, 'model', gate.ask_text_comment);
+    console.log(`[ig-c] -> DM @${username} (follow gate) ✅`);
+  } else {
+    await sendPrivateReply(commentId, conf.dm_text);
+    db.logMessage(ACCOUNT_KEY, 'comment:' + username, 'model', conf.dm_text);
+    console.log(`[ig-c] -> DM @${username} ✅`);
+  }
+
+  // ۲) ریپلای عمومی متنوع (اگر تعریف شده)
+  if (Array.isArray(conf.public_replies) && conf.public_replies.length) {
+    await sleep(1500 + Math.floor(Math.random() * 2500));
+    const pub = pick(conf.public_replies).replaceAll('{user}', username ? '@' + username : '');
+    await sendPublicReply(commentId, pub);
+    console.log(`[ig-c] -> public reply @${username} ✅`);
+  }
+}
+
+function processPayload(body) {
+  if (body.object !== 'instagram') return;
+  for (const entry of body.entry || []) {
+    for (const ev of entry.messaging || []) {
+      const senderId = ev.sender?.id;
+      if (!senderId) continue;
+      // فشردن دکمه پایدار (postback) — مثل دکمه «فالو کردم» قالب دکمه‌ای
+      const pb = ev.postback;
+      if (pb) {
+        handleMessage(senderId, (pb.title || '').trim() || 'فالو کردم', pb.payload).catch(e => console.error('[ig] postback error:', e.message));
+        continue;
+      }
+      const msg = ev.message;
+      if (!msg || msg.is_echo || !msg.text) continue;
+      handleMessage(senderId, msg.text.trim(), msg.quick_reply?.payload).catch(e => console.error('[ig] reply error:', e.message));
+    }
+    // رویدادهای کامنت (پست/ریلز) و کامنت لایو
+    for (const ch of entry.changes || []) {
+      if (ch.field !== 'comments' && ch.field !== 'live_comments') continue;
+      handleComment(ch.value || {}).catch(e => console.error('[ig-c] error:', e.message));
+    }
+  }
+}
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url, `http://localhost:${PORT}`);
+
+  if (req.method === 'GET' && url.pathname === '/webhook') {
+    const mode = url.searchParams.get('hub.mode');
+    const token = url.searchParams.get('hub.verify_token');
+    const challenge = url.searchParams.get('hub.challenge');
+    if (mode === 'subscribe' && token === VERIFY_TOKEN && challenge) {
+      console.log('[ig] webhook verified ✅');
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end(challenge);
+    } else {
+      res.writeHead(403); res.end('forbidden');
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/webhook') {
+    let raw = '';
+    req.on('data', c => { raw += c; if (raw.length > 1e6) req.destroy(); });
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('EVENT_RECEIVED'); // جواب سریع به متا، پردازش async
+      try { processPayload(JSON.parse(raw)); } catch (e) { console.error('[ig] bad payload:', e.message); }
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/health') {
+    res.writeHead(200); res.end('ok');
+    return;
+  }
+
+  res.writeHead(404); res.end('not found');
+});
+
+server.listen(PORT, '127.0.0.1', () => console.log(`[ig] webhook listening on 127.0.0.1:${PORT}`));

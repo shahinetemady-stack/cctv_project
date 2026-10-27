@@ -16,6 +16,7 @@ from apps.education.models import Article
 
 from ...contentgen import generate_ideas
 from ...models import ChannelPost, ContentIdea, ContentInsight
+from ...trendsources import customer_question_signals, google_trends_signals, rejected_signals
 
 
 def _source_products(limit: int = 10):
@@ -65,13 +66,20 @@ class Command(BaseCommand):
         products = _source_products()
         articles = _source_articles()
         top_posts = _top_insights()
+        trends = google_trends_signals()
+        questions = customer_question_signals()
+        rejected = rejected_signals()
         self.stdout.write(
             f"منابع: {len(products)} محصول، {len(articles)} مقاله"
             + (f"، {len(top_posts)} پست برتر از اینسایت" if top_posts else "")
+            + (f"، {len(trends)} ترند گوگل" if trends else "")
+            + (f"، {len(questions)} سؤال مشتری" if questions else "")
+            + (f"، {len(rejected)} نمونهٔ ردشده" if rejected else "")
         )
 
         try:
-            ideas = generate_ideas(products, articles, count, content_type, top_posts=top_posts)
+            ideas = generate_ideas(products, articles, count, content_type, top_posts=top_posts,
+                                   trends=trends, questions=questions, rejected=rejected)
         except Exception as exc:
             raise CommandError(f"تولید ایده با LLM ناموفق بود: {exc}")
         if not ideas:
@@ -82,6 +90,8 @@ class Command(BaseCommand):
                 product = _match_product(idea["product_name"])
                 self.stdout.write(f"\n── ایدهٔ {i}: {idea['title']} [{idea['category']}]"
                                   + (f" → محصول: {product.name}" if product else ""))
+                if idea.get("why"):
+                    self.stdout.write(f"منبع ایده: {idea['why']}")
                 self.stdout.write(idea["caption"])
                 self.stdout.write(" ".join(f"#{h}" for h in idea["hashtags"]))
             self.stdout.write(self.style.WARNING("\n(dry-run) هیچ رکوردی ساخته نشد."))
@@ -96,6 +106,7 @@ class Command(BaseCommand):
                 source=ContentIdea.Source.AUTO,
                 category=idea["category"],
                 product=product,
+                signal=idea.get("why") or "",
                 status=ContentIdea.Status.USED,
             )
             ChannelPost.objects.create(

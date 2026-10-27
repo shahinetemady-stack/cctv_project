@@ -428,7 +428,7 @@ class AdminPartnerListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        if not _has_perm(request.user, 'users_edit'):
+        if not _has_perm(request.user, 'partner_approve'):
             return _forbidden()
         if request.query_params.get("recent", "").lower() == "true":
             # تازه‌ایجادشده‌ها — همه کاربران از هر مسیر (ثبت‌نام خود سایت، درخواست همکاری،
@@ -462,7 +462,7 @@ class AdminApprovePartnerView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, user_id):
-        if not _has_perm(request.user, 'users_edit'):
+        if not _has_perm(request.user, 'partner_approve'):
             return _forbidden()
         try:
             profile = UserProfile.objects.select_related("user").get(

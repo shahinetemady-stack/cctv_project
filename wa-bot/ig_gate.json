@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "profile_url": "https://instagram.com/doorbinkar1/",
+  "follow_btn_title": "فالو کردن پیج 💚",
+  "ask_text": "ممنون میشم قبل ارسال لینک فالوم کنی 💚 بعد دکمه «فالو کردم» رو بزن.",
+  "ask_text_short": "ممنون میشم قبل ارسال لینک فالوم کنی 💚 بعد دکمه «فالو کردم» رو بزن.",
+  "ask_text_comment": "ممنون میشم قبل ارسال لینک فالوم کنی 💚 instagram.com/doorbinkar1 — بعد همینجا بنویس «فالو کردم».",
+  "confirm_title": "فالو کردم",
+  "confirm_regex": "فالو کردم",
+  "still_not_following_text": "فالوت هنوز توی سیستم ثبت نشده 🙏 اگر تازه فالو کردی، چند لحظه صبر کن و دوباره دکمه رو بزن.",
+  "thanks_text": "ممنون بابت فالو 💚 بفرما، چه قطعه‌ای برای مونتاژ لازم داری؟",
+  "confirmed_text": "ممنون بابت فالو 💚",
+  "recheck_followers": false
+}

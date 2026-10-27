@@ -7,6 +7,7 @@ import useCartStore from '../store/useCartStore'
 import useAuthStore from '../store/useAuthStore'
 import { PageLoader, EmptyState } from '../components/ui'
 import OverdueBanner from '../components/OverdueBanner'
+import Seo from '../components/Seo'
 import { formatPrice } from '../utils/format'
 
 export default function InquiryCartPage() {
@@ -78,6 +79,7 @@ export default function InquiryCartPage() {
 
   return (
     <div className="container-main py-8 max-w-4xl">
+      <Seo title="سبد استعلام" noindex />
       <div className="mb-8">
         <h1 className="font-display font-bold text-2xl text-white">سبد استعلام</h1>
         <p className="text-sm text-gray-steel mt-1">

@@ -44,6 +44,10 @@ def _sanitize_spec_value(value):
     if isinstance(value, float):
         return int(value) if value.is_integer() else str(value)
     if isinstance(value, str):
+        lv = value.strip().lower()
+        # بولین رشته‌ای (ذخیره اشتباه قدیمی) → «دارد» یا حذف
+        if lv in ("true", "false"):
+            return "دارد" if lv == "true" else None
         return value or None
     if isinstance(value, (list, tuple)):
         return "، ".join(str(v) for v in value) or None

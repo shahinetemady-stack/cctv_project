@@ -17,7 +17,7 @@ export const orderService = {
   removeFromCart: (variant_id, settlement_type = null) =>
     api.delete('/orders/cart/', { data: { variant_id, settlement_type } }).then(r => r.data),
 
-  checkout: (shipping_address = '', shipping_method = 'post', freight_company = '') =>
+  checkout: (shipping_address = '', shipping_method = 'courier', freight_company = '') =>
     api.post('/orders/cart/checkout/', { shipping_address, shipping_method, freight_company }).then(r => r.data),
 
   // سبد استعلام

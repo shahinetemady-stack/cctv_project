@@ -31,7 +31,7 @@ export default function BlogPage() {
       <Seo
         title="مقالات تخصصی | دوربینکار"
         description="راهنماها و مقالات تخصصی دوربین مداربسته — آموزش، مقایسه و نکات فنی."
-        canonical="/blog"
+        canonical="/blog/"
       />
       <div className="text-center mb-10">
         <h1 className="font-display font-bold text-3xl text-white mb-3">📚 مقالات تخصصی</h1>

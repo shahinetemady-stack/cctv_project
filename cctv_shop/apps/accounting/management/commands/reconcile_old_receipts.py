@@ -70,6 +70,16 @@ class Command(BaseCommand):
 
         total_done = 0
         for p in candidates:
+            if p.settlement_target != Payment.SettlementTarget.NONE:
+                continue
+            if Payment.objects.filter(
+                    contact_id=p.contact_id,
+                    settlement_target__in=[Payment.SettlementTarget.OPENING,
+                                           Payment.SettlementTarget.CONTACT]).exists():
+                continue
+            if p.derived_sale_payments.exists() or (
+                    p.paired_with and p.paired_with.derived_sale_payments.exists()):
+                continue
             user_id = linked.get(p.contact_id)
             open_invs = [
                 i for i in SaleInvoice.objects.filter(
@@ -100,7 +110,7 @@ class Command(BaseCommand):
                         User.objects.get(id=user_id),
                         budget,
                         date=p.date,
-                        method="transfer",
+                        method="transfer", source_payment=p,
                         note=f"سند انتقال به {pair.contact.name if pair and pair.contact else '?'} — تخصیص سند #{p.id}",
                     )
                     allocated_total = sum(a["amount"] for a in r["allocated"])
@@ -121,6 +131,7 @@ class Command(BaseCommand):
                             note=f"برگشت سند #{p.id} مورخ {p.date} — تخصیص بستانکاری انتقالی به فاکتور" +
                                  (f" — {p.note}" if p.note else ""),
                             reversal_of=p,
+                            settlement_target=Payment.SettlementTarget.CONTACT,
                         )
                     self.stdout.write(self.style.SUCCESS(
                         f"  ✓ تخصیص یافت: "

@@ -28,6 +28,7 @@ urlpatterns = [
 
     path("payments/", views.PaymentListView.as_view(), name="payments"),
     path("payments/voucher/", views.PaymentVoucherView.as_view(), name="payment-voucher"),
+    path("payments/internal-transfer/", views.PaymentInternalTransferView.as_view(), name="payment-internal-transfer"),
     path("payments/<int:pk>/reverse/", views.PaymentReverseView.as_view(), name="payment-reverse"),
     path("cheques/", views.ChequeListView.as_view(), name="cheques"),
     path("cheques/available/", views.ChequeAvailableView.as_view(), name="cheques-available"),

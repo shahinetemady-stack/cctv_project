@@ -50,6 +50,68 @@ def _check_and_alert_low_stock(variant) -> None:
         from apps.notifications.services import notify_low_stock
         notify_low_stock(variant)
 
+
+def _payment_clearing_account_id():
+    from django.db.models import Q
+    from apps.accounting.models import Account
+
+    configured = getattr(settings, "PAYMENT_CLEARING_ACCOUNT_ID", None)
+    if configured:
+        return configured
+    accounts = Account.objects.filter(
+        currency="IRR", is_active=True, account_type__in=["virtual", "bank"],
+    )
+    virtual = accounts.filter(account_type="virtual").first()
+    if virtual:
+        return virtual.id
+    mellat = accounts.filter(account_type="bank").filter(
+        Q(name__icontains="ملت") | Q(bank_name__icontains="ملت"),
+    )
+    if mellat.count() == 1:
+        return mellat.first().id
+    banks = list(accounts.filter(account_type="bank")[:2])
+    return banks[0].id if len(banks) == 1 else None
+
+
+@transaction.atomic
+def complete_order_inventory(order: Order, reason="payment_success") -> bool:
+    """کسر قطعی موجودی و آزادسازی رزرو، فقط یک‌بار برای هر سفارش."""
+    locked = Order.objects.select_for_update().get(pk=order.pk)
+    if locked.stock_deducted:
+        order.stock_deducted = True
+        return False
+
+    from apps.inventory.models import StockMovement, Warehouse
+    warehouse = (
+        Warehouse.objects.filter(is_public=True, is_active=True).first()
+        or Warehouse.objects.filter(is_active=True).first()
+    )
+    for item in locked.items.select_related("variant").all():
+        item.variant.deduct_stock(item.quantity)
+        if warehouse is not None:
+            StockMovement.record(
+                warehouse=warehouse,
+                variant=item.variant,
+                movement_type=StockMovement.MovementType.SALE,
+                quantity=-item.quantity,
+                unit_price=int(item.confirmed_unit_price or item.unit_price),
+                reference=locked.order_number,
+                note=f"فروش سفارش {locked.order_number}",
+            )
+        StockReservation.objects.filter(
+            order=locked, variant=item.variant, is_released=False,
+        ).update(
+            is_released=True,
+            released_at=timezone.now(),
+            release_reason=reason,
+        )
+        _check_and_alert_low_stock(item.variant)
+    locked.stock_deducted = True
+    locked.save(update_fields=["stock_deducted", "updated_at"])
+    order.stock_deducted = True
+    return True
+
+
 def _add_package_order_items(order, cart_item) -> None:
     """آیتم پکیج سبد به اقلام اجزایش باز می‌شود.
     تخفیف پکیج به نسبت قیمت هر قلم سرشکن می‌شود و باقیماندهٔ گردکردن روی یک قلم
@@ -100,6 +162,10 @@ def _create_sale_invoice_for_order(order: Order, created_by=None):
 
     items = list(order.items.select_related("variant").all())
     today = timezone.localdate()
+    invoice_settlement = (
+        order.settlement_type if order.settlement_type in SaleInvoice.Settlement.values
+        else SaleInvoice.Settlement.CASH
+    )
     invoice = SaleInvoice.objects.create(
         source=SaleInvoice.InvoiceSource.ORDER,
         status=SaleInvoice.Status.CONFIRMED,
@@ -107,8 +173,8 @@ def _create_sale_invoice_for_order(order: Order, created_by=None):
         customer=order.user,
         customer_name=order.user.get_full_name(),
         customer_phone=order.user.phone,
-        settlement=SaleInvoice.Settlement.CASH,
-        due_date=None,
+        settlement=invoice_settlement,
+        due_date=order.settlement_due_date,
         created_by=created_by,
     )
     for item in items:
@@ -118,19 +184,18 @@ def _create_sale_invoice_for_order(order: Order, created_by=None):
             quantity=item.quantity,
             unit_price=item.confirmed_unit_price or item.unit_price,
         )
-    # برای هر نوع تسویه یک ردیف (سفارش مستقیم تمام‌نقدی است ولی این عمومی نگه داشته شده)
-    totals_by_type = {}
+    totals_by_terms = {}
     for item in items:
         price = item.confirmed_unit_price or item.unit_price
-        totals_by_type[item.settlement_type] = (
-            totals_by_type.get(item.settlement_type, 0) + price * item.quantity
-        )
-    for st, amount in totals_by_type.items():
+        due = item.settlement_due_date or settlement_due_for(item.settlement_type, today)
+        key = (item.settlement_type, due)
+        totals_by_terms[key] = totals_by_terms.get(key, 0) + price * item.quantity
+    for (st, due), amount in totals_by_terms.items():
         SettlementLine.objects.create(
             invoice=invoice,
             settlement_type=st,
             amount=amount,
-            due_date=settlement_due_for(st, today),
+            due_date=due,
         )
     return invoice
 
@@ -161,6 +226,8 @@ def _auto_confirm_cash_order(order: Order) -> bool:
         item.save(update_fields=["confirmed_unit_price", "reserved_until", "updated_at"])
 
     logger.info(f"[ORDER] Auto-confirmed cash order: {order.order_number} | {order.total_amount} rials")
+    # اگر مشتری بستانکار است همین‌جا از حسابش تسویه شود — بدون نیاز به درگاه
+    try_settle_order_with_credit(order, actor=order.user)
     return True
 
 
@@ -317,11 +384,24 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
     from apps.notifications.services import notify_inquiry_confirmed
     from apps.orders.models import settlement_due_for
 
+    order = Order.objects.select_for_update().select_related("user").get(pk=order.pk)
     if order.status != Order.Status.PENDING:
         raise ValueError(f"این سفارش در وضعیت '{order.get_status_display()}' است و قابل تأیید نیست.")
+    if confirmed_amount <= 0:
+        raise ValueError("مبلغ نهایی سفارش باید بیشتر از صفر باشد")
+    if settlement_type is not None and settlement_type not in Order.Settlement.values:
+        raise ValueError("نوع تسویه نامعتبر است")
+
+    _items = list(order.items.select_related("variant").all())
+    for item in _items:
+        if settlement_type:
+            item.settlement_type = settlement_type
+        if settlement_due_date:
+            item.settlement_due_date = settlement_due_date
+        elif settlement_type:
+            item.settlement_due_date = settlement_due_for(settlement_type)
 
     # کنترل سقف اعتبار — سهم غیرنقدی سفارش (به نسبت ارزش اقلام از مبلغ تأییدشده)
-    _items = list(order.items.select_related("variant").all())
     _base = sum(i.unit_price * i.quantity for i in _items) or confirmed_amount
     _non_cash = sum(
         round(confirmed_amount * (i.unit_price * i.quantity) / _base)
@@ -341,17 +421,21 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
                 f"موجودی: {item.variant.available_stock}"
             )
 
-    # ثبت قیمت نهایی — سفارش نقدی به درگاه/فیش می‌رود، سفارش کاملاً اعتباری مستقیم به ارسال
-    has_cash_item = order.items.filter(settlement_type=Order.Settlement.CASH).exists()
+    has_cash_item = any(item.settlement_type == Order.Settlement.CASH for item in _items)
+    if has_cash_item and not (sarraf_account_number and sarraf_account_holder):
+        raise ValueError("برای اقلام نقدی، شماره حساب و نام صاحب حساب صراف الزامی است")
     order.confirmed_amount = confirmed_amount
     order.updated_by = staff or admin_user
     order.status = Order.Status.AWAITING_PAYMENT if has_cash_item else Order.Status.READY_TO_SHIP
     update_fields = ["confirmed_amount", "status", "admin_notes", "updated_by", "updated_at"]
-    if settlement_type in Order.Settlement.values:
+    if settlement_type:
         order.settlement_type = settlement_type
         update_fields.append("settlement_type")
     if settlement_due_date:
         order.settlement_due_date = settlement_due_date
+        update_fields.append("settlement_due_date")
+    elif settlement_type:
+        order.settlement_due_date = settlement_due_for(settlement_type)
         update_fields.append("settlement_due_date")
     order.admin_notes = (
         (order.admin_notes + "\n" if order.admin_notes else "")
@@ -362,8 +446,7 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
         order.set_payment_deadline()
 
     # رزرو موجودی + توزیع مبلغ تأییدشده روی اقلام به نسبت ارزش هر قلم
-    # (تقسیم مساوی قدیمی برای اقلام با قیمت متفاوت قیمت هر قلم را خراب می‌کرد)
-    items = list(order.items.select_related("variant").all())
+    items = _items
     base_total = sum(i.unit_price * i.quantity for i in items) or confirmed_amount
     remaining = confirmed_amount
     for idx, item in enumerate(items):
@@ -375,7 +458,10 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
             item.confirmed_unit_price = share // item.quantity if item.quantity else 0
             remaining -= item.confirmed_unit_price * item.quantity
         item.reserved_until = order.payment_deadline
-        item.save(update_fields=["confirmed_unit_price", "reserved_until", "updated_at"])
+        item.save(update_fields=[
+            "confirmed_unit_price", "reserved_until", "settlement_type",
+            "settlement_due_date", "updated_at",
+        ])
 
     # لینک پرداخت توسط /api/orders/bank/request/ تولید می‌شود
     # فعلاً فقط deadline را ذخیره می‌کنیم
@@ -391,6 +477,10 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
     from apps.accounting.models import SaleInvoice, SaleItem, SettlementLine
 
     confirm_date = timezone.localdate()
+    invoice_settlement = (
+        order.settlement_type if order.settlement_type in SaleInvoice.Settlement.values
+        else SaleInvoice.Settlement.CASH
+    )
     invoice = SaleInvoice.objects.create(
         source=SaleInvoice.InvoiceSource.ORDER,
         status=SaleInvoice.Status.CONFIRMED,
@@ -398,8 +488,8 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
         customer=order.user,
         customer_name=order.user.get_full_name(),
         customer_phone=order.user.phone,
-        settlement=SaleInvoice.Settlement.CASH,
-        due_date=None,
+        settlement=invoice_settlement,
+        due_date=order.settlement_due_date,
         created_by=staff,
     )
     for item in items:
@@ -410,19 +500,18 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
             unit_price=item.confirmed_unit_price or item.unit_price,
         )
 
-    # گروه‌بندی اقلام بر اساس نحوه تسویه — برای هر نوع یک ردیف تسویه
-    totals_by_type = {}
+    totals_by_terms = {}
     for item in items:
         price = item.confirmed_unit_price or item.unit_price
-        totals_by_type[item.settlement_type] = (
-            totals_by_type.get(item.settlement_type, 0) + price * item.quantity
-        )
-    for st, amount in totals_by_type.items():
+        due = item.settlement_due_date or settlement_due_for(item.settlement_type, confirm_date)
+        key = (item.settlement_type, due)
+        totals_by_terms[key] = totals_by_terms.get(key, 0) + price * item.quantity
+    for (st, due), amount in totals_by_terms.items():
         SettlementLine.objects.create(
             invoice=invoice,
             settlement_type=st,
             amount=amount,
-            due_date=settlement_due_for(st, confirm_date),
+            due_date=due,
         )
 
     # پیامک به مشتری (مرحله ۴)
@@ -431,14 +520,21 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
     notify_order_status_sms(order)
     # پیامک اطلاعات حساب صراف برای پرداخت اقلام نقدی
     if has_cash_item and order.sarraf_account_number:
+        cash_total = sum(
+            (item.confirmed_unit_price or item.unit_price) * item.quantity
+            for item in items if item.settlement_type == Order.Settlement.CASH
+        )
         notify_account_info_sms(
             order.user.phone, order.user.get_full_name(),
             order.sarraf_account_number, order.sarraf_account_holder,
-            amount=order.confirmed_amount or order.total_amount,
+            amount=cash_total,
             user=order.user, order=order,
         )
 
     logger.info(f"[ORDER] Inquiry confirmed: {order.order_number} | Admin: {admin_user}")
+    # سفارش تمام‌نقدیِ مشتری بستانکار — همین‌جا از حسابش تسویه شود (بدون درگاه/فیش)
+    if order.settlement_type == Order.Settlement.CASH:
+        try_settle_order_with_credit(order, actor=admin_user)
     return order
 
 
@@ -446,57 +542,45 @@ def confirm_inquiry_order(order: Order, admin_user, confirmed_amount: int,
 
 @transaction.atomic
 def process_payment_callback(order: Order, ref_id: str, success: bool) -> Order:
-    """
-    پردازش callback درگاه پرداخت.
-    اگر موفق: موجودی کسر شود، وضعیت PAID شود.
-    اگر ناموفق: وضعیت تغییر نکند (کاربر می‌تواند دوباره تلاش کند).
-    """
+    """تکمیل ایدمپوتنت سفارش پس از تأیید بانک."""
     from apps.notifications.services import notify_order_paid
 
+    order = Order.objects.select_for_update().select_related("user").get(pk=order.pk)
     if order.status != Order.Status.AWAITING_PAYMENT:
         raise ValueError("این سفارش در وضعیت مناسب برای پرداخت نیست.")
-
     if not success:
         logger.warning(f"[PAYMENT] Failed payment for order {order.order_number}")
         return order
 
-    # کسر موجودی واقعی + ثبت کاردکس (الگوی همان _record_warehouse_outflow حسابداری)
-    from apps.inventory.models import StockMovement, Warehouse
-    warehouse = (
-        Warehouse.objects.filter(is_public=True, is_active=True).first()
-        or Warehouse.objects.filter(is_active=True).first()
-    )
-    for item in order.items.select_related("variant").all():
-        item.variant.deduct_stock(item.quantity)
-        if warehouse is not None:
-            try:
-                StockMovement.record(
-                    warehouse=warehouse,
-                    variant=item.variant,
-                    movement_type=StockMovement.MovementType.SALE,
-                    quantity=-item.quantity,
-                    unit_price=int(item.confirmed_unit_price or item.unit_price),
-                    reference=order.order_number,
-                    note=f"فروش پس از پرداخت سفارش {order.order_number}",
-                )
-            except Exception as exc:
-                logger.warning(f"[INVENTORY] ثبت کاردکس فروش سفارش {order.order_number} ناموفق: {exc}")
-        # آزاد کردن رکورد رزرو (نه موجودی — چون deduct_stock مراقب است)
-        StockReservation.objects.filter(
-            order=order, variant=item.variant, is_released=False
-        ).update(
-            is_released=True,
-            released_at=timezone.now(),
-            release_reason="payment_success",
+    from apps.accounting.services import recompute_invoice_status, settle_single_invoice
+    invoice = getattr(order, "sale_invoice", None)
+    if invoice is None:
+        invoice = _create_sale_invoice_for_order(order, created_by=order.user)
+    if invoice.remaining_amount > 0:
+        settle_single_invoice(
+            invoice, invoice.remaining_amount,
+            date=timezone.localdate(), method="online",
+            to_account_id=_payment_clearing_account_id(),
+            reference=str(ref_id),
+            note=f"پرداخت آنلاین سفارش {order.order_number}",
         )
-        _check_and_alert_low_stock(item.variant)
+    else:
+        recompute_invoice_status(invoice)
+    invoice.refresh_from_db()
+    if invoice.status != invoice.Status.PAID:
+        raise ValueError("تسویه فاکتور سفارش کامل نشد")
 
+    order.refresh_from_db()
     order.status = Order.Status.PAID
     order.payment_ref_id = ref_id
-    order.paid_at = timezone.now()
-    order.save(update_fields=["status", "payment_ref_id", "paid_at", "updated_at"])
+    order.payment_method = "online"
+    order.paid_amount = invoice.paid_amount
+    if not order.paid_at:
+        order.paid_at = timezone.now()
+    order.save(update_fields=[
+        "status", "payment_ref_id", "payment_method", "paid_amount", "paid_at", "updated_at",
+    ])
 
-    # اطلاع‌رسانی نزدیکی به آستانه ارتقای سطح باشگاه (best-effort)
     profile = getattr(order.user, "profile", None)
     if profile is not None:
         from apps.users.services import maybe_notify_near_tier
@@ -505,25 +589,79 @@ def process_payment_callback(order: Order, ref_id: str, success: bool) -> Order:
         except Exception as e:
             logger.exception(f"[CLUB] خطا در بررسی آستانه سطح برای سفارش {order.order_number}: {e}")
 
-    # فاکتور فروش فقط بعد از پرداخت موفق ساخته و همان لحظه تسویه می‌شود
-    # (سفارش‌های تأییدشده توسط ادمین از قبل فاکتور دارند؛ سفارش‌های تأیید خودکار نه)
-    from apps.accounting.services import settle_single_invoice
-    invoice = getattr(order, "sale_invoice", None)
-    if invoice is None:
-        invoice = _create_sale_invoice_for_order(order, created_by=order.user)
-    if invoice.remaining_amount > 0:
-        settle_single_invoice(
-            invoice, invoice.remaining_amount,
-            date=timezone.localdate(), method="online",
-            reference=str(ref_id),
-            note=f"پرداخت آنلاین سفارش {order.order_number}",
-        )
-
     notify_order_paid(order)
     from apps.notifications.services import notify_order_status_sms
     notify_order_status_sms(order)
     logger.info(f"[PAYMENT] Success: {order.order_number} | ref: {ref_id}")
     return order
+
+
+# ─── تسویه خودکار از بستانکاری مشتری ─────────────────────────────────────────
+
+def customer_credit_irr(user) -> int:
+    from apps.accounting.services import available_customer_credit_irr
+
+    return available_customer_credit_irr(user)
+
+
+@transaction.atomic
+def try_settle_order_with_credit(order: Order, actor=None) -> bool:
+    """
+    اگر مشتری بستانکار باشد و بستانکاری‌اش بدهی‌های باز + مبلغ همین سفارش را
+    کامل پوشش دهد، سفارش بدون درگاه/فیش از حسابش تسویه می‌شود:
+    موجودی کسر و رزروها آزاد می‌شود، فاکتور فروش (اگر نبود) ساخته و از مخازن
+    بستانکاری تسویه می‌شود و سفارش PAID می‌شود.
+    شرط «پوشش کامل بدهی‌های باز» تضمین می‌کند تخصیص FIFO به فاکتور این سفارش
+    هم برسد و تسویه نیمه‌کاره رخ ندهد. خروجی: True اگر تسویه انجام شد.
+    """
+    from apps.accounting.services import (
+        consume_contact_credit, consume_sale_overpayment, open_invoice_debt_irr,
+    )
+
+    order = Order.objects.select_for_update().select_related("user").get(pk=order.pk)
+    if order.status != Order.Status.AWAITING_PAYMENT:
+        return False
+    user = order.user
+    amount = int(order.confirmed_amount or order.total_amount or 0)
+    if amount <= 0:
+        return False
+
+    invoice_exists = getattr(order, "sale_invoice", None) is not None
+    need = open_invoice_debt_irr(user) + (0 if invoice_exists else amount)
+    if customer_credit_irr(user) < need:
+        return False
+
+    invoice = getattr(order, "sale_invoice", None)
+    if invoice is None:
+        invoice = _create_sale_invoice_for_order(order, created_by=actor or user)
+
+    # مصرف بستانکاری از هر سه مخزن (تخصیص FIFO روی فاکتورهای باز — فاکتور این سفارش هم پوشش داده شده)
+    consume_contact_credit(user, actor=actor)
+    consume_sale_overpayment(user)
+    apply_customer_credit(user, actor=actor)
+
+    if invoice.remaining_amount > 0:  # با شرط نیاز بالا نباید رخ دهد — احتیاط (rollback)
+        raise ValueError(f"تسویه سفارش {order.order_number} از بستانکاری کامل نشد")
+
+    order.refresh_from_db()
+    order.status = Order.Status.PAID
+    order.payment_method = "credit"
+    order.paid_amount = invoice.paid_amount
+    if not order.paid_at:
+        order.paid_at = timezone.now()
+    order.admin_notes = (
+        (order.admin_notes + "\n" if order.admin_notes else "")
+        + f"[AUTO] تسویه از بستانکاری مشتری — {timezone.localtime().strftime('%Y-%m-%d %H:%M')}"
+    )
+    order.save(update_fields=[
+        "status", "payment_method", "paid_amount", "paid_at", "admin_notes", "updated_at",
+    ])
+
+    from apps.notifications.services import notify_order_paid, notify_order_status_sms
+    notify_order_paid(order)
+    notify_order_status_sms(order)
+    logger.info(f"[CREDIT] سفارش {order.order_number} از بستانکاری {user.phone} تسویه شد ({amount:,} ریال)")
+    return True
 
 
 # ─── Cancel Order ─────────────────────────────────────────────────────────────
@@ -535,20 +673,30 @@ def cancel_order(order: Order, reason: str = "manual") -> Order:
     """
     from apps.notifications.services import notify_order_cancelled
 
+    order = Order.objects.select_for_update().select_related("user").get(pk=order.pk)
     cancellable_statuses = [Order.Status.PENDING, Order.Status.AWAITING_PAYMENT]
     if order.status not in cancellable_statuses:
         raise ValueError(f"سفارش در وضعیت '{order.get_status_display()}' قابل کنسل نیست.")
+    invoice = getattr(order, "sale_invoice", None)
+    if invoice and (invoice.sale_payments.exists() or invoice.paid_amount > 0):
+        raise ValueError("برای لغو سفارش دارای دریافت، ابتدا اسناد دریافت را برگشت بزنید")
 
     # آزاد کردن رزروها
     for reservation in order.reservations.filter(is_released=False):
         reservation.release(reason=reason)
 
+    if invoice and invoice.status != invoice.Status.CANCELLED:
+        invoice.status = invoice.Status.CANCELLED
+        invoice.save(update_fields=["status", "updated_at"])
+        invoice.settlement_lines.update(is_active=False)
     order.status = Order.Status.CANCELLED
+    order.paid_amount = 0
+    order.payment_method = ""
     order.admin_notes = (
         (order.admin_notes + "\n" if order.admin_notes else "")
         + f"[کنسل] دلیل: {reason} — {timezone.localtime().strftime('%Y-%m-%d %H:%M')}"
     )
-    order.save(update_fields=["status", "admin_notes", "updated_at"])
+    order.save(update_fields=["status", "paid_amount", "payment_method", "admin_notes", "updated_at"])
 
     notify_order_cancelled(order)
     from apps.notifications.services import notify_order_status_sms
@@ -560,21 +708,13 @@ def cancel_order(order: Order, reason: str = "manual") -> Order:
 # ─── Settlement reminders ──────────────────────────────────────────────────────
 
 def due_settlements_queryset():
-    """سفارش‌هایی که حداقل یک قلم اعتباری سررسیدرسیده دارند و هنوز تسویه/لغو نشده‌اند.
-    علاوه بر منطق per-item قدیمی، سفارش‌هایی هم شامل می‌شوند که ردیف تسویهٔ
-    فعال فاکتور فروششان سررسید رسیده و هنوز مانده دارد."""
+    """فقط سفارش‌هایی با ردیف تسویهٔ سررسیدرسیده و ماندهٔ واقعی."""
     from django.db.models import Q, Sum, F
     today = timezone.localdate()
-    credit_types = [Order.Settlement.CREDIT, Order.Settlement.MONTH1, Order.Settlement.MONTH2]
     closed_statuses = [
         Order.Status.PAID, Order.Status.CANCELLED,
         Order.Status.REFUNDED, Order.Status.REJECTED,
     ]
-
-    base_filter = (
-        Q(items__settlement_type__in=credit_types, items__settlement_due_date__lte=today)
-        | Q(settlement_type__in=credit_types, settlement_due_date__lte=today)
-    )
 
     # ردیف‌های تسویه فعالِ سررسیدرسیده با مانده > ۰ (مانده = amount − Σ allocations)
     # نقدی: روز صدور سررسید حساب نمی‌شود — از فردای صدور فاکتور یادآوری می‌رود.
@@ -595,7 +735,7 @@ def due_settlements_queryset():
     )
 
     return Order.objects.filter(
-        base_filter | Q(pk__in=due_line_order_ids)
+        pk__in=due_line_order_ids,
     ).exclude(status__in=closed_statuses).distinct()
 
 
@@ -633,6 +773,7 @@ def send_due_settlement_reminders() -> int:
     return sent
 
 
+@transaction.atomic
 def apply_customer_credit(user, actor=None) -> int:
     """
     بستانکاری نقدی مشتری (اضافه‌واریزی‌های قبلی) را به روش FIFO به فاکتورهای
@@ -641,7 +782,12 @@ def apply_customer_credit(user, actor=None) -> int:
     → مبلغ اعمال‌شده (ریال)
     """
     profile = getattr(user, "profile", None)
-    credit = int(profile.payment_credit_irr or 0) if profile else 0
+    if profile is None:
+        return 0
+    from apps.users.models import UserProfile
+
+    profile = UserProfile.objects.select_for_update().get(pk=profile.pk)
+    credit = int(profile.payment_credit_irr or 0)
     if not credit:
         return 0
 
@@ -653,7 +799,7 @@ def apply_customer_credit(user, actor=None) -> int:
     profile.save(update_fields=["payment_credit_irr", "updated_at"])
     result = settle_customer_fifo(
         user, credit,
-        date=timezone.localdate(), actor=actor, method="transfer",
+        date=timezone.localdate(), actor=actor, method="credit",
         note="تخصیص خودکار از بستانکاری مشتری (اضافه‌واریزی قبلی)",
     )
     applied = credit - result["leftover"]

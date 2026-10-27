@@ -201,6 +201,13 @@ def cart_checkout(request):
     POST /api/orders/cart/checkout/
     تبدیل سبد به سفارش + رزرو موجودی + لینک پرداخت
     """
+    shipping_method = request.data.get("shipping_method") or "courier"
+    if shipping_method not in ("courier", "freight"):
+        return Response(
+            {"error": "روش ارسال انتخاب‌شده غیرفعال است؛ لطفاً پیک یا باربری را انتخاب کنید."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     try:
         cart = Cart.objects.get(user=effective_user(request.user))
     except Cart.DoesNotExist:
@@ -211,7 +218,6 @@ def cart_checkout(request):
         return blocked
 
     shipping_address = request.data.get("shipping_address", "")
-    shipping_method = request.data.get("shipping_method", "")
     freight_company = request.data.get("freight_company", "")
 
     try:
@@ -576,7 +582,7 @@ class AdminOrderListView(APIView):
         if not _has_perm(request.user, "orders_view"):
             return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
         from .models import Order
-        qs = Order.objects.select_related('user', 'user__profile', 'created_by', 'updated_by').order_by('-created_at')
+        qs = Order.objects.select_related('user', 'user__profile', 'created_by', 'updated_by', 'sale_invoice').order_by('-created_at')
 
         status = request.query_params.get('status')
         delivery = request.query_params.get('delivery_status')
@@ -613,7 +619,10 @@ class AdminOrderListView(APIView):
             'shipping_method': o.shipping_method or '',
             'shipping_method_display': o.get_shipping_method_display() if o.shipping_method else '',
             'shipping_address': o.shipping_address or '',
+            'paid_amount': o.sale_invoice.paid_amount if hasattr(o, 'sale_invoice') else (o.paid_amount or 0),
+            'paid_at': _iso_local(o.paid_at) if o.paid_at else '',
             'created_at': _iso_local(o.created_at),
+            'updated_at': _iso_local(o.updated_at),
             'created_by': (o.created_by.get_full_name() or o.created_by.phone) if o.created_by else '',
             'updated_by': o.updated_by.get_full_name() or o.updated_by.phone if o.updated_by else '',
             'status_updated_at': _iso_local(o.status_updated_at) if o.status_updated_at else '',
@@ -632,7 +641,7 @@ class AdminOrderDetailView(APIView):
             return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
         from .models import Order
         try:
-            order = Order.objects.select_related('user', 'created_by', 'updated_by').prefetch_related('items__variant__product').get(
+            order = Order.objects.select_related('user', 'created_by', 'updated_by', 'sale_invoice').prefetch_related('items__variant__product').get(
                 order_number=order_number
             )
         except Order.DoesNotExist:
@@ -672,7 +681,7 @@ class AdminOrderDetailView(APIView):
             'is_settlement_due': order.is_settlement_due,
             'sarraf_account_number': order.sarraf_account_number or '',
             'sarraf_account_holder': order.sarraf_account_holder or '',
-            'paid_amount': order.paid_amount,
+            'paid_amount': order.sale_invoice.paid_amount if hasattr(order, 'sale_invoice') else order.paid_amount,
             'payment_method': order.payment_method,
             'customer_notes': order.customer_notes or '',
             'admin_notes': order.admin_notes or '',
@@ -702,16 +711,19 @@ class AdminOrderItemUpdateView(APIView):
     """
     permission_classes = [IsAdminUser]
 
+    @transaction.atomic
     def patch(self, request, order_number, item_id):
         from apps.accounting.views import _has_perm
         if not _has_perm(request.user, "orders_view"):
             return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
         from .models import Order, OrderItem, Settlement, StockShortage
         try:
-            order = Order.objects.get(order_number=order_number)
+            order = Order.objects.select_for_update().get(order_number=order_number)
             item = order.items.get(pk=item_id)
         except (Order.DoesNotExist, OrderItem.DoesNotExist):
             return Response({'error': 'سفارش یا قلم یافت نشد'}, status=404)
+        if order.status != Order.Status.PENDING or getattr(order, "sale_invoice", None):
+            return Response({'error': 'اقلام سفارش فقط پیش از تأیید و صدور فاکتور قابل ویرایش است'}, status=400)
 
         d = request.data
 
@@ -786,6 +798,7 @@ class AdminOrderUpdateView(APIView):
     """PATCH /api/orders/admin/<order_number>/update/ — آپدیت وضعیت سفارش"""
     permission_classes = [IsAdminUser]
 
+    @transaction.atomic
     def patch(self, request, order_number):
         from apps.accounting.views import _has_perm
         if not _has_perm(request.user, "orders_view"):
@@ -793,37 +806,59 @@ class AdminOrderUpdateView(APIView):
         from .models import Order
         from django.utils import timezone
         try:
-            order = Order.objects.get(order_number=order_number)
+            order = Order.objects.select_for_update().get(order_number=order_number)
         except Order.DoesNotExist:
             return Response({'error': 'سفارش یافت نشد'}, status=404)
 
         d = request.data
+        if d.get('status') == Order.Status.CANCELLED and order.status != Order.Status.CANCELLED:
+            try:
+                order = cancel_order(order, reason="admin_update")
+            except ValueError as exc:
+                return Response({'error': str(exc)}, status=400)
+            return Response({'ok': True, 'order_number': order.order_number})
+        if d.get('status') in (Order.Status.PAID, Order.Status.REFUNDED, Order.Status.REJECTED) \
+                and d['status'] != order.status:
+            return Response({'error': 'تغییر وضعیت مالی سفارش فقط از مسیر پرداخت/سند مربوط انجام می‌شود'}, status=400)
+        if d.get('status') in (Order.Status.PENDING, Order.Status.CONFIRMED, Order.Status.AWAITING_PAYMENT) \
+                and d['status'] != order.status:
+            return Response({'error': 'بازگرداندن وضعیت سفارش از فرم ویرایش مجاز نیست'}, status=400)
+
+        invoice = getattr(order, 'sale_invoice', None)
+        if 'confirmed_amount' in d and int(d['confirmed_amount'] or 0) != int(order.confirmed_amount or 0):
+            return Response({'error': 'مبلغ تأییدشده فقط از مسیر تأیید سفارش تغییر می‌کند'}, status=400)
+        if 'paid_amount' in d and int(d['paid_amount'] or 0) != int(order.paid_amount or 0):
+            return Response({'error': 'مبلغ پرداخت‌شده فقط از اسناد دریافت محاسبه می‌شود'}, status=400)
+        if 'payment_method' in d and d['payment_method'] != order.payment_method:
+            return Response({'error': 'روش پرداخت فقط از اسناد دریافت تعیین می‌شود'}, status=400)
+        if ('settlement_type' in d and d['settlement_type'] != order.settlement_type) \
+                and (invoice or order.status != Order.Status.PENDING):
+            return Response({'error': 'نحوه تسویه پس از تأیید/صدور فاکتور قابل تغییر نیست'}, status=400)
+
         old_status = order.status
         allowed = ['status', 'delivery_status', 'courier_company', 'tracking_code',
-                   'settlement_type', 'confirmed_amount', 'admin_notes', 'paid_amount',
-                   'payment_method', 'shipping_method', 'freight_company']
+                   'settlement_type', 'admin_notes', 'shipping_method', 'freight_company']
         for field in allowed:
             if field in d:
                 setattr(order, field, d[field])
 
-        # موعد تسویه — رشته YYYY-MM-DD یا null
         if 'settlement_due_date' in d:
             raw = d['settlement_due_date']
-            if not raw:
-                order.settlement_due_date = None
-            else:
+            new_due = None
+            if raw:
                 from datetime import date as _date
                 try:
-                    order.settlement_due_date = _date.fromisoformat(str(raw))
+                    new_due = _date.fromisoformat(str(raw))
                 except ValueError:
                     return Response({'error': 'فرمت موعد تسویه نامعتبر است (YYYY-MM-DD)'}, status=400)
+            if new_due != order.settlement_due_date and (invoice or order.status != Order.Status.PENDING):
+                return Response({'error': 'موعد تسویه پس از تأیید/صدور فاکتور قابل تغییر نیست'}, status=400)
+            order.settlement_due_date = new_due
 
-        # تو حسابی بدون موعد دستی → موعد خودکار ۱۴ روزه (انتخاب تقویم برای تو حسابی حذف شده)
         if d.get('settlement_type') == 'credit' and 'settlement_due_date' not in d:
             from .models import settlement_due_for
             order.settlement_due_date = settlement_due_for('credit')
 
-        # تنظیم خودکار تاریخ ارسال
         if d.get('delivery_status') == 'shipped' and not getattr(order, 'shipped_at', None):
             order.shipped_at = timezone.now()
         if d.get('delivery_status') == 'delivered' and not getattr(order, 'delivered_at', None):
@@ -833,7 +868,6 @@ class AdminOrderUpdateView(APIView):
         order.status_updated_at = timezone.now()
         order.save()
 
-        # پیامک تغییر وضعیت به مشتری — best-effort
         if 'status' in d and order.status != old_status:
             from apps.notifications.services import notify_order_status_sms
             notify_order_status_sms(order)
@@ -1077,6 +1111,10 @@ class AdminReceiptListCreateView(APIView):
             order = Order.objects.get(order_number=order_number)
         except Order.DoesNotExist:
             return Response({"error": "سفارش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
+        if order.status != Order.Status.AWAITING_PAYMENT:
+            return Response({"error": "فیش فقط برای سفارش در انتظار پرداخت قابل ثبت است"}, status=400)
+        if order.items.exclude(settlement_type="cash").exists():
+            return Response({"error": "ثبت فیش واریزی فقط برای سفارش‌های نقدی است"}, status=400)
 
         data, err = _parse_receipt_payload(request)
         if err:
@@ -1112,12 +1150,16 @@ class AdminReceiptApproveView(APIView):
             return Response({"error": "شما دسترسی لازم برای این عملیات را ندارید"}, status=403)
         from apps.accounting.models import PaymentReceipt
         try:
-            receipt = PaymentReceipt.objects.select_related("order", "customer").get(pk=pk)
+            receipt = PaymentReceipt.objects.select_for_update().select_related("order", "customer").get(pk=pk)
         except PaymentReceipt.DoesNotExist:
             return Response({"error": "فیش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
         if receipt.status != PaymentReceipt.Status.PENDING:
             return Response({"error": "این فیش قبلاً بررسی شده است."},
                             status=status.HTTP_400_BAD_REQUEST)
+        if receipt.order.status != Order.Status.AWAITING_PAYMENT:
+            return Response({"error": "وضعیت سفارش برای تأیید فیش معتبر نیست"}, status=400)
+        if receipt.order.items.exclude(settlement_type="cash").exists():
+            return Response({"error": "تأیید فیش فقط برای سفارش نقدی مجاز است"}, status=400)
 
         # فیش تأییدشده یعنی پرداخت انجام شده — سفارش‌های تأیید خودکار هنوز فاکتور
         # ندارند (فاکتور فقط بعد از پرداخت ساخته می‌شود)؛ اینجا ساخته می‌شود تا

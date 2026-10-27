@@ -140,9 +140,7 @@ class Investor(AuditableModel, TimeStampedModel):
     @property
     def principal(self):
         """اصل سرمایه فعلی = مجموع واریزها − برداشت‌ها (ریال)."""
-        from django.db.models import Sum
-        s = self.movements.aggregate(total=Sum("amount"))["total"]
-        return int(s) if s else 0
+        return sum(movement.signed_amount for movement in self.movements.all())
 
 
 class InvestorMovement(AuditableModel, TimeStampedModel):
@@ -161,6 +159,9 @@ class InvestorMovement(AuditableModel, TimeStampedModel):
     account = models.ForeignKey("accounting.Account", on_delete=models.SET_NULL,
                                 null=True, blank=True, related_name="investor_movements",
                                 verbose_name="حساب (اختیاری)")
+    payment = models.OneToOneField("accounting.Payment", on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name="investor_movement",
+                                   verbose_name="سند نقدی")
     note = models.CharField(max_length=200, blank=True, verbose_name="توضیح")
 
     class Meta:

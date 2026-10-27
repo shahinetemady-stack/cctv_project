@@ -297,6 +297,7 @@ class Order(TimeStampedModel, AuditMixin):
         verbose_name="کد پیگیری پرداخت",
     )
     paid_at = models.DateTimeField(null=True, blank=True, verbose_name="زمان پرداخت")
+    stock_deducted = models.BooleanField(default=False, verbose_name="موجودی سفارش کسر شده")
 
     # ── Shipping ──────────────────────────────────────────────────────
     shipping_address = models.TextField(blank=True, verbose_name="آدرس ارسال")
@@ -311,7 +312,7 @@ class Order(TimeStampedModel, AuditMixin):
     payment_method = models.CharField(
         max_length=50, blank=True, default="",
         verbose_name="روش پرداخت",
-        choices=[("cash","نقد"),("transfer","کارت به کارت"),("online","آنلاین"),("check","چک")],
+        choices=[("cash","نقد"),("transfer","کارت به کارت"),("online","آنلاین"),("check","چک"),("credit","بستانکاری")],
     )
     sarraf_account_number = models.CharField(
         max_length=50, blank=True, default="", verbose_name="شماره حساب/کارت صراف"
@@ -400,6 +401,16 @@ class Order(TimeStampedModel, AuditMixin):
         if self.status in (self.Status.PAID, self.Status.CANCELLED, self.Status.REFUNDED, self.Status.REJECTED):
             return False
         today = timezone.localdate()
+        invoice = getattr(self, "sale_invoice", None)
+        if invoice and invoice.status != invoice.Status.CANCELLED:
+            for line in invoice.settlement_lines.filter(is_active=True):
+                if line.remaining_amount <= 0:
+                    continue
+                if line.settlement_type == "cash" and line.due_date < today:
+                    return True
+                if line.settlement_type != "cash" and line.due_date <= today:
+                    return True
+            return False
         if self.settlement_due_date and self.settlement_due_date <= today:
             return True
         return self.items.filter(settlement_due_date__lte=today).exists()
@@ -469,11 +480,19 @@ class OrderItem(TimeStampedModel):
 
     @property
     def is_settlement_due(self) -> bool:
-        if not self.settlement_due_date:
-            return False
         if self.order.status in (Order.Status.PAID, Order.Status.CANCELLED, Order.Status.REFUNDED, Order.Status.REJECTED):
             return False
-        return self.settlement_due_date <= timezone.localdate()
+        today = timezone.localdate()
+        invoice = getattr(self.order, "sale_invoice", None)
+        if invoice and invoice.status != invoice.Status.CANCELLED:
+            return any(
+                line.settlement_type == self.settlement_type and line.remaining_amount > 0
+                and (line.due_date < today if line.settlement_type == "cash" else line.due_date <= today)
+                for line in invoice.settlement_lines.filter(is_active=True)
+            )
+        if not self.settlement_due_date:
+            return False
+        return self.settlement_due_date <= today
 
 
 # ─── StockReservation ─────────────────────────────────────────────────────────

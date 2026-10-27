@@ -4,9 +4,8 @@ Allow: /
 # بخش‌های غیرعمومی
 Disallow: /admin
 Disallow: /api/
-Disallow: /account
-Disallow: /cart
-Disallow: /inquiry-cart
-Disallow: /payment/
+
+# صفحات سبد خرید/استعلام، پرداخت و حساب کاربری با متا noindex از ایندکس خارج می‌شوند؛
+# این مسیرها عمداً Disallow نشده‌اند تا گوگل بتواند تگ noindex را ببیند.
 
 Sitemap: https://doorbinkar.com/sitemap.xml

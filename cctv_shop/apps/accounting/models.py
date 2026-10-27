@@ -102,15 +102,17 @@ class Contact(AuditableModel):
         recv_irr = self.payments.filter(currency='IRR', direction='in').aggregate(s=Sum('amount'))['s'] or 0
 
         total_invoiced_irr = 0
-        for inv in self.purchase_invoices.all():
+        for inv in self.purchase_invoices.exclude(status=PurchaseInvoice.Status.CANCELLED):
             if inv.purchase_type == PurchaseInvoice.PurchaseType.DOMESTIC:
                 # خرید داخلی — قیمت آیتم‌ها مستقیماً ریال است
                 total_invoiced_irr += sum(item.unit_price_irr * item.quantity for item in inv.items.all())
 
-        for inv in self.shipping_invoices.all():
+        for inv in self.shipping_invoices.exclude(status=PurchaseInvoice.Status.CANCELLED):
             total_invoiced_irr += inv.clearance_cost_irr
 
-        extra_irr = self.extra_costs.aggregate(s=Sum('amount_irr'))['s'] or 0
+        extra_irr = self.extra_costs.exclude(
+            invoice__status=PurchaseInvoice.Status.CANCELLED
+        ).aggregate(s=Sum('amount_irr'))['s'] or 0
         total_invoiced_irr += extra_irr
 
         # ما کالا خریدیم = به تأمین‌کننده بدهکاریم = balance منفی
@@ -130,10 +132,10 @@ class Contact(AuditableModel):
         recv_cny = self.payments.filter(currency='CNY', direction='in').aggregate(s=Sum('amount'))['s'] or 0
         total_paid_cny = float(paid_cny)
         total_cny = 0
-        for inv in self.purchase_invoices.all():
+        for inv in self.purchase_invoices.exclude(status=PurchaseInvoice.Status.CANCELLED):
             items_cny = sum(float(item.unit_price_cny) * item.quantity for item in inv.items.all())
             total_cny += items_cny
-        for inv in self.shipping_invoices.all():
+        for inv in self.shipping_invoices.exclude(status=PurchaseInvoice.Status.CANCELLED):
             total_cny += float(inv.shipping_cost_cny)
 
         # ما کالا خریدیم = به تأمین‌کننده بدهکاریم = balance منفی
@@ -520,10 +522,13 @@ class Account(AuditableModel):
         def eff(p):
             if p.currency == self.currency:
                 return float(p.amount)
-            if self.currency == 'IRR':
+            if not p.rate_irr:
+                raise ValueError(f"نرخ تبدیل سند #{p.id} ثبت نشده است")
+            if self.currency == 'IRR' and p.currency != 'IRR':
                 return float(p.amount_irr)
-            # حساب ارزی با تراکنش ریالی — تبدیل با همان نرخ
-            return round(float(p.amount_irr) / float(p.rate_irr), 2) if p.rate_irr else float(p.amount)
+            if self.currency != 'IRR' and p.currency == 'IRR':
+                return round(float(p.amount_irr) / float(p.rate_irr), 2)
+            raise ValueError(f"ارز سند #{p.id} با ارز حساب ناسازگار است")
 
         paid_out = sum(eff(p) for p in self.payments_out.all())
         paid_in = sum(eff(p) for p in self.payments_in.all())
@@ -554,8 +559,20 @@ class Payment(AuditMixin):
         IRR = "IRR", "ریال"
         USD = "USD", "دلار"
 
+    class SettlementTarget(models.TextChoices):
+        NONE = "", "بدون هدف تسویه ویژه"
+        OPENING = "opening", "مانده اول دوره"
+        CONTACT = "contact", "بستانکاری کارتابل"
+        CHEQUE = "cheque", "خنثی‌سازی وصول چک"
+
     contact      = models.ForeignKey(Contact, on_delete=models.PROTECT,
                       null=True, blank=True, related_name="payments")
+    opening_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                      null=True, blank=True, related_name="opening_payments",
+                      verbose_name="کاربر مانده اول دوره")
+    settlement_target = models.CharField(max_length=20, choices=SettlementTarget.choices,
+                      default=SettlementTarget.NONE, blank=True,
+                      verbose_name="هدف تسویه")
     invoice      = models.ForeignKey(PurchaseInvoice, on_delete=models.SET_NULL,
                       null=True, blank=True, related_name="payments")
     from_account = models.ForeignKey('Account', on_delete=models.SET_NULL,
@@ -874,6 +891,9 @@ class SalePayment(AuditMixin):
         CREDIT   = "credit",   "نسیه (حساب باز)"
 
     invoice    = models.ForeignKey(SaleInvoice, on_delete=models.CASCADE, related_name='sale_payments')
+    source_payment = models.ForeignKey('Payment', on_delete=models.SET_NULL,
+                    null=True, blank=True, related_name='derived_sale_payments',
+                    verbose_name="سند منبع تسویه")
     cheque     = models.ForeignKey('Cheque', on_delete=models.SET_NULL,
                     null=True, blank=True, related_name='sale_payments',
                     verbose_name="چک مرتبط",

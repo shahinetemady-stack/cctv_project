@@ -5,8 +5,10 @@ import { toast } from 'sonner'
 import api from '../../services/api'
 import useAuthStore from '../../store/useAuthStore'
 import { formatDate } from '../../utils/date'
+import { jalaliText } from '../../utils/jalali'
 import { mediaUrl } from '../../utils/media'
 import { UserStamp } from '../../components/ui'
+import JalaliDateInput from '../../components/ui/JalaliDateInput'
 
 function fmt(n) { return Number(n || 0).toLocaleString('fa-IR') }
 function fmtDate(iso) { return iso ? new Date(iso).toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' }) : '—' }
@@ -106,6 +108,7 @@ function EditOrderModal({ order, onClose }) {
           <div>
             <h2 className="font-bold text-white">ویرایش سفارش</h2>
             <div className="font-mono text-xs text-brand mt-1">{order.order_number}</div>
+            <div className="text-[10px] text-gray-steel mt-1">📅 ثبت: {formatDate(order.created_at, { withTime: true })}</div>
           </div>
           <button onClick={onClose} className="text-gray-steel hover:text-white text-2xl">×</button>
         </div>
@@ -134,13 +137,12 @@ function EditOrderModal({ order, onClose }) {
               </select>
             </div>
             <div>
-              <label className="label text-xs mb-1 block">موعد تسویه</label>
+              <label className="label text-xs mb-1 block">موعد تسویه (شمسی)</label>
               {form.settlement_type === 'credit' ? (
                 <div className="input text-sm text-gray-steel">۱۴ روز پس از تأیید (خودکار)</div>
               ) : (
-                <input type="date" value={form.settlement_due_date || ''}
-                  onChange={e => setForm(f => ({ ...f, settlement_due_date: e.target.value }))}
-                  className="input text-sm" dir="ltr" />
+                <JalaliDateInput value={form.settlement_due_date || ''}
+                  onChange={v => setForm(f => ({ ...f, settlement_due_date: v }))} />
               )}
             </div>
           </div>
@@ -435,13 +437,15 @@ function OrderDetailModal({ orderNumber, onClose, onEdit }) {
     queryFn: () => api.get(`/orders/admin/${orderNumber}/detail/`).then(r => r.data),
   })
 
-  // پیش‌فرض مبلغ نهایی = جمع اقلام نقدی (قابل ویرایش توسط پرسنل)
+  // مبلغ تأییدشده جمع کل سفارش است؛ سهم نقدی/اعتباری در بک‌اند روی همان کل توزیع می‌شود
+  const grandSum = (order?.items || [])
+    .reduce((s, it) => s + (it.confirmed_unit_price || it.unit_price) * it.quantity, 0)
   const cashSum = (order?.items || [])
     .filter(it => it.settlement_type === 'cash')
     .reduce((s, it) => s + (it.confirmed_unit_price || it.unit_price) * it.quantity, 0)
   useEffect(() => {
-    if (cashSum > 0) setConfirmForm(f => f.confirmed_amount ? f : { ...f, confirmed_amount: String(cashSum) })
-  }, [cashSum])
+    if (grandSum > 0) setConfirmForm(f => f.confirmed_amount ? f : { ...f, confirmed_amount: String(grandSum) })
+  }, [grandSum])
 
   const confirmMut = useMutation({
     mutationFn: (payload) => api.post(`/orders/admin/${orderNumber}/confirm/`, payload).then(r => r.data),
@@ -521,7 +525,7 @@ function OrderDetailModal({ orderNumber, onClose, onEdit }) {
         ) : (
           <>
             {/* اطلاعات کلی */}
-            <div className="grid grid-cols-4 gap-3 mb-5 text-xs">
+            <div className="grid grid-cols-3 gap-3 mb-5 text-xs">
               <div className="bg-white/5 rounded-xl p-3">
                 <div className="text-gray-steel mb-1">مشتری</div>
                 <div className="text-white font-semibold">{order.user_name || '—'}</div>
@@ -533,9 +537,19 @@ function OrderDetailModal({ orderNumber, onClose, onEdit }) {
                 <div className="text-gray-steel mt-0.5">{order.order_type_display}</div>
               </div>
               <div className="bg-white/5 rounded-xl p-3">
+                <div className="text-gray-steel mb-1">تاریخ ثبت سفارش</div>
+                <div className="text-white font-semibold">{formatDate(order.created_at, { withTime: true })}</div>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3">
                 <div className="text-gray-steel mb-1">نحوه تسویه</div>
                 <div className="text-white font-semibold">
                   {[...new Set((order.items || []).map(it => it.settlement_display).filter(Boolean))].join('، ') || order.settlement_display || '—'}
+                </div>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3">
+                <div className="text-gray-steel mb-1">موعد تسویه</div>
+                <div className={`font-semibold ${order.is_settlement_due ? 'text-red-400' : 'text-white'}`}>
+                  {order.is_settlement_due ? '⚠️ ' : ''}{order.settlement_due_date ? jalaliText(order.settlement_due_date) : (DUE_LABELS[order.settlement_type] || '—')}
                 </div>
               </div>
               <div className="bg-white/5 rounded-xl p-3">
@@ -693,6 +707,9 @@ export default function AdminOrdersPage() {
   const [search, setSearch] = useState('')
   const [dueOnly, setDueOnly] = useState(false)
   const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '')
+  const [tab, setTab] = useState('active')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
 
   const { data: orders = [], isLoading } = useQuery({
     queryKey: ['admin-orders', statusFilter],
@@ -714,11 +731,19 @@ export default function AdminOrdersPage() {
   })
   const dueCount = badges?.orders_due ?? orders.filter(o => o.is_settlement_due).length
 
-  const filtered = orders.filter(o =>
-    (!dueOnly || o.is_settlement_due) &&
-    (!search || o.order_number.includes(search) ||
-    o.user_name?.includes(search) || o.user_phone?.includes(search))
-  )
+  // «کارش تمام شده» = تحویل داده شده یا لغو شده — این‌ها به لیست جداگانه می‌روند
+  const isDone = (o) => (o.delivery_status || '') === 'delivered' || o.status === 'cancelled'
+
+  const filtered = orders.filter(o => {
+    if (dueOnly && !o.is_settlement_due) return false
+    if (tab === 'active' && isDone(o)) return false
+    if (tab === 'done' && !isDone(o)) return false
+    const d = (o.created_at || '').slice(0, 10)
+    if (dateFrom && d < dateFrom) return false
+    if (dateTo && d > dateTo) return false
+    return !search || o.order_number.includes(search) ||
+      o.user_name?.includes(search) || o.user_phone?.includes(search)
+  })
 
   const orderLabel = (val) => ORDER_STATUS.find(s => s.value === val)
 
@@ -738,12 +763,33 @@ export default function AdminOrdersPage() {
         </button>
       )}
 
-      {/* فیلترها */}
-      <div className="grid grid-cols-3 gap-3 mb-6">
+      {/* تب در جریان / تکمیل‌شده — هم‌الگو با فاکتور فروش */}
+      <div className="flex gap-1 mb-4 bg-white/5 rounded-lg p-1 w-fit">
+        {[['active', 'در جریان'], ['done', 'تکمیل‌شده'], ['all', 'همه']].map(([k, v]) => {
+          const n = k === 'all' ? orders.length : orders.filter(o => k === 'done' ? isDone(o) : !isDone(o)).length
+          return (
+            <button key={k} onClick={() => setTab(k)}
+              className={`text-xs px-4 py-1.5 rounded-md transition-all ${tab === k ? 'bg-brand text-white' : 'text-gray-steel hover:text-white'}`}>
+              {v} ({fmt(n)})
+            </button>
+          )
+        })}
+      </div>
+
+      {/* فیلترها — جستجو + بازه تاریخ شمسی صدور + وضعیت */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-6">
         <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="جستجو (شماره سفارش، نام، موبایل)..."
-          className="input text-sm col-span-2" />
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input text-sm">
+          placeholder="جستجو: نام/موبایل مشتری یا شماره سفارش..."
+          className="input text-xs" />
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] text-gray-steel whitespace-nowrap">از</span>
+          <JalaliDateInput value={dateFrom} onChange={setDateFrom} className="input text-xs" />
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] text-gray-steel whitespace-nowrap">تا</span>
+          <JalaliDateInput value={dateTo} onChange={setDateTo} className="input text-xs" />
+        </div>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input text-xs">
           <option value="">همه وضعیت‌ها</option>
           {STATUS_CARDS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
@@ -770,14 +816,16 @@ export default function AdminOrdersPage() {
       {isLoading ? (
         <div className="text-center py-10 text-gray-steel">در حال بارگذاری...</div>
       ) : filtered.length === 0 ? (
-        <div className="text-center py-10 text-gray-steel">سفارشی یافت نشد</div>
+        <div className="text-center py-10 text-gray-steel">
+          {tab === 'done' ? 'سفارش تکمیل‌شده‌ای نیست' : tab === 'active' ? 'سفارش در جریانی نیست' : 'سفارشی یافت نشد'}
+        </div>
       ) : (
         <div className="card overflow-hidden">
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}>
-                {['شماره سفارش', 'مشتری', 'موبایل', 'مبلغ', 'نحوه تسویه', 'نحوه ارسال', 'وضعیت سفارش', 'آخرین تغییر'].map(h => (
-                  <th key={h} style={{ padding: '12px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500 }}>{h}</th>
+                {['شماره سفارش', 'مشتری', 'تاریخ', 'تسویه', 'وضعیت', 'مبلغ نهایی', 'پرداخت شده', 'مانده', 'نحوه ارسال', 'ثبت‌کننده', ''].map(h => (
+                  <th key={h} style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--color-text-secondary)', fontWeight: 500, whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -786,6 +834,10 @@ export default function AdminOrdersPage() {
                 const os = orderLabel(o.status)
                 // پیش‌فاکتور همکار: فقط تا قبل از تأیید — بعد از تأیید: نقدی→منتظر پرداخت، اعتباری→منتظر ارسال
                 const preInvoice = o.customer_is_partner && ['pending', 'confirmed'].includes(o.status)
+                const eff = o.effective_amount || o.total_amount
+                const paid = Number(o.paid_amount || 0)
+                const settled = o.status === 'paid' || paid >= eff
+                const remaining = Math.max(eff - paid, 0)
                 return (
                   <tr key={o.order_number} onClick={() => setDetailOf(o.order_number)}
                     className="cursor-pointer hover:bg-white/5 transition-colors"
@@ -794,29 +846,42 @@ export default function AdminOrdersPage() {
                       <span className="font-mono text-xs text-brand">{o.order_number}</span>
                       <div className="text-[10px] text-gray-steel mt-0.5">{fmt(o.items_count)} قلم</div>
                     </td>
-                    <td style={{ padding: '10px 12px', color: 'var(--color-text-primary)', fontSize: 12 }}>{o.user_name || '—'}</td>
-                    <td style={{ padding: '10px 12px', color: 'var(--color-text-secondary)', fontSize: 11 }} dir="ltr">{o.user_phone || '—'}</td>
-                    <td style={{ padding: '10px 12px', fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                      {fmt(o.effective_amount || o.total_amount)} ریال
-                    </td>
                     <td style={{ padding: '10px 12px' }}>
-                      {/* سفارش‌ها از checkout به تفکیک نقدی/اعتباری ثبت می‌شوند — تسویه سطح سفارش قابل اتکاست */}
-                      {o.settlement_type === 'cash' ? (
-                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-500/15 text-green-400">نقدی</span>
-                      ) : (
-                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">اعتباری</span>
+                      <div style={{ fontSize: 12, color: 'var(--color-text-primary)' }}>{o.user_name || '—'}</div>
+                      <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', direction: 'ltr', textAlign: 'right' }}>{o.user_phone || ''}</div>
+                    </td>
+                    <td style={{ padding: '10px 12px', fontSize: 11, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+                      {fmtDate(o.created_at)}
+                    </td>
+                    <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontSize: 12 }}>
+                      <div style={{ color: 'var(--color-text-secondary)' }}>{o.settlement_display}</div>
+                      {o.settlement_due_date && (
+                        <div style={{ fontSize: 10, marginTop: 2, color: o.is_settlement_due ? '#FF3B3B' : 'var(--color-text-secondary)' }}
+                          className={o.is_settlement_due ? 'font-bold' : ''}>
+                          {o.is_settlement_due ? '⚠️ سررسید: ' : 'موعد: '}{jalaliText(o.settlement_due_date)}
+                        </div>
                       )}
                     </td>
-                    <td style={{ padding: '10px 12px', fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                      {o.shipping_method_display || '—'}
-                    </td>
                     <td style={{ padding: '10px 12px' }}>
-                      <span style={{ color: preInvoice ? '#FBC02D' : os?.color, background: (preInvoice ? '#FBC02D' : (os?.color || '#fff')) + '20', padding: '2px 8px', borderRadius: 20, fontSize: 11 }}>
+                      <span style={{ color: preInvoice ? '#FBC02D' : os?.color, background: (preInvoice ? '#FBC02D' : (os?.color || '#fff')) + '20', padding: '2px 8px', borderRadius: 20, fontSize: 11, whiteSpace: 'nowrap' }}>
                         {preInvoice ? 'پیش‌فاکتور' : (os?.label || o.status)}
                       </span>
                     </td>
+                    <td style={{ padding: '10px 12px', fontWeight: 600, color: 'var(--color-text-primary)', whiteSpace: 'nowrap' }}>
+                      {fmt(eff)} ریال
+                    </td>
+                    <td style={{ padding: '10px 12px', color: '#00C896', whiteSpace: 'nowrap' }}>{fmt(paid)} ریال</td>
+                    <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', color: settled ? '#00C896' : '#FF3B3B', fontWeight: settled ? 400 : 700 }}>
+                      {settled ? '✓ تسویه' : `${fmt(remaining)} ریال`}
+                    </td>
                     <td style={{ padding: '10px 12px', fontSize: 11, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                      {o.updated_by || '—'}
+                      {o.shipping_method_display || '—'}
+                    </td>
+                    <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                      <UserStamp createdBy={o.created_by} updatedBy={o.updated_by} createdAt={o.created_at} updatedAt={o.updated_at || o.status_updated_at} />
+                    </td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <span className="text-xs text-brand">مشاهده</span>
                     </td>
                   </tr>
                 )

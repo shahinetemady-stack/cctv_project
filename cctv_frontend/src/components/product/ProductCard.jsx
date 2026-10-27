@@ -121,7 +121,8 @@ export default function ProductCard({ product }) {
         </div>
 
         <h3 className="font-semibold text-sm leading-snug line-clamp-2
-          text-gray-900 dark:text-white group-hover:text-brand dark:group-hover:text-cyan transition-colors">
+          text-gray-900 dark:text-white group-hover:text-brand dark:group-hover:text-cyan transition-colors"
+          style={{ unicodeBidi: 'plaintext' }}>
           {product.name}
         </h3>
 

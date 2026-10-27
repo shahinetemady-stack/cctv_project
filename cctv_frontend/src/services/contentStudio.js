@@ -26,6 +26,15 @@ export const contentStudioService = {
   generateHook: (id) =>
     api.post(`/publisher/posts/${id}/generate-hook/`).then(r => r.data),
 
+  setStyle: (id, videoStyle) =>
+    api.post(`/publisher/posts/${id}/style/`, { video_style: videoStyle }).then(r => r.data),
+
+  settings: () =>
+    api.get('/publisher/settings/').then(r => r.data),
+
+  saveSettings: (payload) =>
+    api.post('/publisher/settings/', payload).then(r => r.data),
+
   music: () =>
     api.get('/publisher/music/').then(r => r.data),
 

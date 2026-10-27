@@ -67,6 +67,19 @@
         if (__t && __t.theme === 'light') document.documentElement.classList.remove('dark');
       } catch (e) { document.documentElement.dataset.theme = 'dark'; }
     </script>
+    <!-- Google Analytics (GA4) — صفحات پنل مدیریت و ورود ردیابی نمی‌شوند -->
+    <script>
+      if (!/^\/(admin|auth)(\/|$)/.test(location.pathname)) {
+        var __gs = document.createElement('script');
+        __gs.async = true;
+        __gs.src = 'https://www.googletagmanager.com/gtag/js?id=G-C2FL4MSL00';
+        document.head.appendChild(__gs);
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){ dataLayer.push(arguments); }
+        gtag('js', new Date());
+        gtag('config', 'G-C2FL4MSL00');
+      }
+    </script>
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="دوربینکار" />

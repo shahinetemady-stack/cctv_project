@@ -110,6 +110,10 @@ class ContentIdea(models.Model):
         max_length=20, choices=Status.choices,
         default=Status.NEW, verbose_name="وضعیت",
     )
+    signal = models.CharField(
+        max_length=255, blank=True, verbose_name="منبع/سیگنال ایده",
+        help_text="کدام سیگنال (ترند گوگل، سؤال مشتری، اینسایت) الهام‌بخش این ایده بود",
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="زمان ایجاد")
 
     class Meta:
@@ -161,6 +165,10 @@ class ChannelPost(models.Model):
         READY = "ready", "آماده"
         FAILED = "failed", "ناموفق"
 
+    class VideoStyle(models.TextChoices):
+        AUTO = "auto", "خودکار"
+        MOTION = "motion", "موشن‌گرافیک"
+
     title = models.CharField(max_length=255, verbose_name="عنوان")
     body = models.TextField(verbose_name="متن محتوا")
     content_type = models.CharField(
@@ -203,10 +211,19 @@ class ChannelPost(models.Model):
     hook_error = models.CharField(
         max_length=500, blank=True, verbose_name="خطای ساخت هوک",
     )
+    hook_provider = models.CharField(
+        max_length=20, blank=True, verbose_name="موتور ساخت هوک",
+        help_text="veo یا hf — موتوری که هوک فعلی را ساخته است",
+    )
     hook_ready_at = models.DateTimeField(
         null=True, blank=True, verbose_name="زمان آماده‌شدن هوک",
     )
     link = models.URLField(blank=True, verbose_name="لینک")
+    video_style = models.CharField(
+        max_length=20, choices=VideoStyle.choices,
+        default=VideoStyle.AUTO, verbose_name="سبک ویدیو",
+        help_text="خودکار = اسلایدشو (+ هوک AI اگر آماده باشد)؛ موشن‌گرافیک = قالب متن/کارت متحرک بدون AI",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
         null=True, blank=True, related_name="publisher_posts",
@@ -222,6 +239,47 @@ class ChannelPost(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class PublisherSettings(models.Model):
+    """تنظیمات انتشار (Singleton) — کلیدهای ساخت هوک ویدیویی و اولویت موتورها."""
+
+    veo_api_key = models.CharField(
+        max_length=255, blank=True, verbose_name="کلید API ویدیو (Veo)",
+        help_text="اگر خالی باشد، از کلید Gemini تنظیمات دستیار استفاده می‌شود.",
+    )
+    hf_token = models.CharField(
+        max_length=255, blank=True, verbose_name="توکن Hugging Face",
+        help_text="برای ساخت هوک رایگان با اسپیس Gradio — از huggingface.co → Settings → Access Tokens",
+    )
+    hf_space = models.CharField(
+        max_length=255, blank=True, verbose_name="اسپیس Hugging Face",
+        help_text="اگر خالی باشد، پیش‌فرض رله (ZeroCollabs/LTX-2.3-turbo) استفاده می‌شود.",
+    )
+    video_provider_priority = models.CharField(
+        max_length=50, default="veo,hf", verbose_name="اولویت موتورهای ویدیو",
+        help_text="ترتیب تلاش با ویرگول: veo (پولی، باکیفیت) و hf (رایگان)",
+    )
+
+    class Meta:
+        db_table = "publisher_settings"
+        verbose_name = "تنظیمات انتشار"
+        verbose_name_plural = "تنظیمات انتشار"
+
+    def __str__(self):
+        return "تنظیمات انتشار"
+
+    @classmethod
+    def get_instance(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        pass
 
 
 class PublishJob(models.Model):

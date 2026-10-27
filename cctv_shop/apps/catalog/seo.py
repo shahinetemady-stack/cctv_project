@@ -109,7 +109,7 @@ _PART_TYPE_FA = {
 }
 
 # ─── کلمات کلیدی پایه ────────────────────────────────────────────────────────
-_BASE_KEYWORDS = ['خرید', 'قیمت', 'قطعات دوربین', 'CCTV', 'مداربسته']
+_BASE_KEYWORDS = ['قطعات دوربین مداربسته', 'خرید قطعات CCTV']
 
 
 # ─── Slug ─────────────────────────────────────────────────────────────────────
@@ -146,17 +146,27 @@ def generate_slug(name: str, model_class=None, instance_pk=None) -> str:
 
 # ─── Meta Title ───────────────────────────────────────────────────────────────
 
+def _truncate_word_boundary(text: str, limit: int) -> str:
+    """کوتاه‌سازی در مرز کلمه (بدون بریدن کلمه وسط) + سه‌نقطه."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(' ', 1)[0].rstrip('،؛:,-')
+    return cut + '…'
+
+
 def generate_meta_title(name: str) -> str:
     """
     فرمول: «{name} | قیمت و خرید قطعات دوربین مداربسته»
-    حداکثر ۶۰ کاراکتر.
+    حداکثر ۶۰ کاراکتر. اگر نام بلند باشد به پسوند کوتاه «| قیمت و خرید»
+    برمی‌گردد تا مدل محصول حذف نشود؛ در بدترین حالت در مرز کلمه کوتاه می‌شود.
     """
-    suffix = ' | قیمت و خرید قطعات دوربین مداربسته'
-    max_name_len = 60 - len(suffix)
+    for suffix in (' | قیمت و خرید قطعات دوربین مداربسته', ' | قیمت و خرید'):
+        max_name_len = 60 - len(suffix)
+        if len(name) <= max_name_len:
+            return f"{name}{suffix}"
 
-    if len(name) > max_name_len:
-        name = name[:max_name_len - 1] + '…'
-
+    suffix = ' | قیمت و خرید'
+    name = _truncate_word_boundary(name, 60 - len(suffix) - 1)
     return f"{name}{suffix}"
 
 
@@ -185,13 +195,13 @@ def generate_meta_description(
     if voltage:
         parts.append(f"ولتاژ {voltage}")
 
-    parts.append(f"قیمت مناسب {part_fa} دوربین مداربسته، موجودی لحظه‌ای و ارسال سریع.")
+    closing = f"قیمت مناسب {part_fa} دوربین مداربسته، موجودی لحظه‌ای و ارسال سریع."
 
-    description = '، '.join(parts[:3]) + '. ' + parts[-1]
+    description = '، '.join(parts[:3]) + '. ' + closing
 
     # محدودیت ۱۶۰ کاراکتر
     if len(description) > 160:
-        description = description[:158] + '…'
+        description = _truncate_word_boundary(description, 159)
 
     return description
 
@@ -209,9 +219,9 @@ def generate_keywords(
     ترکیب کلمات کلیدی پایه + اختصاصی محصول.
     حداکثر ۱۰ کلمه، جدا شده با کاما.
     """
-    keywords = list(_BASE_KEYWORDS)  # کپی
+    keywords = []
 
-    # اضافه کردن اطلاعات محصول
+    # اطلاعات اختصاصی محصول اول بیاید — کلمات عمومی آخر
     if name:
         keywords.append(name)
     if brand:
@@ -222,6 +232,8 @@ def generate_keywords(
         keywords.append(voltage)
     if part_type and part_type in _PART_TYPE_FA:
         keywords.append(_PART_TYPE_FA[part_type])
+
+    keywords.extend(_BASE_KEYWORDS)
 
     # حذف تکراری‌ها + محدودیت ۱۰ تا
     seen = set()

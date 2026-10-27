@@ -113,6 +113,7 @@ class ProductFilter(django_filters.FilterSet):
             | Q(model_number__icontains=value)
             | Q(board_name__icontains=value)
             | Q(sensor_name__icontains=value)
+            | Q(ai_processor__icontains=value)
             | Q(lens_name__icontains=value)
             | Q(short_description__icontains=value)
         )

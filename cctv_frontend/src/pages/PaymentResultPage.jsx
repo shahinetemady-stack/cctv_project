@@ -1,4 +1,5 @@
 import { useSearchParams, Link } from 'react-router-dom'
+import Seo from '../components/Seo'
 
 export default function PaymentResultPage({ success }) {
   const [params] = useSearchParams()
@@ -8,6 +9,7 @@ export default function PaymentResultPage({ success }) {
 
   if (success) return (
     <div className="min-h-[70vh] flex items-center justify-center p-4">
+      <Seo title="نتیجه پرداخت" noindex />
       <div className="text-center max-w-sm">
         <div className="w-20 h-20 bg-alert-green/10 rounded-full flex items-center justify-center
           mx-auto mb-6 text-4xl">✅</div>
@@ -25,6 +27,7 @@ export default function PaymentResultPage({ success }) {
 
   return (
     <div className="min-h-[70vh] flex items-center justify-center p-4">
+      <Seo title="نتیجه پرداخت" noindex />
       <div className="text-center max-w-sm">
         <div className="w-20 h-20 bg-alert-red/10 rounded-full flex items-center justify-center
           mx-auto mb-6 text-4xl">❌</div>

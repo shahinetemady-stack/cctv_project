@@ -88,13 +88,13 @@ class StaticViewSitemap(Sitemap):
 
     pages = [
         ("/", 1.0),
-        ("/products", 0.7),
-        ("/packages", 0.6),
-        ("/blog", 0.5),
-        ("/videos", 0.4),
-        ("/china-order/faq", 0.4),
-        ("/terms", 0.2),
-        ("/privacy", 0.2),
+        ("/products/", 0.7),
+        ("/packages/", 0.6),
+        ("/blog/", 0.5),
+        ("/videos/", 0.4),
+        ("/china-order/faq/", 0.4),
+        ("/terms/", 0.2),
+        ("/privacy/", 0.2),
     ]
 
     def items(self):

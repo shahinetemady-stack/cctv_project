@@ -1,0 +1,19 @@
+{
+  "name": "wa-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-account WhatsApp AI reply bot (Baileys + Gemini)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "add-account": "node scripts/add-account.js",
+    "list-accounts": "node scripts/list-accounts.js",
+    "set-prompt": "node scripts/set-prompt.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "better-sqlite3": "^11.10.0",
+    "pino": "^9.5.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

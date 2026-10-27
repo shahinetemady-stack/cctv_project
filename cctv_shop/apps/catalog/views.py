@@ -110,7 +110,7 @@ class ProductListView(generics.ListAPIView):
     permission_classes = [AllowAny]
     filterset_class = ProductFilter
     filter_backends = [DjangoFilterBackend, NormalizingSearchFilter, OrderingFilter]
-    search_fields = ["name", "brand", "model_number", "board_name", "sensor_name", "lens_name", "keywords"]
+    search_fields = ["name", "brand", "model_number", "board_name", "sensor_name", "ai_processor", "lens_name", "keywords"]
     ordering_fields = ["name", "created_at", "is_featured"]
     ordering = ["-is_featured", "-created_at"]
 
@@ -160,6 +160,7 @@ class ProductListView(generics.ListAPIView):
 
         # فیلترهای اختصاصی برد
         if p.get("sensor_name"):   qs = qs.filter(sensor_name__icontains=p["sensor_name"])
+        if p.get("ai_processor"):  qs = qs.filter(ai_processor__icontains=p["ai_processor"])
         if p.get("board_system"):  qs = qs.filter(board_system__icontains=p["board_system"])
         if p.get("board_resolution"): qs = qs.filter(board_resolution__icontains=p["board_resolution"])
         if p.get("sensor_size"):   qs = qs.filter(sensor_size__icontains=p["sensor_size"])
@@ -169,6 +170,10 @@ class ProductListView(generics.ListAPIView):
         if p.get("lens_type"):     qs = qs.filter(lens_type__icontains=p["lens_type"])
         if p.get("lens_resolution"): qs = qs.filter(lens_resolution__icontains=p["lens_resolution"])
         if p.get("focal_ratio"):   qs = qs.filter(focal_ratio__icontains=p["focal_ratio"])
+        if p.get("lens_aperture"): qs = qs.filter(lens_aperture__icontains=p["lens_aperture"])
+        if p.get("lens_mount"):    qs = qs.filter(lens_mount__icontains=p["lens_mount"])
+        if p.get("lens_image_size"): qs = qs.filter(lens_image_size__icontains=p["lens_image_size"])
+        if p.get("lens_kit"):      qs = qs.filter(lens_kit__icontains=p["lens_kit"])
 
         # فیلترهای اختصاصی متعلقات
         if p.get("modem_type"):    qs = qs.filter(modem_type__icontains=p["modem_type"])
@@ -177,7 +182,6 @@ class ProductListView(generics.ListAPIView):
 
         # فیلترهای اختصاصی بدنه
         if p.get("housing_material"): qs = qs.filter(housing_material__icontains=p["housing_material"])
-        if p.get("housing_type"):  qs = qs.filter(housing_type__icontains=p["housing_type"])
         if p.get("has_microphone") == "true": qs = qs.filter(has_microphone=True)
 
         # فیلترهای پویا — ویژگی‌های دسته (CategorySpecField) به صورت spec_<key>=value
@@ -990,7 +994,6 @@ class ProductAdminSerializer(serializers.ModelSerializer):
     lens_degree      = serializers.CharField(required=False, allow_blank=True)
     lens_type        = serializers.CharField(required=False, allow_blank=True)
     focal_ratio      = serializers.CharField(required=False, allow_blank=True)
-    housing_type     = serializers.CharField(required=False, allow_blank=True)
     housing_material = serializers.CharField(required=False, allow_blank=True)
     # فایل‌ها و ارتباطات — مدیریت از پنل ادمین
     datasheet_pdf  = serializers.FileField(required=False, allow_null=True)
@@ -1006,12 +1009,13 @@ class ProductAdminSerializer(serializers.ModelSerializer):
         fields = [
             "id", "name", "slug", "category", "brand", "model_number",
             "short_description", "description",
-            "board_name", "board_system", "board_resolution", "board_dimensions", "ai_processor",
+            "board_name", "board_system", "board_resolution", "board_dimensions", "board_fps", "ai_processor",
             "board_tech_notes",
             "sensor_name", "sensor_size",
             "lens_name", "lens_resolution", "lens_degree", "lens_type", "focal_ratio",
+            "lens_aperture", "lens_image_size", "lens_mount", "lens_kit", "lens_holder_pitch", "lens_fov",
             "modem_model", "modem_type", "modem_size", "pin_count", "sim_card",
-            "housing_type", "housing_material", "housing_size",
+            "housing_material", "housing_size",
             "voltage", "ampere_output", "output_ports", "has_microphone",
             "whatsapp_link", "bale_link",
             "meta_title", "meta_description", "keywords", "geo_tags", "dynamic_specs",
@@ -1432,13 +1436,17 @@ class CategorySpecFieldSerializer(serializers.ModelSerializer):
 
 # نگاشت فیلدهای پایه هر نوع دسته — از introspection مدل Product خوانده می‌شود
 BUILTIN_SPEC_BY_TYPE = {
-    "board":   ["board_name", "board_system", "board_resolution", "board_dimensions", "ai_processor",
+    "board":   ["board_name", "board_system", "board_resolution", "board_dimensions", "board_fps", "ai_processor",
                 "board_tech_notes", "brand",
                 "sensor_name", "sensor_size", "voltage", "ampere_output", "output_ports", "has_microphone"],
-    "lens":    ["lens_name", "lens_resolution", "lens_degree", "lens_type", "focal_ratio"],
+    "lens":    ["lens_resolution", "lens_degree", "focal_ratio", "lens_aperture", "lens_image_size",
+                "lens_mount", "lens_kit", "lens_holder_pitch", "lens_fov"],
     "modem":   ["modem_model", "modem_type", "modem_size", "pin_count", "sim_card",
                 "voltage", "ampere_output", "output_ports"],
-    "housing": ["housing_type", "housing_material", "housing_size", "has_microphone"],
+    "housing": ["housing_material", "housing_size", "has_microphone"],
+    "accessory": ["modem_model", "modem_type", "voltage", "modem_size"],
+    # برد دستگاه ضبط (DVR/NVR) فیلد پایه ندارد — همه مشخصات از CategorySpecField می‌آید
+    "recorder": [],
 }
 
 

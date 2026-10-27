@@ -764,7 +764,17 @@ function InvoiceDetail({ id, onClose, isAdmin, onEdit }) {
   })
   const delPayMut = useMutation({
     mutationFn: pid => api.delete(`/accounting/sale-payments/${pid}/`),
-    onSuccess: () => { qc.invalidateQueries(['sale-invoice', id]); qc.invalidateQueries(['sale-invoices']); setMsg({ type: 'success', text: 'پرداخت حذف شد' }); setTimeout(() => setMsg(null), 2000) },
+    onSuccess: () => {
+      qc.invalidateQueries(['sale-invoice'])
+      qc.invalidateQueries(['sale-invoices'])
+      qc.invalidateQueries(['pending-orders'])
+      qc.invalidateQueries(['accounts'])
+      qc.invalidateQueries(['contacts-all'])
+      qc.invalidateQueries(['contact-kardex'])
+      qc.invalidateQueries(['balance-report'])
+      setMsg({ type: 'success', text: 'پرداخت حذف شد' })
+      setTimeout(() => setMsg(null), 2000)
+    },
     onError: e => setMsg({ type: 'error', text: e.response?.data?.error || 'خطا' }),
   })
   const statusMut = useMutation({

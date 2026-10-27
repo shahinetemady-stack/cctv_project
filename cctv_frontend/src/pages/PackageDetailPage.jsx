@@ -63,7 +63,7 @@ export default function PackageDetailPage() {
         title={seoTitle}
         description={seoDescription}
         keywords={pkg.keywords}
-        canonical={`/packages/${pkg.slug}`}
+        canonical={`/packages/${pkg.slug}/`}
         image={pkg.image}
         geoTags={pkg.geo_tags}
       />

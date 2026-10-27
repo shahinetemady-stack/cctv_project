@@ -37,24 +37,35 @@ const toEnDigits = (s) => String(s || '')
 // ─── تب تراز کلی ───────────────────────────────────────────────
 function BalanceTab() {
   const [filter, setFilter] = useState('')
+  const [balanceFilter, setBalanceFilter] = useState('all')
   const { data, isLoading } = useQuery({
     queryKey: ['balance-report'],
     queryFn: () => api.get('/accounting/reports/balance/').then(r => r.data),
   })
-  const contacts = (data?.contacts || []).filter(c =>
+  const searchedContacts = (data?.contacts || []).filter(c =>
     !filter || c.name.includes(filter) || c.contact_type_display.includes(filter)
   )
+  const contacts = searchedContacts.filter(c => {
+    if (balanceFilter === 'debtors') return c.balance_irr > 0 || c.balance_cny > 0
+    if (balanceFilter === 'creditors') return c.balance_irr < 0 || c.balance_cny < 0
+    return true
+  })
   const totalDebtIrr = contacts.filter(c => c.balance_irr > 0).reduce((s, c) => s + c.balance_irr, 0)
   const totalCreditIrr = contacts.filter(c => c.balance_irr < 0).reduce((s, c) => s + Math.abs(c.balance_irr), 0)
   const totalDebtCny = contacts.filter(c => c.balance_cny > 0).reduce((s, c) => s + c.balance_cny, 0)
   const totalCreditCny = contacts.filter(c => c.balance_cny < 0).reduce((s, c) => s + Math.abs(c.balance_cny), 0)
+  const balanceOptions = [
+    { key: 'all', label: 'همه' },
+    { key: 'debtors', label: 'بدهکاران' },
+    { key: 'creditors', label: 'بستانکاران' },
+  ]
 
   return (
     <div>
       <div className="grid grid-cols-4 gap-4 mb-6">
         {[
-          { label: 'بدهکاران (ریال)', value: fmt(totalDebtIrr) + ' ت', color: '#FF3B3B' },
-          { label: 'بستانکاران (ریال)', value: fmt(totalCreditIrr) + ' ت', color: '#00C896' },
+          { label: 'بدهکاران (ریال)', value: fmt(totalDebtIrr) + ' ریال', color: '#FF3B3B' },
+          { label: 'بستانکاران (ریال)', value: fmt(totalCreditIrr) + ' ریال', color: '#00C896' },
           { label: 'بدهکاران (یوان)', value: fmt(totalDebtCny) + ' ¥', color: '#FF3B3B' },
           { label: 'بستانکاران (یوان)', value: fmt(totalCreditCny) + ' ¥', color: '#00C896' },
         ].map(item => (
@@ -64,13 +75,25 @@ function BalanceTab() {
           </div>
         ))}
       </div>
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <input value={filter} onChange={e => setFilter(e.target.value)}
           className="input text-sm max-w-xs" placeholder="جستجو نام یا نوع..." />
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="فیلتر تراز">
+          {balanceOptions.map(option => (
+            <button key={option.key} type="button" onClick={() => setBalanceFilter(option.key)}
+              aria-pressed={balanceFilter === option.key}
+              className={`text-xs px-4 py-2 rounded-md border transition-colors ${balanceFilter === option.key
+                ? 'bg-brand/20 text-brand border-brand/30'
+                : 'bg-white/5 text-gray-steel hover:text-white border-transparent'}`}>
+              {option.label}
+            </button>
+          ))}
+          <span className="text-xs text-gray-steel mr-2">{fmt(contacts.length)} مورد</span>
+        </div>
       </div>
       <div className="card p-5">
         {isLoading ? <div className="text-center py-8 text-gray-steel">در حال بارگذاری...</div>
-          : contacts.length === 0 ? <div className="text-center py-12 text-gray-steel">تراکنشی یافت نشد</div>
+          : contacts.length === 0 ? <div className="text-center py-12 text-gray-steel">طرف حسابی با این فیلتر یافت نشد</div>
           : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
@@ -285,7 +308,7 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
       items.push({
         date: inv.date,
         type: 'invoice',
-        type_label: inv.role === 'shipper' ? 'فاکتور حمل' : 'فاکتور خرید',
+        type_label: inv.role === 'shipper' ? 'فاکتور حمل' : inv.role === 'extra' ? 'هزینه جانبی' : 'فاکتور خرید',
         description: inv.description,
         doc: inv.invoice_number ? `فاکتور ${inv.invoice_number}` : `سند #${inv.id}`,
         inv_id: inv.id,
@@ -335,6 +358,23 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
           created_by_name: p.created_by_name || '',
         })
       }
+    }
+
+    const cashCredit = Number(detail.payment_credit_irr || 0)
+    if (cashCredit > 0) {
+      items.push({
+        date: '',
+        type: 'cash_credit',
+        type_label: 'بستانکاری نقدی',
+        description: 'اضافه‌واریزی قابل مصرف برای خرید بعدی',
+        doc: 'اعتبار مشتری',
+        inv_items: [],
+        debit_irr: 0,
+        debit_cny: 0,
+        credit_irr: cashCredit,
+        credit_cny: 0,
+        created_by_name: '',
+      })
     }
 
     items.sort((a, b) => new Date(a.date) - new Date(b.date))
@@ -428,38 +468,22 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
                           <span className="text-[10px] text-gold">{c.partner_tier_display}</span>
                         )}
                         {c.phone && <span className="text-[10px] text-gray-steel" dir="ltr">{c.phone}</span>}
-                        {c.is_registered ? (
-                          <>
-                            {/* مانده کاربر ثبت‌نامی — همیشه نمایش داده می‌شود (حتی تسویه) تا با سطرهای دیگر یکدست باشد */}
-                            <span className={`text-[10px] font-bold ${c.sale_debt > 0 ? 'text-red-400' : c.sale_debt < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
-                              {c.sale_debt > 0 ? 'بدهکار' : c.sale_debt < 0 ? 'بستانکار' : 'تسویه'}: {fmt(Math.abs(c.sale_debt || 0))} ریال
-                            </span>
-                            {c.has_fx !== false && c.sale_debt_cny !== 0 && (
-                              <span className={`text-[10px] font-bold ${c.sale_debt_cny > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                {c.sale_debt_cny > 0 ? 'بدهکار' : 'بستانکار'}: {fmt(Math.abs(c.sale_debt_cny))} ¥
+                        {(() => {
+                          const totalIrr = Number(c.total_balance_irr ?? ((c.balance_irr || 0) + (c.sale_debt || 0) - (c.payment_credit_irr || 0)))
+                          const totalCny = Number(c.total_balance_cny ?? ((c.balance_cny || 0) + (c.sale_debt_cny || 0)))
+                          return (
+                            <>
+                              <span className={`text-[10px] font-bold ${totalIrr > 0 ? 'text-red-400' : totalIrr < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
+                                {totalIrr > 0 ? 'بدهکار' : totalIrr < 0 ? 'بستانکار' : 'تسویه'}: {fmt(Math.abs(totalIrr))} ریال
                               </span>
-                            )}
-                          </>
-                        ) : (
-                          (() => {
-                            // مانده کل = مانده حساب + مانده خالص فاکتورهای فروش (علامت‌دار —
-                            // مازاد پرداخت فاکتورهای دیگر لحاظ می‌شود، مطابق مانده نهایی کاردکس)
-                            const totalIrr = (c.balance_irr || 0) + (c.sale_debt || 0)
-                            const totalCny = (c.balance_cny || 0) + (c.sale_debt_cny || 0)
-                            return (
-                              <>
-                                <span className={`text-[10px] font-bold ${totalIrr > 0 ? 'text-red-400' : totalIrr < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
-                                  {totalIrr > 0 ? 'بدهکار' : totalIrr < 0 ? 'بستانکار' : 'تسویه'}: {fmt(Math.abs(totalIrr))} ریال
+                              {c.has_fx !== false && totalCny !== 0 && (
+                                <span className={`text-[10px] font-bold ${totalCny > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                  {totalCny > 0 ? 'بدهکار' : 'بستانکار'}: {fmt(Math.abs(totalCny))} ¥
                                 </span>
-                                {c.has_fx !== false && totalCny !== 0 && (
-                                  <span className={`text-[10px] font-bold ${totalCny > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                    {totalCny > 0 ? 'بدهکار' : 'بستانکار'}: {fmt(Math.abs(totalCny))} ¥
-                                  </span>
-                                )}
-                              </>
-                            )
-                          })()
-                        )}
+                              )}
+                            </>
+                          )
+                        })()}
                       </span>
                     </span>
                   </button>
@@ -472,46 +496,31 @@ function ContactKardexTab({ selectedId, setSelectedId, selectedName, setSelected
 
           {detail && (
             <div className="mt-2 flex gap-4 flex-wrap">
-              {detail.is_registered ? (
-                <>
-                  <span className={`text-sm font-bold ${detail.sale_debt > 0 ? 'text-red-400' : detail.sale_debt < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
-                    بدهی فاکتور: {detail.sale_debt > 0 ? `${fmt(detail.sale_debt)} ریال` : detail.sale_debt < 0 ? `بستانکار ${fmt(Math.abs(detail.sale_debt))} ریال` : 'تسویه ✓'}
-                  </span>
-                  {detail.has_fx !== false && detail.sale_debt_cny > 0 && (
-                    <span className="text-sm font-bold text-red-400">
-                      بدهی فاکتور یوانی: {fmt(detail.sale_debt_cny)} ¥
+              {(() => {
+                const totalIrr = Number(detail.total_balance_irr ?? (Number(detail.balance_irr || 0) + Number(detail.sale_debt || 0) - Number(detail.payment_credit_irr || 0)))
+                const totalCny = Number(detail.total_balance_cny ?? (Number(detail.balance_cny || 0) + Number(detail.sale_debt_cny || 0)))
+                const totalWithFx = totalIrr + totalCny * dayRate
+                return (
+                  <>
+                    <span className={`text-sm font-bold ${totalIrr > 0 ? 'text-red-400' : totalIrr < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
+                      مانده ریال: {totalIrr === 0 ? 'تسویه ✓' : `${totalIrr > 0 ? 'بدهکار' : 'بستانکار'} ${fmt(Math.abs(totalIrr))} ریال`}
                     </span>
-                  )}
-                </>
-              ) : (
-                <>
-                  {/* مانده کل ریالی = مانده اسناد طرف حساب + خالص فاکتورهای کاربر لینک‌شده
-                      (شامل بستانکاری مازاد واریزها — علامت‌دار) */}
-                  {(() => {
-                    const totalIrr = Number(detail.balance_irr || 0) + Number(detail.sale_debt || 0)
-                    return (
-                      <span className={`text-sm font-bold ${totalIrr > 0 ? 'text-red-400' : totalIrr < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
-                        مانده ریال: {totalIrr === 0 ? 'تسویه ✓' : `${totalIrr > 0 ? 'بدهکار' : 'بستانکار'} ${fmt(Math.abs(totalIrr))} ریال`}
+                    {detail.has_fx !== false && (
+                      <span className={`text-sm font-bold ${totalCny > 0 ? 'text-red-400' : totalCny < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
+                        مانده یوان: {totalCny === 0 ? 'تسویه ✓' : `${totalCny > 0 ? 'بدهکار' : 'بستانکار'} ${fmt(Math.abs(totalCny))} ¥`}
                       </span>
-                    )
-                  })()}
-                  {detail.has_fx !== false && (
-                    <span className={`text-sm font-bold ${detail.balance_cny > 0 ? 'text-red-400' : detail.balance_cny < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
-                      مانده یوان: {detail.balance_cny === 0 ? 'تسویه ✓' : `${detail.balance_cny > 0 ? 'بدهکار' : 'بستانکار'} ${fmt(Math.abs(detail.balance_cny))} ¥`}
-                    </span>
-                  )}
-                  {/* مانده کل به ریال با نرخ روز یوان */}
-                  {detail.has_fx !== false && (() => {
-                    const total = Number(detail.balance_irr || 0) + Number(detail.sale_debt || 0)
-                      + (Number(detail.balance_cny || 0) + Number(detail.sale_debt_cny || 0)) * dayRate
-                    return (
-                      <span className={`text-sm font-bold ${total > 0 ? 'text-red-400' : total < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
-                        | مانده کل (با نرخ روز): {total === 0 ? 'تسویه ✓' : `${total > 0 ? 'بدهکار' : 'بستانکار'} ${fmt(Math.abs(total))} ریال`}
+                    )}
+                    {detail.has_fx !== false && dayRate > 0 && (
+                      <span className={`text-sm font-bold ${totalWithFx > 0 ? 'text-red-400' : totalWithFx < 0 ? 'text-green-400' : 'text-gray-steel'}`}>
+                        | مانده کل (با نرخ روز): {totalWithFx === 0 ? 'تسویه ✓' : `${totalWithFx > 0 ? 'بدهکار' : 'بستانکار'} ${fmt(Math.abs(totalWithFx))} ریال`}
                       </span>
-                    )
-                  })()}
-                </>
-              )}
+                    )}
+                    {detail.has_fx !== false && totalCny !== 0 && !(dayRate > 0) && (
+                      <span className="text-xs text-yellow-400">نرخ روز یوان برای محاسبه جمع کل ثبت نشده است</span>
+                    )}
+                  </>
+                )
+              })()}
             </div>
           )}
 
@@ -961,7 +970,7 @@ function EditContactModal({ detail, onClose, onDeleted }) {
           </label>
           {(() => {
             const limit = Number(parseAmount(form.credit_limit)) || 0
-            const debt = Number(detail.sale_debt) || 0
+            const debt = Math.max(0, Number(detail.total_balance_irr ?? detail.sale_debt) || 0)
             if (!limit) return (
               <div className="col-span-2 text-[10px] text-gray-steel -mt-2">
                 شامل انواع بدهی می‌شود: حساب باز، چک وصول‌نشده و هر بدهی تسویه‌نشده — اگر مجموع بدهی از سقف بگذرد، فروش اعتباری جدید بسته می‌شود

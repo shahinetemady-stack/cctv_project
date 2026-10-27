@@ -53,7 +53,13 @@ function BoardFilters({ filters, set, brandSection }) {
       <Section title="نام سنسور" defaultOpen={false}>
         <input value={filters.sensor_name || ''}
           onChange={e => set('sensor_name', e.target.value)}
-          placeholder="مثال: IMX335، SC2310..."
+          placeholder="مثال: IMX335، GC4653..."
+          className="input text-sm" />
+      </Section>
+      <Section title="مدل پردازنده (ISP)" defaultOpen={false}>
+        <input value={filters.ai_processor || ''}
+          onChange={e => set('ai_processor', e.target.value)}
+          placeholder="مثال: FH8536H، Fullhan..."
           className="input text-sm" />
       </Section>
       <Section title="رزولوشن" defaultOpen={false}>
@@ -108,20 +114,31 @@ function LensFilters({ filters, set }) {
           ))}
         </div>
       </Section>
-      <Section title="نوع لنز" defaultOpen={false}>
+      <Section title="ضریب دیافراگم" defaultOpen={false}>
         <div className="flex flex-wrap gap-1.5">
-          {['فیکس','وریفکال','فیش آی','پین هولد','موتورایز'].map(t => (
-            <FilterChip key={t}
-              active={filters.lens_type === t}
-              onClick={() => set('lens_type', filters.lens_type === t ? '' : t)}>
-              {t}
+          {['F1.0','F1.2','F1.4','F1.6','F2.0'].map(a => (
+            <FilterChip key={a}
+              active={filters.lens_aperture === a}
+              onClick={() => set('lens_aperture', filters.lens_aperture === a ? '' : a)}>
+              {a}
             </FilterChip>
           ))}
         </div>
       </Section>
-      <Section title="نسبت کانونی" defaultOpen={false}>
+      <Section title="مانت / رزوه" defaultOpen={false}>
         <div className="flex flex-wrap gap-1.5">
-          {['معمولی', 'استارلایت', 'دارک لایت'].map(u => (
+          {['M12','D14','CS-Mount'].map(m => (
+            <FilterChip key={m}
+              active={filters.lens_mount === m}
+              onClick={() => set('lens_mount', filters.lens_mount === m ? '' : m)}>
+              {m}
+            </FilterChip>
+          ))}
+        </div>
+      </Section>
+      <Section title="کلاس نوری" defaultOpen={false}>
+        <div className="flex flex-wrap gap-1.5">
+          {['معمولی IR','استارلایت Starlight','وارم‌لایت / فول‌کالر Warm Light','بلک‌لایت Blacklight','پلاک‌خوان LPR'].map(u => (
             <FilterChip key={u}
               active={filters.focal_ratio === u}
               onClick={() => set('focal_ratio', filters.focal_ratio === u ? '' : u)}>
@@ -184,17 +201,6 @@ function HousingFilters({ filters, set }) {
               active={filters.housing_material === m}
               onClick={() => set('housing_material', filters.housing_material === m ? '' : m)}>
               {m}
-            </FilterChip>
-          ))}
-        </div>
-      </Section>
-      <Section title="نوع بدنه" defaultOpen={false}>
-        <div className="flex flex-wrap gap-1.5">
-          {['Bullet','Dome','Box','PTZ','Fisheye'].map(t => (
-            <FilterChip key={t}
-              active={filters.housing_type === t}
-              onClick={() => set('housing_type', filters.housing_type === t ? '' : t)}>
-              {t}
             </FilterChip>
           ))}
         </div>

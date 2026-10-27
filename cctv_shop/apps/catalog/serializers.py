@@ -130,11 +130,12 @@ class ProductListSerializer(serializers.ModelSerializer):
             "board_name", "board_system", "board_resolution",
             "sensor_name", "sensor_size",
             # ویژگی‌های لنز
-            "lens_name", "lens_resolution", "lens_degree", "lens_type", "focal_ratio",
+            "lens_name", "lens_resolution", "lens_degree", "focal_ratio",
+            "lens_aperture", "lens_image_size", "lens_mount", "lens_kit", "lens_holder_pitch", "lens_fov",
             # ویژگی‌های متعلقات
             "modem_model", "modem_type", "voltage",
             # ویژگی‌های بدنه
-            "housing_material", "housing_type", "housing_size",
+            "housing_material", "housing_size",
         ]
 
     def _is_staff(self):
@@ -211,6 +212,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     compatible_with = serializers.SerializerMethodField()
     has_datasheet  = serializers.SerializerMethodField()
     specs          = serializers.SerializerMethodField()
+    rating         = serializers.SerializerMethodField()
     # وضعیت نمایشی — «به‌زودی» خودکار وقتی فروشگاه خالی ولی کالا در راه هوایی است
     availability = serializers.CharField(source="effective_availability", read_only=True)
 
@@ -226,19 +228,28 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             "meta_title", "meta_description", "keywords", "geo_tags",
             # ویژگی‌های برد
             "board_name", "board_system", "board_resolution",
-            "sensor_name", "sensor_size", "ai_processor", "board_dimensions",
+            "sensor_name", "sensor_size", "ai_processor", "board_dimensions", "board_fps",
             "board_tech_notes",
             # ویژگی‌های لنز
-            "lens_name", "lens_resolution", "lens_degree", "lens_type", "focal_ratio",
+            "lens_resolution", "lens_degree", "focal_ratio",
+            "lens_aperture", "lens_image_size", "lens_mount", "lens_kit", "lens_holder_pitch", "lens_fov",
             # ویژگی‌های متعلقات
             "modem_model", "modem_type", "pin_count", "voltage",
             "ampere_output", "sim_card", "output_ports", "modem_size",
             # ویژگی‌های بدنه
-            "housing_material", "housing_type", "housing_size", "has_microphone",
+            "housing_material", "housing_size", "has_microphone",
             # فیلد محاسبه‌شده
-            "specs",
+            "specs", "rating",
             "created_at", "updated_at",
         ]
+
+    def get_rating(self, obj):
+        """خلاصه امتیاز از نظرهای تأییدشده — برای aggregateRating در اسکیمای SPA."""
+        from django.db.models import Avg, Count
+        agg = obj.reviews.filter(is_approved=True).aggregate(a=Avg("rating"), c=Count("id"))
+        if not agg["c"]:
+            return None
+        return {"average": round(float(agg["a"]), 1), "count": agg["c"]}
 
     def get_compatible_with(self, obj):
         return [
@@ -269,17 +280,22 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             add("اندازه سنسور",   obj.sensor_size)
             add("پردازنده",       obj.ai_processor)
             add("ابعاد",          obj.board_dimensions)
+            add("نرخ فریم",       obj.board_fps)
             add("شرکت سازنده",    obj.brand)
             if obj.has_microphone:
                 add("میکروفون داخلی", "دارد")
             add("اطلاعات فنی بیشتر", obj.board_tech_notes)
 
         elif cat_type == "lens":
-            add("نام لنز",        obj.lens_name)
             add("رزولوشن",        obj.lens_resolution)
-            add("درجه لنز",       obj.lens_degree)
-            add("نوع",            obj.lens_type)
-            add("نسبت کانونی",    obj.focal_ratio)
+            add("فاصله کانونی",   obj.lens_degree)
+            add("کلاس نوری لنز",  obj.focal_ratio)
+            add("ضریب دیافراگم",  obj.lens_aperture)
+            add("سایز سنسور سازگار", obj.lens_image_size)
+            add("نوع مانت / رزوه", obj.lens_mount)
+            add("اقلام همراه",    obj.lens_kit)
+            add("فاصله پیچ هولدر", obj.lens_holder_pitch)
+            add("زاویه دید افقی (FOV)", obj.lens_fov)
             add("شرکت سازنده",    obj.brand)
 
         elif cat_type == "modem":
@@ -294,9 +310,14 @@ class ProductDetailSerializer(serializers.ModelSerializer):
                 add("تعداد پورت خروجی", str(obj.output_ports))
             add("سایز",           obj.modem_size)
 
+        elif cat_type == "accessory":
+            add("مدل",            obj.modem_model)
+            add("نوع",            obj.modem_type)
+            add("ولتاژ کاری",     obj.voltage)
+            add("سایز",           obj.modem_size)
+
         elif cat_type == "housing":
             add("جنس بدنه",       obj.housing_material)
-            add("نوع بدنه",       obj.housing_type)
             add("سایز",           obj.housing_size)
             if obj.has_microphone:
                 add("قابلیت میکروفون", "دارد")
@@ -313,6 +334,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
                         continue
                     seen.add(f.key)
                     val = obj.dynamic_specs.get(f.key)
+                    if isinstance(val, str) and val.strip().lower() in ("true", "false"):
+                        val = val.strip().lower() == "true"
                     if val not in (None, "", False):
                         specs.append({"label": f.label, "value": "دارد" if val is True else val})
 

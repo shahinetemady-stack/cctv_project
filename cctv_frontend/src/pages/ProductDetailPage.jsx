@@ -387,7 +387,7 @@ export default function ProductDetailPage() {
   const specs  = product.specs || []
 
   // ─── SEO/GEO ─────────────────────────────────────────────────
-  const canonical = `/products/${product.slug}`
+  const canonical = `/products/${product.slug}/`
   const mainImage = images.find(i => i.is_primary)?.image || images[0]?.image
   const seoTitle = product.meta_title || `${product.name} | دوربینکار`
   const seoDescription = product.meta_description || product.short_description || product.description?.slice(0, 160)
@@ -402,6 +402,27 @@ export default function ProductDetailPage() {
     ...(product.category ? [{ name: product.category.name, url: `/categories/${product.category.slug}` }] : []),
     { name: product.name, url: canonical },
   ]
+  // فیلدهای اجباری گوگل برای Offer — سیاست مرجوعی و ارسال (رفع اخطار زرد Merchant listings)
+  const offerExtras = {
+    hasMerchantReturnPolicy: {
+      '@type': 'MerchantReturnPolicy',
+      applicableCountry: 'IR',
+      returnPolicyCategory: 'https://schema.org/MerchantReturnFiniteReturnWindow',
+      merchantReturnDays: 7,
+      returnMethod: 'https://schema.org/ReturnByMail',
+      returnFees: 'https://schema.org/FreeReturn',
+    },
+    shippingDetails: {
+      '@type': 'OfferShippingDetails',
+      shippingRate: { '@type': 'MonetaryAmount', value: 0, currency: 'IRR' },
+      shippingDestination: { '@type': 'DefinedRegion', addressCountry: 'IR' },
+      deliveryTime: {
+        '@type': 'ShippingDeliveryTime',
+        handlingTime: { '@type': 'QuantitativeValue', minValue: 0, maxValue: 1, unitCode: 'DAY' },
+        transitTime: { '@type': 'QuantitativeValue', minValue: 1, maxValue: 3, unitCode: 'DAY' },
+      },
+    },
+  }
   const productLd = {
     '@context': 'https://schema.org',
     '@type': 'Product',
@@ -410,6 +431,21 @@ export default function ProductDetailPage() {
     ...(seoDescription && { description: seoDescription }),
     ...(product.brand && { brand: { '@type': 'Brand', name: product.brand } }),
     ...(variant?.sku && { sku: variant.sku }),
+    // مشخصات فنی (جدول specs) به‌صورت PropertyValue — خواندنی برای گوگل و موتورهای AI
+    ...(product.specs?.length > 0 && {
+      additionalProperty: product.specs.map(s => ({
+        '@type': 'PropertyValue', name: s.label, value: String(s.value),
+      })),
+    }),
+    ...(product.rating?.count > 0 && {
+      aggregateRating: {
+        '@type': 'AggregateRating',
+        ratingValue: product.rating.average,
+        reviewCount: product.rating.count,
+        bestRating: 5,
+        worstRating: 1,
+      },
+    }),
     ...(variant?.final_price != null && {
       offers: {
         '@type': 'Offer',
@@ -420,6 +456,7 @@ export default function ProductDetailPage() {
         availability: inStock
           ? 'https://schema.org/InStock'
           : 'https://schema.org/OutOfStock',
+        ...offerExtras,
       },
     }),
   }
@@ -496,7 +533,8 @@ export default function ProductDetailPage() {
                 {product.brand}
               </div>
             )}
-            <h1 className="font-display font-bold text-2xl text-gray-900 dark:text-white leading-snug">
+            <h1 className="font-display font-bold text-2xl text-gray-900 dark:text-white leading-snug"
+              style={{ unicodeBidi: 'plaintext' }}>
               {product.name}
             </h1>
             {product.model_number && (

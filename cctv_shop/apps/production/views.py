@@ -32,8 +32,16 @@ def _default_warehouse():
 
 
 def _recipe_payload(recipe):
+    recipe_items = list(recipe.items.select_related("component", "component__product"))
+    stock_rows = (WarehouseStock.objects
+                  .filter(variant_id__in=[it.component_id for it in recipe_items],
+                          warehouse__is_active=True)
+                  .values("variant_id", "warehouse_id", "quantity"))
+    stock_map = {}
+    for row in stock_rows:
+        stock_map.setdefault(row["variant_id"], {})[row["warehouse_id"]] = row["quantity"]
     items = []
-    for it in recipe.items.select_related("component", "component__product"):
+    for it in recipe_items:
         c = it.component
         items.append({
             "variant_id": c.id,
@@ -42,6 +50,7 @@ def _recipe_payload(recipe):
             "quantity": it.quantity,
             "unit_cost_irr": get_variant_cost_irr(c),
             "stock_quantity": c.stock_quantity,
+            "warehouse_stocks": stock_map.get(c.id, {}),
         })
     variant = recipe.product.variants.filter(is_active=True).first()
     return {
@@ -156,11 +165,11 @@ class OrderListView(APIView):
         if not _has_staff_perm(request.user, "production_view"):
             return _forbidden()
         orders = (AssemblyOrder.objects
-                  .select_related("product", "warehouse", "created_by")[:100])
+                  .select_related("product", "warehouse", "source_warehouse", "created_by")[:100])
         return Response([_order_payload(o) for o in orders])
 
     def post(self, request):
-        """اجرای مونتاژ: مصرف قطعات + تولید محصول نهایی در یک انبار (اتمیک)."""
+        """اجرای مونتاژ: مصرف قطعات از انبار مبدأ + تولید محصول نهایی در انبار مقصد (اتمیک)."""
         if not _has_staff_perm(request.user, "production_manage"):
             return _forbidden()
         d = request.data
@@ -180,7 +189,11 @@ class OrderListView(APIView):
         warehouse = Warehouse.objects.filter(pk=d.get("warehouse_id"), is_active=True).first() \
             if d.get("warehouse_id") else _default_warehouse()
         if warehouse is None:
-            return Response({"error": "انبار معتبر نیست"}, status=400)
+            return Response({"error": "انبار مقصد (محصول نهایی) معتبر نیست"}, status=400)
+        source = Warehouse.objects.filter(pk=d.get("source_warehouse_id"), is_active=True).first() \
+            if d.get("source_warehouse_id") else warehouse
+        if source is None:
+            return Response({"error": "انبار مبدأ (قطعات) معتبر نیست"}, status=400)
 
         # اجرت مونتاژ و لوازم مصرفی — هزینه‌های برون‌سپاری، جزو بهای تمام‌شده
         try:
@@ -188,6 +201,14 @@ class OrderListView(APIView):
             consumables = max(0, int(d.get("consumables_cost_irr") or 0))
         except (TypeError, ValueError):
             return Response({"error": "مبلغ اجرت/لوازم نامعتبر است"}, status=400)
+        from datetime import date as date_cls
+        from django.utils import timezone
+        production_date = None
+        if d.get("production_date"):
+            try:
+                production_date = date_cls.fromisoformat(str(d["production_date"])[:10])
+            except ValueError:
+                return Response({"error": "تاریخ تولید نامعتبر است"}, status=400)
         assembler = None
         if d.get("assembler_id"):
             from apps.accounting.models import Contact
@@ -200,16 +221,16 @@ class OrderListView(APIView):
         if variant is None:
             return Response({"error": "محصول نهایی واریانت فعال ندارد"}, status=400)
 
-        # چک کفایت موجودی همه قطعات قبل از هر تغییری
+        # چک کفایت موجودی همه قطعات در انبار مبدأ قبل از هر تغییری
         shortages = []
         for it in items:
             stock_qty = (WarehouseStock.objects
-                         .filter(warehouse=warehouse, variant=it.component)
+                         .filter(warehouse=source, variant=it.component)
                          .values_list("quantity", flat=True).first() or 0)
             need = it.quantity * qty
             if stock_qty < need:
                 shortages.append(f"{it.component.product.name} ({it.component.sku}): "
-                                 f"موجودی {stock_qty}، نیاز {need}")
+                                 f"موجودی {stock_qty} در «{source.name}»، نیاز {need}")
         if shortages:
             return Response({"error": "موجودی قطعات کافی نیست", "shortages": shortages}, status=400)
 
@@ -223,7 +244,7 @@ class OrderListView(APIView):
             for it in items:
                 need = it.quantity * qty
                 StockMovement.record(
-                    warehouse=warehouse, variant=it.component,
+                    warehouse=source, variant=it.component,
                     movement_type="assembly_out", quantity=-need,
                     unit_price=get_variant_cost_irr(it.component),
                     reference=ref, note=f"مصرف مونتاژ {recipe.product.name} × {qty}",
@@ -246,17 +267,17 @@ class OrderListView(APIView):
             variant.save(update_fields=["stock_quantity", "purchase_price_cny"])
             order = AssemblyOrder.objects.create(
                 product=recipe.product, quantity=qty, warehouse=warehouse,
+                source_warehouse=source,
                 unit_cost_irr=unit_cost, total_cost_irr=total_cost,
                 labor_cost_irr=labor, consumables_cost_irr=consumables,
-                assembler=assembler,
+                assembler=assembler, production_date=production_date or timezone.localdate(),
                 note=note, created_by=request.user,
             )
             # سند هزینه اجرت/لوازم در حساب مونتاژکار — مبلغ = نرخ واحد × تعداد
             if labor + consumables > 0:
-                from django.utils import timezone
                 from apps.expenses.models import ExpenseCharge
                 from apps.expenses.services import book_charge_accrual
-                today = timezone.localdate()
+                pd = order.production_date
                 parts = []
                 if labor: parts.append(f"اجرت {labor:,}/دستگاه")
                 if consumables: parts.append(f"لوازم مصرفی {consumables:,}/دستگاه")
@@ -264,7 +285,7 @@ class OrderListView(APIView):
                     source=ExpenseCharge.Source.GENERAL,
                     title=f"مونتاژ {recipe.product.name} × {qty} (دستور #{order.id}) — {' + '.join(parts)}",
                     contact=assembler,
-                    year=today.year, month=today.month, date=today,
+                    year=pd.year, month=pd.month, date=pd,
                     amount=(labor + consumables) * qty,
                     notes=note,
                 )
@@ -281,6 +302,7 @@ def _order_payload(o):
         "product_name": o.product.name,
         "quantity": o.quantity,
         "warehouse_name": o.warehouse.name,
+        "source_warehouse_name": o.source_warehouse.name if o.source_warehouse else o.warehouse.name,
         "unit_cost_irr": o.unit_cost_irr,
         "total_cost_irr": o.total_cost_irr,
         "labor_cost_irr": o.labor_cost_irr,
@@ -289,6 +311,7 @@ def _order_payload(o):
         "expense_charge_id": o.expense_charge_id,
         "status": o.status,
         "status_display": o.get_status_display(),
+        "production_date": o.production_date.isoformat() if o.production_date else "",
         "note": o.note,
         "created_by": (o.created_by.get_full_name() or o.created_by.phone) if o.created_by else "-",
         "created_at": o.created_at.isoformat(),
@@ -296,14 +319,14 @@ def _order_payload(o):
 
 
 class OrderCancelView(APIView):
-    """برگشت دستور مونتاژ — معکوس کامل حرکت‌ها (قطعات برمی‌گردند، محصول نهایی خارج می‌شود)."""
+    """برگشت دستور مونتاژ — معکوس کامل حرکت‌ها (قطعات به انبار مبدأ برمی‌گردند، محصول نهایی از انبار مقصد خارج می‌شود)."""
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
         if not _has_staff_perm(request.user, "production_manage"):
             return _forbidden()
         order = (AssemblyOrder.objects
-                 .select_related("product", "warehouse")
+                 .select_related("product", "warehouse", "source_warehouse")
                  .filter(pk=pk).first())
         if order is None:
             return Response({"error": "دستور یافت نشد"}, status=404)
@@ -323,8 +346,10 @@ class OrderCancelView(APIView):
             return Response({"error": f"موجودی فعلی محصول نهایی در {order.warehouse.name} "
                                       f"({stock_qty}) برای برگشت کافی نیست"}, status=400)
         ref = f"ASM-{order.product_id}"
+        # دستورهای قدیمی انبار مبدأ ندارند — قطعات از/به همان انبار مقصد می‌رفت
+        source = order.source_warehouse or order.warehouse
         with transaction.atomic():
-            # خروج محصول نهایی
+            # خروج محصول نهایی از انبار مقصد
             StockMovement.record(
                 warehouse=order.warehouse, variant=variant,
                 movement_type="assembly_out", quantity=-need_out,
@@ -333,11 +358,11 @@ class OrderCancelView(APIView):
             )
             variant.stock_quantity = max(0, variant.stock_quantity - need_out)
             variant.save(update_fields=["stock_quantity"])
-            # برگشت قطعات
+            # برگشت قطعات به انبار مبدأ
             for it in recipe.items.all():
                 back = it.quantity * order.quantity
                 StockMovement.record(
-                    warehouse=order.warehouse, variant=it.component,
+                    warehouse=source, variant=it.component,
                     movement_type="assembly_in", quantity=back,
                     unit_price=get_variant_cost_irr(it.component), reference=ref,
                     note=f"برگشت قطعه از دستور مونتاژ #{order.id}", user=request.user,

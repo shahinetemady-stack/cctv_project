@@ -100,7 +100,7 @@ export default function ProductsPage() {
       <Seo
         title="محصولات | دوربینکار"
         description="کاتالوگ قطعات دوربین مداربسته — برد، لنز، مودم، بدنه و متعلقات با به‌روزترین قیمت‌ها."
-        canonical="/products"
+        canonical="/products/"
       />
 
       {/* نوار جستجوی هوشمند دوزبانه */}

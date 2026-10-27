@@ -23,7 +23,12 @@ const FIELD_GROUPS = [
     { k: 'board_name', l: 'نام برد', hint: 'اگر خالی بماند، هنگام ذخیره از شماره مدل پر می‌شود' },
     { k: 'board_system', l: 'سیستم برد', choices: ['AHD', 'IP'] },
     { k: 'board_resolution', l: 'رزولوشن برد', choices: ['2MP', '4MP', '5MP', '8MP', '12MP'] },
-    { k: 'board_dimensions', l: 'ابعاد برد', choices: ['۳۲*۳۲', '۳۸*۳۸', '۳۸*۴۸'] },
+    { k: 'board_dimensions', l: 'ابعاد برد', type: 'combo',
+      choices: ['۳۲*۳۲', '۳۸*۳۸', '۳۸*۴۸', '۳۸*۳۸ + ۳۸*۳۸', '۳۸*۳۸ + ۶۰*۵۱'],
+      hint: 'برای بردهای دو تکه (مثل پلاک‌خوان) با «+» بنویس — مثلاً ۳۸*۳۸ + ۶۰*۵۱' },
+    { k: 'board_fps', l: 'نرخ فریم (FPS)', type: 'combo',
+      choices: ['20fps', '25fps', '30fps'],
+      hint: 'اگر با رزولوشن فرق می‌کند بنویس — مثلاً 20fps@5MP' },
     { k: 'ai_processor', l: 'پردازنده' },
     { k: 'brand', l: 'شرکت سازنده', type: 'brand' },
     { k: 'has_microphone', l: 'قابلیت نصب میکروفون داخلی', type: 'checkbox' },
@@ -33,11 +38,16 @@ const FIELD_GROUPS = [
     { k: 'sensor_size', l: 'سایز سنسور', choices: ['1/4"', '1/3"', '1/2.8"', '1/2.7"', '1/2"', '1/1.8"'] },
   ]},
   { title: 'لنز', fields: [
-    { k: 'lens_name', l: 'نام لنز' },
+    { k: 'lens_degree', l: 'فاصله کانونی', type: 'combo', choices: ['1.7mm', '1.8mm', '2.8mm', '3.6mm', '4mm', '6mm', '8mm', '12mm', '16mm'],
+      hint: 'برای وریفوکال/موتورایز بنویس — مثلاً 2.8-12mm' },
     { k: 'lens_resolution', l: 'رزولوشن لنز', choices: ['3MP', '5MP', '8MP'] },
-    { k: 'lens_degree', l: 'درجه لنز', choices: ['1.7mm', '1.8mm', '2.8mm', '3.6mm', '4mm', '6mm', '8mm', '12mm', '16mm'] },
-    { k: 'lens_type', l: 'نوع لنز', choices: ['فیکس', 'وریفکال', 'فیش آی', 'پین هولد', 'موتورایز'] },
-    { k: 'focal_ratio', l: 'نسبت کانونی', choices: ['معمولی', 'استارلایت', 'دارک لایت'] },
+    { k: 'focal_ratio', l: 'کلاس نوری لنز', choices: ['معمولی IR', 'استارلایت Starlight', 'وارم‌لایت / فول‌کالر Warm Light', 'بلک‌لایت Blacklight', 'پلاک‌خوان LPR'] },
+    { k: 'lens_aperture', l: 'ضریب دیافراگم (Aperture)', type: 'combo', choices: ['F1.0', 'F1.2', 'F1.4', 'F1.6', 'F2.0'] },
+    { k: 'lens_image_size', l: 'سایز سنسور سازگار (Image Size)', choices: ['1/2.5"', '1/2.7"', '1/2.8"', '1/2.9"', '1/3"'] },
+    { k: 'lens_mount', l: 'نوع مانت / رزوه (Mount Type)', choices: ['M12', 'D14', 'CS-Mount'] },
+    { k: 'lens_kit', l: 'اقلام همراه و نگهدارنده', choices: ['فقط لنز', 'لنز + هولدر ثابت', 'لنز + فیلتر IR-Cut', 'فقط هولدر/IR-Cut'] },
+    { k: 'lens_holder_pitch', l: 'فاصله پیچ نصب هولدر', type: 'combo', choices: ['20mm'], hint: 'استاندارد رایج 20mm است' },
+    { k: 'lens_fov', l: 'زاویه دید افقی (FOV)', hint: 'مثلاً 91.3° یا 30~100° برای وریفوکال' },
   ]},
   { title: 'مودم', fields: [
     { k: 'modem_model', l: 'مدل مودم' },
@@ -46,8 +56,13 @@ const FIELD_GROUPS = [
     { k: 'pin_count', l: 'تعداد پین' },
     { k: 'sim_card', l: 'سیم کارت' },
   ]},
+  { title: 'متعلقات', fields: [
+    { k: 'modem_model', l: 'مدل' },
+    { k: 'modem_type', l: 'نوع' },
+    { k: 'voltage', l: 'ولتاژ کاری', type: 'combo', choices: ['5V', '12V DC', '24V AC', '48V'] },
+    { k: 'modem_size', l: 'سایز' },
+  ]},
   { title: 'بدنه', fields: [
-    { k: 'housing_type', l: 'نوع بدنه', choices: ['Bullet', 'Dome', 'Box', 'PTZ', 'Fisheye'] },
     { k: 'housing_material', l: 'جنس بدنه', choices: ['فلز', 'پلاستیک', 'فلز و پلاستیک'] },
     { k: 'housing_size', l: 'سایز بدنه' },
   ]},
@@ -76,7 +91,12 @@ const SPEC_GROUPS_BY_TYPE = {
   board: ['برد', 'سنسور', 'اطلاعات فنی بیشتر'],
   lens: ['لنز'],
   modem: ['مودم'],
+  accessory: ['متعلقات'],
+  recorder: [],
   housing: ['بدنه'],
+  // دوربین/دستگاه مونتاژشده (other) فقط ویژگی‌های سفارشی دسته را می‌گیرد —
+  // گروه‌های پایه برد/لنز/مودم/بدنه برای محصول مونتاژشده گیج‌کننده است
+  other: [],
 }
 const ALWAYS_GROUPS = ['اطلاعات اصلی', 'سئو و جغرافیا (SEO/GEO)', 'وضعیت نمایش']
 
@@ -177,12 +197,34 @@ function ProductEditor({ productId, categories, onClose }) {
     }
   }
 
-  const activeSpecFields = (currentCat?.parent
-    ? [...(parentCat?.spec_fields || []), ...(currentCat?.spec_fields || [])]
-    : (currentCat?.spec_fields || [])
-  ).filter(f => f.is_active)
+  // فیلدهای شرطی بر اساس «سیستم برد»: ویژگی‌های زیردسته AHD فقط وقتی سیستم AHD
+  // انتخاب شده نمایش داده می‌شوند (و برعکس برای IP). هر فیلد با اسلاگ دسته مبدأ
+  // علامت می‌خورد تا منشأش مشخص بماند. اگر محصول مستقیماً در ریشه برد باشد،
+  // فیلدهای زیردسته مطابق با سیستم انتخاب‌شده هم به فرم اضافه می‌شوند.
+  const BOARD_SYS_BY_SLUG = { 'ahd-camera-board': 'AHD', 'ip-camera-board': 'IP' }
+  // فیلدهای مشترک دسته برد که فقط برای IP معنا دارند — در حالت AHD مخفی می‌شوند
+  const AHD_HIDDEN_SHARED = new Set(['مکالمه-دوطرفه', 'خروجی-آلارم', 'امپلی-فایر-داخلی'])
+  const boardSys = form?.board_system || ''
+  let specFieldList = (currentCat?.parent
+    ? [...(parentCat?.spec_fields || []).map(f => ({ ...f, _catSlug: parentCat.slug })),
+       ...(currentCat?.spec_fields || []).map(f => ({ ...f, _catSlug: currentCat.slug }))]
+    : (currentCat?.spec_fields || []).map(f => ({ ...f, _catSlug: currentCat?.slug })))
+  if (boardSys && currentCat && !currentCat.parent && currentCat.category_type === 'board') {
+    const sysCat = categories.find(c => BOARD_SYS_BY_SLUG[c.slug] === boardSys)
+    if (sysCat) specFieldList = [...specFieldList, ...(sysCat.spec_fields || []).map(f => ({ ...f, _catSlug: sysCat.slug }))]
+  }
+  const activeSpecFields = specFieldList
+    .filter(f => f.is_active)
     // کلید تکراری (هم‌نام روی والد و فرزند) فقط یک‌بار — تعریف والد مقدم است (مثل get_specs سایت)
     .filter((f, i, arr) => arr.findIndex(x => x.key === f.key) === i)
+    // فیلد مخصوص یک سیستم برد فقط وقتی همان سیستم انتخاب شده باشد می‌آید؛
+    // تا وقتی سیستم انتخاب نشده، هر دو گروه دیده می‌شوند
+    .filter(f => { const sys = BOARD_SYS_BY_SLUG[f._catSlug]; return !sys || !boardSys || sys === boardSys })
+    // برد AHD رم و صدای دوطرفه/آلارم ندارد — این فیلدهای مشترک در حالت AHD مخفی می‌شوند
+    .filter(f => !(boardSys === 'AHD' && AHD_HIDDEN_SHARED.has(f.key)))
+    // چک‌باکس قدیمی «پشتیبانی از کارت حافظه» از فرم حذف شد — دراپ‌داون «حداکثر ظرفیت
+    // کارت حافظه» (با گزینه «ندارد») جایگزینش است
+    .filter(f => f.key !== 'پشتیبانی-از-کارت-حافظه')
   const specTitles = currentCat?.category_type ? SPEC_GROUPS_BY_TYPE[currentCat.category_type] : null
   const hiddenKeys = new Set(effectiveCat?.hidden_fields || [])
   const visibleGroups = FIELD_GROUPS
@@ -203,9 +245,16 @@ function ProductEditor({ productId, categories, onClose }) {
           <h2 className="font-bold text-white text-lg">ویرایش محصول</h2>
           <button onClick={onClose} className="text-gray-steel hover:text-white"><X size={20} /></button>
         </div>
+        {form?.slug && (
+          <div className="text-[11px] text-gray-steel mb-3">
+            آدرس محصول:{' '}
+            <a href={`/products/${form.slug}`} target="_blank" rel="noreferrer"
+              className="font-mono text-brand hover:underline" dir="ltr">/products/{form.slug}/</a>
+          </div>
+        )}
         {specTitles && (
           <div className="text-[11px] text-gray-steel mb-3">
-            فقط مشخصات مرتبط با دسته «{currentCat.name}» نمایش داده می‌شود — با تغییر دسته، بخش‌ها به‌روز می‌شوند.
+            فقط مشخصات مرتبط با دسته «{currentCat.name}» نمایش داده می‌شود — با تغییر دسته یا «سیستم برد» (IP/AHD)، بخش‌ها به‌روز می‌شوند.
           </div>
         )}
 
@@ -308,6 +357,15 @@ function ProductEditor({ productId, categories, onClose }) {
                             {[...new Set([...(form[f.k] ? [form[f.k]] : []), ...brandOptions])]
                               .map(b => <option key={b} value={b}>{b}</option>)}
                           </select>
+                        </>
+                      ) : f.type === 'combo' ? (
+                        <>
+                          <label className="label text-xs mb-1 block">{f.l}</label>
+                          <input list={`dl-${f.k}`} value={form[f.k] || ''} onChange={e => set(f.k, e.target.value)}
+                            dir={f.dir} className="input-dark text-xs w-full" />
+                          <datalist id={`dl-${f.k}`}>
+                            {(f.choices || []).map(c => <option key={c} value={c} />)}
+                          </datalist>
                         </>
                       ) : f.choices ? (
                         <>
@@ -904,8 +962,9 @@ export default function AdminProductsPage() {
   const [q, setQ] = useState('')
   const [editing, setEditing] = useState(null) // id محصول در حال ویرایش
   const [creating, setCreating] = useState(false)
-  const [catFilter, setCatFilter] = useState('')        // فیلتر نوع کالا (دسته اصلی)
-  const [stockFilter, setStockFilter] = useState('')    // '' | 'in' | 'out'
+  const [catFilter, setCatFilter] = useState('')        // فیلتر دسته اصلی
+  const [subCatFilter, setSubCatFilter] = useState('')  // فیلتر زیردسته (وابسته به دسته اصلی)
+  const [stockFilter, setStockFilter] = useState('')    // '' | 'in' | 'out' | 'discontinued'
   const [onlyFeatured, setOnlyFeatured] = useState(false)
   const [showInactive, setShowInactive] = useState(false) // محصولات غیرفعال (توقف تولید)
 
@@ -939,13 +998,20 @@ export default function AdminProductsPage() {
   const rootCategories = categories.filter(c => !c.parent)
   const searching = q.trim().length >= 2
   const matchCat = (p) => {
+    if (subCatFilter) return p.category_id === Number(subCatFilter)
     if (!catFilter) return true
     const c = catById[p.category_id]
     return c && (c.id === Number(catFilter) || c.parent === Number(catFilter))
   }
+  const subCatOptions = catFilter ? categories.filter(c => c.parent === Number(catFilter)) : []
   const visibleProducts = products
     .filter(p => (searching || showInactive || p.is_active) && matchCat(p))
-    .filter(p => !stockFilter || (stockFilter === 'in' ? (p.total_stock ?? p.available_stock) > 0 : (p.total_stock ?? p.available_stock) <= 0))
+    .filter(p => {
+      if (stockFilter === 'discontinued') return p.availability === 'discontinued'
+      if (stockFilter === 'in') return (p.total_stock ?? p.available_stock) > 0
+      if (stockFilter === 'out') return (p.total_stock ?? p.available_stock) <= 0
+      return true
+    })
     .filter(p => !onlyFeatured || p.is_featured)
     .sort((a, b) => (b.is_active ? 1 : 0) - (a.is_active ? 1 : 0))
 
@@ -968,21 +1034,29 @@ export default function AdminProductsPage() {
             style={{ width: '10rem', padding: '0.3rem 2rem 0.3rem 0.75rem' }} />
         </div>
         <select value={stockFilter} onChange={e => setStockFilter(e.target.value)}
-          className="input-dark text-[11px]" style={{ width: '6.5rem', padding: '0.3rem 0.75rem' }}>
+          className="input-dark text-[11px]" style={{ width: '7.5rem', padding: '0.3rem 0.75rem' }}>
           <option value="">موجودی: همه</option>
           <option value="in">موجود</option>
           <option value="out">ناموجود</option>
+          <option value="discontinued">توقف تولید</option>
         </select>
         <label className="flex items-center gap-1.5 cursor-pointer select-none">
           <input type="checkbox" checked={onlyFeatured} onChange={e => setOnlyFeatured(e.target.checked)}
             className="w-3.5 h-3.5 accent-[#FBC02D]" />
           <span className="text-[11px] text-gray-steel">ویژه</span>
         </label>
-        <select value={catFilter} onChange={e => setCatFilter(e.target.value)}
+        <select value={catFilter} onChange={e => { setCatFilter(e.target.value); setSubCatFilter('') }}
           className="input-dark text-[11px]" style={{ width: '9rem', padding: '0.3rem 0.75rem' }}>
-          <option value="">همه انواع کالا</option>
+          <option value="">دسته اصلی: همه</option>
           {rootCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
+        {subCatOptions.length > 0 && (
+          <select value={subCatFilter} onChange={e => setSubCatFilter(e.target.value)}
+            className="input-dark text-[11px]" style={{ width: '9rem', padding: '0.3rem 0.75rem' }}>
+            <option value="">زیردسته: همه</option>
+            {subCatOptions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        )}
         <label className="flex items-center gap-1.5 cursor-pointer select-none">
           <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)}
             className="w-3.5 h-3.5 accent-[#FBC02D]" />

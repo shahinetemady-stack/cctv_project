@@ -41,7 +41,7 @@ def align_categories_with_legacy(apps, schema_editor):
 
     # ── ساخت زیردسته‌های جدید (نوع از والد به ارث می‌رسد) ──
     def parent_by_legacy(legacy_id):
-        return Category.objects.get(legacy_id=legacy_id, parent__isnull=True)
+        return Category.objects.filter(legacy_id=legacy_id, parent__isnull=True).first()
 
     new_children = [
         # (legacy والد, legacy_id, slug, نام, ترتیب)
@@ -54,6 +54,8 @@ def align_categories_with_legacy(apps, schema_editor):
     ]
     for parent_legacy, legacy_id, slug, name, sort_order in new_children:
         parent = parent_by_legacy(parent_legacy)
+        if parent is None:
+            continue
         Category.objects.get_or_create(
             slug=slug,
             defaults={

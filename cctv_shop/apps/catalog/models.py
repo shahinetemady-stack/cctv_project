@@ -47,8 +47,10 @@ class Category(TimeStampedModel):
     class CategoryType(models.TextChoices):
         BOARD   = "board",   "برد دوربین مداربسته"
         LENS    = "lens",    "لنز دوربین مداربسته"
-        MODEM   = "modem",   "متعلقات"
+        MODEM   = "modem",   "مودم و ماژول"
         HOUSING = "housing", "بدنه دوربین مداربسته"
+        ACCESSORY = "accessory", "لوازم جانبی"
+        RECORDER = "recorder", "برد دستگاه ضبط"
         OTHER   = "other",   "سایر"
 
     name = models.CharField(max_length=150, verbose_name="نام دسته‌بندی")
@@ -159,7 +161,9 @@ class Product(TimeStampedModel):
                  ('1/2.7"','1/2.7"'),('1/2"','1/2"'),('1/1.8"','1/1.8"')])
     ai_processor    = models.CharField(max_length=150, blank=True, verbose_name="پردازنده")
     board_dimensions= models.CharField(max_length=100, blank=True, verbose_name="ابعاد (برد)",
-        choices=[("۳۲*۳۲","۳۲*۳۲"),("۳۸*۳۸","۳۸*۳۸"),("۳۸*۴۸","۳۸*۴۸")])
+        help_text="مثل ۳۸*۳۸ — برای بردهای دو تکه مثل پلاک‌خوان: ۳۸*۳۸ + ۶۰*۵۱")
+    board_fps      = models.CharField(max_length=50, blank=True, verbose_name="نرخ فریم (FPS)",
+        help_text="مثل 25fps یا 20fps@5MP")
     board_tech_notes= models.TextField(blank=True, verbose_name="اطلاعات فنی بیشتر (برد)")
 
     # ── ویژگی‌های لنز دوربین ──────────────────────────────
@@ -173,8 +177,22 @@ class Product(TimeStampedModel):
     lens_type = models.CharField(max_length=50, blank=True, verbose_name="نوع لنز",
         choices=[("فیکس","فیکس"),("وریفکال","وریفکال"),
                  ("فیش آی","فیش آی"),("پین هولد","پین هولد"),("موتورایز","موتورایز")])
-    focal_ratio = models.CharField(max_length=30, blank=True, verbose_name="نوع کاربرد",
-        choices=[("معمولی","معمولی"),("استارلایت","استارلایت"),("دارک لایت","دارک لایت")])
+    focal_ratio = models.CharField(max_length=60, blank=True, verbose_name="کلاس نوری لنز",
+        choices=[("معمولی IR","معمولی IR"),("استارلایت Starlight","استارلایت Starlight"),
+                 ("وارم‌لایت / فول‌کالر Warm Light","وارم‌لایت / فول‌کالر Warm Light"),
+                 ("بلک‌لایت Blacklight","بلک‌لایت Blacklight"),("پلاک‌خوان LPR","پلاک‌خوان LPR")])
+    lens_aperture   = models.CharField(max_length=30, blank=True, verbose_name="ضریب دیافراگم (Aperture)",
+        help_text="مثل F1.0 یا F1.2")
+    lens_image_size = models.CharField(max_length=30, blank=True, verbose_name="سایز سنسور سازگار (Image Size)",
+        help_text="مثل 1/2.8 اینچ")
+    lens_mount      = models.CharField(max_length=30, blank=True, verbose_name="نوع مانت / رزوه (Mount Type)",
+        help_text="M12 / D14 / CS-Mount")
+    lens_kit        = models.CharField(max_length=60, blank=True, verbose_name="اقلام همراه و نگهدارنده",
+        help_text="فقط لنز / لنز + هولدر ثابت / لنز + فیلتر IR-Cut / فقط هولدر/IR-Cut")
+    lens_holder_pitch = models.CharField(max_length=40, blank=True, verbose_name="فاصله پیچ نصب هولدر",
+        help_text="استاندارد رایج 20mm")
+    lens_fov        = models.CharField(max_length=60, blank=True, verbose_name="زاویه دید افقی (FOV)",
+        help_text="مثل 91.3° یا 30~100° برای وریفوکال")
 
     # ── ویژگی‌های متعلقات ─────────────────────────────────
     modem_model  = models.CharField(max_length=150, blank=True, verbose_name="مدل")
@@ -189,8 +207,6 @@ class Product(TimeStampedModel):
     # ── ویژگی‌های بدنه دوربین ─────────────────────────────
     housing_material = models.CharField(max_length=50, blank=True, verbose_name="جنس بدنه",
         choices=[("فلز","فلز"),("پلاستیک","پلاستیک"),("فلز و پلاستیک","فلز و پلاستیک")])
-    housing_type = models.CharField(max_length=50, blank=True, verbose_name="نوع بدنه",
-        choices=[("Bullet","Bullet"),("Dome","Dome"),("Box","Box"),("PTZ","PTZ"),("Fisheye","Fisheye")])
     housing_size = models.CharField(max_length=100, blank=True, verbose_name="سایز دوربین")
     has_microphone = models.BooleanField(default=False, verbose_name="قابلیت میکروفون")
 
@@ -550,6 +566,31 @@ class ProductPriceHistory(models.Model):
     def __str__(self):
         return f"{self.variant} | {self.date} | {self.price_irr:,}"
 
+
+
+class ProductReview(TimeStampedModel):
+    """نظر و امتیاز مشتری برای محصول — منبع aggregateRating/review در اسکیمای Product.
+    فقط نظرهای تأییدشده (is_approved) در JSON-LD و سایت منعکس می‌شوند."""
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="reviews", verbose_name="محصول",
+    )
+    author_name = models.CharField(max_length=100, verbose_name="نام نظردهنده")
+    rating = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        verbose_name="امتیاز (۱ تا ۵)",
+    )
+    body = models.TextField(blank=True, verbose_name="متن نظر")
+    is_approved = models.BooleanField(default=False, verbose_name="تأیید شده",
+        help_text="فقط نظرهای تأییدشده در سایت و اسکیمای گوگل نمایش داده می‌شوند")
+
+    class Meta:
+        db_table = "catalog_product_review"
+        verbose_name = "نظر محصول"
+        verbose_name_plural = "نظرهای محصولات"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.product.name} — {self.author_name} ({self.rating}★)"
 
 
 class CategorySpecField(TimeStampedModel):
