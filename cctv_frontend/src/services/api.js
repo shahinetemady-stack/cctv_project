@@ -40,7 +40,27 @@ api.interceptors.request.use((config) => {
 // ۲) چند درخواست موازی ۴۰۱ نباید هرکدام جداگانه رفرش بزنند — اولی توکن را rotate
 //    می‌کند و بقیه با توکن blacklist‌شده می‌افتند بیرون و کاربر لاگ‌اوت می‌شود.
 //    همه روی یک Promise رفرش مشترک سوار می‌شوند.
+// ۳) اگر پنل در دو تب/پنجره باز باشد، تب دیگر ممکن است اول رفرش را rotate کرده
+//    باشد؛ آن‌وقت توکن ما blacklist است ولی localStorage توکن تازه دارد —
+//    قبل از خروج اجباری یک بار با جدیدترین توکن تلاش مجدد می‌کنیم.
 let refreshPromise = null
+
+async function refreshWith(token) {
+  const { data } = await axios.post(
+    `${import.meta.env.VITE_API_URL || '/api'}/users/auth/refresh/`,
+    { refresh: token }
+  )
+  localStorage.setItem('access_token', data.access)
+  if (data.refresh) localStorage.setItem('refresh_token', data.refresh)
+  // استور zustand هم به‌روز شود تا با localStorage هماهنگ بماند
+  useAuthStore.setState({
+    accessToken: data.access,
+    ...(data.refresh ? { refreshToken: data.refresh } : {}),
+  })
+  return data.access
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
 api.interceptors.response.use(
   (res) => res,
@@ -51,26 +71,25 @@ api.interceptors.response.use(
       const refresh = localStorage.getItem('refresh_token')
       if (refresh) {
         try {
-          refreshPromise ??= axios
-            .post(
-              `${import.meta.env.VITE_API_URL || '/api'}/users/auth/refresh/`,
-              { refresh }
-            )
-            .then(({ data }) => {
-              localStorage.setItem('access_token', data.access)
-              if (data.refresh) localStorage.setItem('refresh_token', data.refresh)
-              // استور zustand هم به‌روز شود تا با localStorage هماهنگ بماند
-              useAuthStore.setState({
-                accessToken: data.access,
-                ...(data.refresh ? { refreshToken: data.refresh } : {}),
-              })
-              return data.access
-            })
-            .finally(() => { refreshPromise = null })
+          refreshPromise ??= refreshWith(refresh).finally(() => { refreshPromise = null })
           const access = await refreshPromise
           original.headers.Authorization = `Bearer ${access}`
           return api(original)
         } catch {
+          // شاید تب دیگری هم‌زمان رفرش را rotate کرده — با جدیدترین توکن تلاش مجدد.
+          // اگر هنوز همان توکن قدیمی است، کمی صبر کن تا نوشتن توکن تازه تب دیگر تمام شود.
+          let latest = localStorage.getItem('refresh_token')
+          if (latest === refresh) {
+            await sleep(400)
+            latest = localStorage.getItem('refresh_token')
+          }
+          if (latest && latest !== refresh) {
+            try {
+              const access = await refreshWith(latest)
+              original.headers.Authorization = `Bearer ${access}`
+              return api(original)
+            } catch { /* توکن جدید هم رد شد — نشست واقعاً تمام شده */ }
+          }
           forceLogout()
         }
       } else if (useAuthStore.getState().accessToken) {

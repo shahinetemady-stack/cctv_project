@@ -107,7 +107,7 @@ class Category(TimeStampedModel):
 
     # ── SEO ───────────────────────────────────────────────
     description = models.TextField(blank=True, verbose_name="توضیحات دسته")
-    meta_title = models.CharField(max_length=60, blank=True, verbose_name="Meta Title")
+    meta_title = models.CharField(max_length=120, blank=True, verbose_name="Meta Title")
     meta_description = models.CharField(max_length=160, blank=True, verbose_name="Meta Description")
 
     class Meta:
@@ -229,7 +229,7 @@ class Product(TimeStampedModel):
         help_text="«به‌زودی» برای محصولات در راه؛ «توقف تولید» برای ناموجودهای دائمی — در غیر این صورت روی خودکار بماند")
 
     # ── SEO ───────────────────────────────────────────────
-    meta_title       = models.CharField(max_length=60,  blank=True, verbose_name="Meta Title")
+    meta_title       = models.CharField(max_length=120, blank=True, verbose_name="Meta Title")
     meta_description = models.CharField(max_length=160, blank=True, verbose_name="Meta Description")
     keywords         = models.CharField(max_length=500, blank=True, verbose_name="کلمات کلیدی")
     geo_tags         = models.CharField(max_length=300, blank=True, verbose_name="شهرهای هدف")
@@ -481,7 +481,7 @@ class Package(models.Model):
     is_featured = models.BooleanField(default=False, verbose_name="ویژه")
 
     # ── SEO ───────────────────────────────────────────────
-    meta_title       = models.CharField(max_length=60,  blank=True, verbose_name="Meta Title")
+    meta_title       = models.CharField(max_length=120, blank=True, verbose_name="Meta Title")
     meta_description = models.CharField(max_length=160, blank=True, verbose_name="Meta Description")
     keywords         = models.CharField(max_length=500, blank=True, verbose_name="کلمات کلیدی")
     geo_tags         = models.CharField(max_length=300, blank=True, verbose_name="شهرهای هدف")
