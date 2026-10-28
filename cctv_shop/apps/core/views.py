@@ -207,7 +207,13 @@ class BotContextView(APIView):
         from apps.catalog.pricing import formula_prices, user_price_key
         from apps.users.models import User
 
-        products, is_fallback = _find_products(q, limit=4)
+        # نیت قیمتی: «اقتصادی/ارزان/به‌صرفه» یا «گران» — pool بزرگ‌تر تا گزینه ارزان گم نشود
+        import re as _re
+        cheap_intent = bool(_re.search(r"ارزان|اقتصادی|به‌صرفه", q))
+        expensive_intent = bool(_re.search(r"گران", q)) and not cheap_intent
+        price_intent = cheap_intent or expensive_intent
+
+        products, is_fallback = _find_products(q, limit=12 if price_intent else 4)
         if is_fallback:
             products = []
         rag_hits = None
@@ -236,7 +242,6 @@ class BotContextView(APIView):
             return Response({"found": False, "ambiguous": False, "products": [], "context_text": ""})
 
         # ابهام کد مشترک (مثل 10081 که چند لنز دارد) — همان منطق امتیاز ربات‌ها
-        import re as _re
         def rel(p):
             ql = q.lower()
             model = (p.model_number or "").lower()
@@ -258,6 +263,19 @@ class BotContextView(APIView):
         best = max(scores)
         strong = [p for p, s in zip(products, scores) if s >= 40 and s >= best * 0.5]
         ambiguous = len(strong) > 1
+
+        # مرتب‌سازی بر اساس نیت قیمتی — موجودها اول، بعد ارزان‌ترین/گران‌ترین
+        sort_note = ""
+        if price_intent:
+            def _retail(p):
+                v = p.variants.filter(is_active=True).first()
+                return formula_prices(v)["retail"] if v else None
+            products.sort(key=lambda p: (
+                p.available_stock <= 0,
+                _retail(p) is None,
+                (_retail(p) or 0) * (-1 if expensive_intent else 1),
+            ))
+            sort_note = "ارزان‌ترین" if cheap_intent else "گران‌ترین"
 
         phone = _normalize_phone(request.data.get("phone"))
         user = User.objects.filter(phone=phone).first() if phone else None
@@ -308,8 +326,10 @@ class BotContextView(APIView):
             "ambiguous": ambiguous,
             "tier": tier,
             "products": out,
-            "context_text": ("اطلاعات واقعی فروشگاه (مرجع قطعی — فقط بر اساس همین جواب بده؛ "
-                             "چیزی که اینجا نیست را نساز):\n" + "\n\n".join(text_blocks)),
+            "context_text": (
+                (f"(نتایج از {sort_note} مرتب شده است؛ همان ترتیب را رعایت کن)\n" if sort_note else "")
+                + "اطلاعات واقعی بازرگانی (مرجع قطعی — فقط بر اساس همین جواب بده؛ "
+                  "چیزی که اینجا نیست را نساز):\n" + "\n\n".join(text_blocks)),
         })
 
 
