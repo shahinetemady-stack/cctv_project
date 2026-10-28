@@ -503,16 +503,16 @@ def _forbidden(msg='شما دسترسی لازم برای این عملیات ر
 
 class ExchangeRateView(APIView):
     """
-    GET  /api/catalog/exchange-rate/   → نرخ ارز جاری (عموم)
+    GET  /api/catalog/exchange-rate/   → نرخ ارز جاری (فقط پرسنل — اطلاعات داخلی بازرگانی)
     PUT  /api/catalog/exchange-rate/   → بروزرسانی (فقط پرمیشن exchange_rate_edit — ادمین/حسابدار)
     """
 
     def get_permissions(self):
-        if self.request.method == "GET":
-            return [AllowAny()]
         return [IsAuthenticated()]
 
     def get(self, request):
+        if not request.user.is_staff:
+            return Response({"error": "دسترسی ندارید"}, status=status.HTTP_403_FORBIDDEN)
         instance = ExchangeRateSetting.get_instance()
         serializer = ExchangeRateSerializer(instance)
         return Response(serializer.data)
