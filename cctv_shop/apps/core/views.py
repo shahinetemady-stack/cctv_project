@@ -177,6 +177,142 @@ class BotPriceLookupView(APIView):
         return Response(payload)
 
 
+class BotContextView(APIView):
+    """POST /api/core/bot/context/ — کانتکست غنی محصول برای ربات‌های پیام‌رسان.
+
+    بدنه: {q: متن پیام مشتری, phone?: موبایل برای قیمت همکاری}
+    بازیابی = جستجوی کلیدواژه‌ای چت‌بات + RAG برداری روی مشخصات/توضیحات/دیتاشیت.
+    خروجی برای هر محصول: قیمت (بر اساس سطح مشتری)، موجودی دقیق، مشخصات کامل فنی
+    و گزیده دیتاشیت + یک context_text آماده برای تزریق مستقیم به پرامپت LLM ربات.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    MAX_PRODUCTS = 3
+    DATASHEET_CHARS = 1800
+
+    def post(self, request):
+        from decouple import config as env
+        expected = env("BOT_API_TOKEN", default="")
+        if not expected or request.headers.get("X-Bot-Token", "") != expected:
+            return Response({"error": "دسترسی ندارید"}, status=401)
+
+        q = (request.data.get("q") or "").strip()[:300]
+        if not q:
+            return Response({"error": "q لازم است"}, status=400)
+
+        from apps.assistant.views import _find_products, _datasheets
+        from apps.assistant import rag
+        from apps.catalog.models import Product
+        from apps.catalog.pricing import formula_prices, user_price_key
+        from apps.users.models import User
+
+        products, is_fallback = _find_products(q, limit=4)
+        if is_fallback:
+            products = []
+        rag_hits = None
+        try:
+            rag_hits = rag.search(q, top_k=6)
+        except Exception:
+            rag_hits = None
+        if rag_hits:
+            rag_slugs = []
+            for h in rag_hits:
+                if h["slug"] not in rag_slugs:
+                    rag_slugs.append(h["slug"])
+            if not products:
+                products = list(Product.objects.filter(slug__in=rag_slugs[:4], is_active=True)
+                                .select_related("category").prefetch_related("variants"))
+                products.sort(key=lambda p: rag_slugs.index(p.slug))
+            else:
+                have = {p.slug for p in products}
+                extra = [s for s in rag_slugs if s not in have][:2]
+                if extra:
+                    products = list(products) + list(
+                        Product.objects.filter(slug__in=extra, is_active=True)
+                        .select_related("category").prefetch_related("variants"))
+
+        if not products:
+            return Response({"found": False, "ambiguous": False, "products": [], "context_text": ""})
+
+        # ابهام کد مشترک (مثل 10081 که چند لنز دارد) — همان منطق امتیاز ربات‌ها
+        import re as _re
+        def rel(p):
+            ql = q.lower()
+            model = (p.model_number or "").lower()
+            name = p.name.lower()
+            tok = _re.search(rf"(^|[^a-z0-9]){_re.escape(ql)}([^a-z0-9]|$)", model)
+            s = 0
+            if model == ql:
+                s += 120
+            if tok:
+                s += 80
+            elif ql and ql in model:
+                s += 40
+            if _re.search(rf"(^|[^a-z0-9]){_re.escape(ql)}([^a-z0-9]|$)", name):
+                s += 30
+            elif ql and ql in name:
+                s += 15
+            return s
+        scores = [rel(p) for p in products]
+        best = max(scores)
+        strong = [p for p, s in zip(products, scores) if s >= 40 and s >= best * 0.5]
+        ambiguous = len(strong) > 1
+
+        phone = _normalize_phone(request.data.get("phone"))
+        user = User.objects.filter(phone=phone).first() if phone else None
+        price_key, tier = user_price_key(user)
+        site_base = env("SITE_BASE_URL", default="https://doorbinkar.com").rstrip("/")
+        ds = _datasheets()
+        datasheet_by_slug = {h["slug"]: h["text"] for h in rag_hits or [] if h["kind"] == "datasheet"}
+
+        AVAILABILITY_FA = {"coming_soon": "به‌زودی (در راه است)", "discontinued": "توقف تولید"}
+        out, text_blocks = [], []
+        for p in products[: self.MAX_PRODUCTS]:
+            variant = p.variants.filter(is_active=True).first()
+            prices = formula_prices(variant) if variant else None
+            stock = p.available_stock
+            avail = p.effective_availability
+            if avail != "auto":
+                stock_label = AVAILABILITY_FA.get(avail, "ناموجود")
+            elif stock > 0:
+                stock_label = f"موجود ({stock} عدد)"
+            else:
+                stock_label = "ناموجود"
+            specs = rag.full_spec_text(p)
+            # گزیده دیتاشیت: اول بخش بازیابی‌شده با سؤال، بعد ابتدای دیتاشیت
+            excerpt = datasheet_by_slug.get(p.slug) or (ds.get(p.slug) or {}).get("text", "")
+            excerpt = excerpt[: self.DATASHEET_CHARS]
+            url = f"{site_base}/products/{p.slug}/"
+            item = {
+                "id": p.id, "name": p.name, "slug": p.slug, "url": url,
+                "category": p.category.name if p.category else "",
+                "price": prices[price_key] if prices else None,      # ریال — سطح مشتری
+                "retail_price": prices["retail"] if prices else None,
+                "in_stock": stock > 0 and avail != "discontinued",
+                "stock_qty": stock, "stock_label": stock_label,
+                "specs": specs, "datasheet": excerpt,
+            }
+            out.append(item)
+            block = f"■ {p.name}"
+            if prices:
+                block += (f"\nقیمت: {prices[price_key]:,} ریال"
+                          + (f" (قیمت عمومی: {prices['retail']:,} ریال)" if price_key != "retail" else ""))
+            block += f"\nموجودی: {stock_label}\nلینک: {url}\nمشخصات فنی:\n{specs}"
+            if excerpt:
+                block += f"\nگزیده دیتاشیت:\n{excerpt}"
+            text_blocks.append(block)
+
+        return Response({
+            "found": True,
+            "ambiguous": ambiguous,
+            "tier": tier,
+            "products": out,
+            "context_text": ("اطلاعات واقعی فروشگاه (مرجع قطعی — فقط بر اساس همین جواب بده؛ "
+                             "چیزی که اینجا نیست را نساز):\n" + "\n\n".join(text_blocks)),
+        })
+
+
 # ─── سرویس‌ها و اشتراک‌ها (دامنه/سرور/…) — perm: services_view ────────────
 # اطلاعات حساب‌ها حساس است؛ سوپریوزر همیشه عبور می‌کند و پرسنل فقط با نقشی
 # که کد services_view را دارد به این بخش دسترسی دارند.

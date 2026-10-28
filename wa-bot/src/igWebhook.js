@@ -45,6 +45,21 @@ async function priceLookup(body) {
   return res.json();
 }
 
+// کانتکست غنی سایت (مشخصات کامل فنی + گزیده دیتاشیت + موجودی دقیق) — منبع اصلی
+// دانش فنی ربات؛ بازیابی سمت سرور با جستجوی کلیدواژه + RAG برداری انجام می‌شود
+async function botContext(q) {
+  if (!SHOP_TOKEN) return null;
+  const res = await fetch(`${SITE}/api/core/bot/context/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Bot-Token': SHOP_TOKEN },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
+    body: JSON.stringify({ q }),
+  });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return data?.found ? data : null;
+}
+
 // امتیاز ارتباط نتیجه با کوئری — مدل/نام دقیق بالاتر از مچ در سنسور/کلمات‌کلیدی
 function relevanceScore(p, q) {
   const esc = q.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -110,7 +125,7 @@ async function productContext(text) {
 function productCard(p) {
   return `📦 ${p.name}\n` +
     `💰 قیمت عمومی: ${p.priceToman} تومان\n` +
-    `${p.inStock ? '✅ موجود' : '❌ ناموجود'}\n` +
+    `${p.stockLabel ? `📊 ${p.stockLabel}` : (p.inStock ? '✅ موجود' : '❌ ناموجود')}\n` +
     `🔗 ${p.url}\n` +
     `💼 جهت مشاهده قیمت ویژه همکاری، در سایت doorbinkar.com به‌عنوان همکار ثبت‌نام کنید.`;
 }
@@ -243,12 +258,35 @@ async function answerQuestion(senderId, text) {
   const continued = history.some(m => m.role === 'model');
   // کد قطعه (حتی با ارقام فارسی) → جستجوی مستقیم؛ وگرنه جستجو با متن نرمال‌شده
   const code = extractProductCode(text);
-  const found = await productContext(code || faToEnDigits(text)).catch(() => null);
+  // اول کانتکست غنی سایت (مشخصات کامل + دیتاشیت + موجودی)؛ اگر نبود، مسیر قدیمی
+  const rich = await botContext(code || faToEnDigits(text)).catch(() => null);
+  let found = null;
+  if (rich) {
+    if (rich.ambiguous && rich.products.length > 1) {
+      found = { richVariants: rich };
+    } else {
+      const top = rich.products[0];
+      found = {
+        name: top.name,
+        priceToman: toToman(top.retail_price),
+        inStock: !!top.in_stock,
+        stockLabel: top.stock_label,
+        url: top.url,
+        geminiLine: rich.context_text,
+      };
+    }
+  } else {
+    found = await productContext(code || faToEnDigits(text)).catch(() => null);
+  }
   const variants = found?.variants || null;
-  const ctx = variants ? null : found;
+  const richV = found?.richVariants || null;
+  const ctx = (variants || richV) ? null : found;
   let augmented;
   if (ctx) {
-    augmented = `${text}\n\n[اطلاعات واقعی سایت — فقط برای آگاهی تو؛ قیمت/لینک دقیق را سیستم جداگانه ضمیمه می‌کند پس خودت قیمت نگو:\n${ctx.geminiLine}]`;
+    augmented = `${text}\n\n[اطلاعات واقعی سایت — شامل مشخصات فنی و دیتاشیت؛ برای سؤال‌های فنی از همین جواب بده. قیمت/لینک دقیق را سیستم جداگانه ضمیمه می‌کند پس خودت قیمت نگو:\n${ctx.geminiLine}]`;
+  } else if (richV) {
+    const list = richV.products.map((v, i) => `${i + 1}) ${v.name} — ${v.stock_label}`).join('\n');
+    augmented = `${text}\n\n[بررسی سیستم: این کد بین چند محصول مشترک است:\n${list}\n\n${richV.context_text}\nبپرس منظور مشتری کدام یکی است؛ هیچ‌کدام را به‌عنوان جواب قطعی نده و قیمت/لینک/کارت محصول نساز.]`;
   } else if (variants) {
     // کد مشترک بین چند محصول — باید بپرسد منظور مشتری کدام است
     const list = variants.map((v, i) => `${i + 1}) ${v.name}`).join('\n');

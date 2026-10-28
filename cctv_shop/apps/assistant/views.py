@@ -66,6 +66,7 @@ SYSTEM_PROMPT = """تو دستیار فروشگاه اینترنتی «دورب�
 - اگر مشتری «ارزان‌ترین» یا «گران‌ترین» خواست، فقط از قیمت‌های لیست استفاده کن و ارزان‌ترین/گران‌ترین «موجود» را معرفی کن؛ اگر ارزان‌ترینِ لیست ناموجود بود، بگو ناموجود است و ارزان‌ترین موجود را پیشنهاد بده.
 - «مگ»، «مگا»، «mp»، «meg» و «megapixel» همگی به معنای «مگاپیکسل» (رزولوشن سنسور) هستند؛ مثلاً «۲ مگ» یعنی ۲ مگاپیکسل (فول‌اچ‌دی 1080p). اگر کاربر معنی این اصطلاح‌ها را پرسید، کوتاه توضیح بده و محصولات همان رزولوشن از لیست را پیشنهاد بده.
 - هرگز قیمت، موجودی یا مشخصات از خودت نساز.
+- اگر بخش «بخش‌های مرتبط با سؤال مشتری از دیتاشیت‌ها» در اطلاعات بود، برای سؤال‌های فنی (ولتاژ، پروتکل، NPU، قابلیت‌ها و…) اول از همان جواب بده؛ اگر چیزی در آن نبود، صادقانه بگو در دیتاشیت محصول نیامده.
 - در انتخاب محصول راهنمایی کن (مثلاً تفاوت داهوا و هایک‌ویژن، DVR با NVR، دوربین داخلی با بیرونی).
 - اگر سؤال مشاوره‌ای بود (مثلاً «برای پارکینگ» یا «برای مغازه»)، از روی «مشخصات» محصولات لیست راهنمایی کن؛ مثلاً فاصله کانونی کوچک‌تر (2.8mm) زاویه دید بازتر برای فاصله نزدیک است و بزرگ‌تر (8mm به بالا) برای فاصله دور، و سنسور استارلایت برای تاریکی بهتر است.
 - اگر سؤال ربطی به فروشگاه نداشت، مؤدبانه بگو فقط درباره محصولات و خرید می‌توانی کمک کنی.
@@ -141,6 +142,7 @@ def _product_dict(p: Product, user=None) -> dict:
         "category": p.category.name if p.category else "",
         "price_irt": price,
         "in_stock": stock > 0,
+        "stock_qty": stock,
         "url": f"/products/{p.slug}",
     }
 
@@ -267,6 +269,12 @@ def _find_products(query: str, limit: int = 4):  # limit کم = پرامپت ک�
             mp_q |= Q(name__icontains=v)
         pool = list(qs.filter(mp_q)[:limit])
     pool += [p for p in qs.filter(q).distinct()[: limit * 6] if p not in pool]
+    # توکن‌های مدل‌مانند (لاتین/عددی مثل h5as یا 2053) — تطابق مدل هرگز نباید قربانی
+    # برش pool شود؛ کوئری کلی «برد» صدها محصول را می‌گیرد و محصول قدیمی‌تر جا می‌ماند
+    for w in words:
+        if re.search(r"[a-z]", w) or re.search(r"\d", w):
+            pool += [p for p in qs.filter(Q(model_number__icontains=w) | Q(name__icontains=w))[:4]
+                     if p not in pool]
     scored = sorted(((score(p), p) for p in pool), key=lambda t: -t[0])
     # اگر تطابق قوی (توکن کامل در مدل/نام) هست، تطابق‌های ضعیف (فقط توضیح/کلمات‌کلیدی) حذف شوند
     strong = [p for s, p in scored if s >= 10]
@@ -468,6 +476,37 @@ class AssistantChatView(APIView):
                     products, is_fallback = (fresh or p2), False
                     break
 
+        # بازیابی برداری (RAG) روی مشخصات + توضیحات + دیتاشیت‌ها — محصولاتی که
+        # جستجوی کلیدواژه گم کرده (کوئری مفهومی مثل «برد پلاک‌خوان با NPU») و
+        # چانک‌های فنی مرتبط برای تزریق به کانتکست. خرابی embedding هرگز چت را
+        # نمی‌شکند: hits=None یعنی همان مسیر کلیدواژه‌ای قبلی ادامه می‌یابد.
+        rag_hits = None
+        if not price_intent:
+            try:
+                from . import rag
+                rag_hits = rag.search(message, top_k=6)
+            except Exception as exc:
+                logger.warning(f"[ASSISTANT] RAG خطا داد: {exc}")
+        if rag_hits:
+            rag_slugs = []
+            for h in rag_hits:
+                if h["slug"] not in rag_slugs:
+                    rag_slugs.append(h["slug"])
+            if is_fallback:
+                # کلیدواژه چیزی پیدا نکرد — نتایج برداری جای محصولات تصادفی بنشیند
+                rag_products = list(Product.objects.filter(slug__in=rag_slugs[:4], is_active=True)
+                                    .select_related("category").prefetch_related("variants"))
+                if rag_products:
+                    rag_products.sort(key=lambda p: rag_slugs.index(p.slug))
+                    products, is_fallback = rag_products, False
+            elif len(products) < 6:
+                have = {p.slug for p in products}
+                extra_slugs = [s for s in rag_slugs if s not in have][: 6 - len(products)]
+                if extra_slugs:
+                    products = list(products) + list(
+                        Product.objects.filter(slug__in=extra_slugs, is_active=True)
+                        .select_related("category").prefetch_related("variants"))
+
         dicts = []
         for p in products:
             d = _product_dict(p, request.user)
@@ -551,7 +590,7 @@ class AssistantChatView(APIView):
             lines = "\n".join(
                 f"محصول: {d['name']}. برند: {d['brand'] or '-'}. دسته: {d['category']}. "
                 + (f"قیمت: {d['price_irt']:,} ریال." if d["price_irt"] else "قیمت: نامشخص.")
-                + f" موجودی: {'دارد' if d['in_stock'] else 'ندارد'}."
+                + (f" موجودی: دارد ({d['stock_qty']} عدد)." if d["in_stock"] else " موجودی: ندارد (ناموجود).")
                 + (f" مشخصات: {d['specs']}." if d["specs"] else "")
                 for d in dicts
             )
@@ -565,8 +604,22 @@ class AssistantChatView(APIView):
         else:
             lines = "(محصولی یافت نشد)"
 
+        # چانک‌های دیتاشیت بازیابی‌شده با RAG برداری — مکمل _datasheet_context
+        # (آن فقط دیتاشیت محصولات پیداشده را می‌دهد؛ این بخش‌های دقیقاً مرتبط با سؤال است)
+        rag_block = ""
+        if rag_hits:
+            final_slugs = {p.slug for p in products}
+            pieces = []
+            for h in rag_hits:
+                if h["kind"] == "datasheet" and h["slug"] in final_slugs and len(pieces) < 3:
+                    pieces.append(h["text"][:800])
+            if pieces:
+                rag_block = ("\n\nبخش‌های مرتبط با سؤال مشتری از دیتاشیت‌ها (مرجع فنی):\n"
+                             + "\n---\n".join(pieces))
+
         user_content = (f"اطلاعات محصولات فروشگاه:\n{lines}"
                         f"{_datasheet_context(products)}"
+                        f"{rag_block}"
                         f"{_faq_context(_find_faqs(message))}"
                         f"{_learned_context(message)}"
                         f"\n\nپیام مشتری: {message}")

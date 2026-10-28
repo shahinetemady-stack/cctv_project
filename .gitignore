@@ -55,3 +55,6 @@ qodex/
 # Kimi Code session data
 .kimi-code/
 *.sqlite3.bak-*
+
+# RAG embeddings cache (بزرگ — با rsync دیپلوی می‌شود، نه گیت)
+rag_embeddings.json

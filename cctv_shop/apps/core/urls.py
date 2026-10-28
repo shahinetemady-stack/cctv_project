@@ -8,4 +8,5 @@ urlpatterns = [
     path('services/', views.ServiceSubscriptionsView.as_view()),
     path('services/<int:pk>/', views.ServiceSubscriptionDetailView.as_view()),
     path('bot/price/', views.BotPriceLookupView.as_view()),
+    path('bot/context/', views.BotContextView.as_view()),
 ]
