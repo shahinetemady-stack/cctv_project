@@ -18,7 +18,7 @@ export default function ChatWidget() {
   const [mode, setMode] = useState('bot')   // 'bot' = ربات هوشمند | 'staff' = گفتگو با پرسنل
   const [engineName, setEngineName] = useState('')  // موتور اصلی — فقط برای ادمین
   const [messages, setMessages] = useState([
-    { role: 'assistant', content: 'سلام! من لنزو هستم، دستیار هوشمند دوربینکار. درباره محصولات، قیمت یا انتخاب تجهیزات سؤال دارید؟' },
+    { role: 'assistant', content: 'سلام! من لنزو هستم، دستیار هوشمند بازرگانی دوربینکار. درباره محصولات، قیمت یا انتخاب تجهیزات سؤال دارید؟' },
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -111,7 +111,7 @@ export default function ChatWidget() {
           boxShadow: '0 10px 30px rgba(0,0,0,0.4)',
         }}>
           <div className="px-4 py-3 text-sm font-bold flex items-center justify-between" style={{ background: 'var(--color-bg-secondary)', borderBottom: '1px solid var(--color-border)' }}>
-            <span>{mode === 'bot' ? '🤖 لنزو — دستیار هوشمند دوربینکار' : '👤 گفتگو با پرسنل'}</span>
+            <span>{mode === 'bot' ? '🤖 لنزو — بازرگانی دوربینکار' : '👤 گفتگو با پرسنل'}</span>
             {/* نام موتور (اصلی یا موتور واقعی آخرین پاسخ) — فقط برای ادمین و در حالت ربات */}
             {mode === 'bot' && isAdmin() && headerEngine && (
               <span className="text-[10px] font-normal px-2 py-0.5 rounded-full" style={{ background: 'var(--color-brand)', color: '#000' }}>

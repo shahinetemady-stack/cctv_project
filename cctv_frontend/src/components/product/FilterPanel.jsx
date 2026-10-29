@@ -138,7 +138,7 @@ function LensFilters({ filters, set }) {
       </Section>
       <Section title="کلاس نوری" defaultOpen={false}>
         <div className="flex flex-wrap gap-1.5">
-          {['معمولی IR','استارلایت Starlight','وارم‌لایت / فول‌کالر Warm Light','بلک‌لایت Blacklight','پلاک‌خوان LPR'].map(u => (
+          {['معمولی IR','استارلایت Starlight','دارکلایت Darklight','پلاک‌خوان LPR'].map(u => (
             <FilterChip key={u}
               active={filters.focal_ratio === u}
               onClick={() => set('focal_ratio', filters.focal_ratio === u ? '' : u)}>
