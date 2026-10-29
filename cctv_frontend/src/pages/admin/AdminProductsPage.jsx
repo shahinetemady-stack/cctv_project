@@ -41,7 +41,7 @@ const FIELD_GROUPS = [
     { k: 'lens_degree', l: 'فاصله کانونی', type: 'combo', choices: ['1.7mm', '1.8mm', '2.8mm', '3.6mm', '4mm', '6mm', '8mm', '12mm', '16mm'],
       hint: 'برای وریفوکال/موتورایز بنویس — مثلاً 2.8-12mm' },
     { k: 'lens_resolution', l: 'رزولوشن لنز', choices: ['3MP', '5MP', '8MP'] },
-    { k: 'focal_ratio', l: 'کلاس نوری لنز', choices: ['معمولی IR', 'استارلایت Starlight', 'دارکلایت Darklight', 'پلاک‌خوان LPR'] },
+    { k: 'focal_ratio', l: 'کلاس نوری لنز', choices: ['معمولی IR', 'استارلایت Starlight', 'دارکلایت Darklight'] },
     { k: 'lens_aperture', l: 'ضریب دیافراگم (Aperture)', type: 'combo', choices: ['F1.0', 'F1.2', 'F1.4', 'F1.6', 'F2.0'] },
     { k: 'lens_image_size', l: 'سایز سنسور سازگار (Image Size)', choices: ['1/2.5"', '1/2.7"', '1/2.8"', '1/2.9"', '1/3"'] },
     { k: 'lens_mount', l: 'نوع مانت / رزوه (Mount Type)', choices: ['M12', 'D14', 'CS-Mount'] },

@@ -179,7 +179,7 @@ class Product(TimeStampedModel):
                  ("فیش آی","فیش آی"),("پین هولد","پین هولد"),("موتورایز","موتورایز")])
     focal_ratio = models.CharField(max_length=60, blank=True, verbose_name="کلاس نوری لنز",
         choices=[("معمولی IR","معمولی IR"),("استارلایت Starlight","استارلایت Starlight"),
-                 ("دارکلایت Darklight","دارکلایت Darklight"),("پلاک‌خوان LPR","پلاک‌خوان LPR")])
+                 ("دارکلایت Darklight","دارکلایت Darklight")])
     lens_aperture   = models.CharField(max_length=30, blank=True, verbose_name="ضریب دیافراگم (Aperture)",
         help_text="مثل F1.0 یا F1.2")
     lens_image_size = models.CharField(max_length=30, blank=True, verbose_name="سایز سنسور سازگار (Image Size)",

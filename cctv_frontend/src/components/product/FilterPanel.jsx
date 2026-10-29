@@ -125,20 +125,9 @@ function LensFilters({ filters, set }) {
           ))}
         </div>
       </Section>
-      <Section title="مانت / رزوه" defaultOpen={false}>
-        <div className="flex flex-wrap gap-1.5">
-          {['M12','D14','CS-Mount'].map(m => (
-            <FilterChip key={m}
-              active={filters.lens_mount === m}
-              onClick={() => set('lens_mount', filters.lens_mount === m ? '' : m)}>
-              {m}
-            </FilterChip>
-          ))}
-        </div>
-      </Section>
       <Section title="کلاس نوری" defaultOpen={false}>
         <div className="flex flex-wrap gap-1.5">
-          {['معمولی IR','استارلایت Starlight','دارکلایت Darklight','پلاک‌خوان LPR'].map(u => (
+          {['معمولی IR','استارلایت Starlight','دارکلایت Darklight'].map(u => (
             <FilterChip key={u}
               active={filters.focal_ratio === u}
               onClick={() => set('focal_ratio', filters.focal_ratio === u ? '' : u)}>
